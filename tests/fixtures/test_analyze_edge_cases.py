@@ -63,9 +63,10 @@ def test_unresolved_invocation_target_is_retained(tmp_path) -> None:
 
     service = analyze_path(tmp_path, DEFAULT_CONFIG).packages[0].services[0]
 
-    assert service.dependencies[0].target_service == "external.pkg:missing"
-    assert service.dependencies[0].resolved is False
-    assert service.unresolved_dependencies[0].target_service == "external.pkg:missing"
+    assert service.call_occurrences[0].target == "external.pkg:missing"
+    assert service.call_occurrences[0].resolved is False
+    assert service.unique_dependencies[0].target_service == "external.pkg:missing"
+    assert service.unique_dependencies[0].resolved is False
 
 
 def _service_dir(tmp_path: Path) -> Path:

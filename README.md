@@ -3,11 +3,12 @@
 `wm-doc` is an offline, deterministic static-analysis tool for Software AG / IBM webMethods
 Integration Server package snapshots.
 
-The current implemented milestone is **M1 FLOW Service proof of concept**. It discovers package and
-namespace artifacts, parses observed FLOW Service signatures, extracts observed FLOW containers and
-static `INVOKE`/`MAPINVOKE` calls, classifies services with configurable glob rules, resolves static
-dependencies against discovered FLOW and Java Service metadata, and renders deterministic JSON,
-Markdown, and Graphviz DOT outputs.
+The current implemented milestone is **M2a call/dependency model and control-flow semantics**. It
+discovers package and namespace artifacts, parses observed FLOW Service signatures, extracts an
+ordered FLOW tree for observed structural nodes, separates static `INVOKE` call occurrences from
+static `MAPINVOKE` transformer call occurrences, aggregates unique dependencies, classifies services
+with configurable glob rules, resolves exact static targets against discovered FLOW and Java Service
+metadata, and renders deterministic JSON, Markdown, and Graphviz DOT outputs.
 
 This is not a claim of full webMethods 10.15 compatibility. `samples/OriginalSmall/OAAdapter` is the
 primary 10.15 fixture; `samples/PGP` is a compatibility and discovery corpus with unknown upstream
@@ -17,7 +18,7 @@ provenance.
 
 ```powershell
 wm-doc scan samples --output out\inventory
-wm-doc analyze samples --output out\m1-analysis
+wm-doc analyze samples --output out\m2a-analysis
 ```
 
 The scan command writes:
@@ -30,6 +31,11 @@ The analyze command writes:
 - `analysis.json`
 - `services/*.md`
 - `graphs/dependencies.dot`
+
+`analysis.json` uses schema `analysis.v2`. In this schema, call occurrences preserve each concrete
+`INVOKE` or `MAPINVOKE` site, while unique dependencies aggregate repeated calls by
+`(caller, target, dependency kind)`. Default DOT output uses unique dependency edges with occurrence
+counts.
 
 The tool works offline, treats analyzed packages as read-only, never connects to Integration Server,
 and never executes analyzed Java or FLOW code.

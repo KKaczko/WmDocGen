@@ -12,7 +12,7 @@ def render_dependency_dot(analysis: AnalysisResult) -> str:
         for package in analysis.packages
         for service in package.services
     }
-    targets = {edge.target_service for edge in analysis.edges}
+    targets = {dependency.target_service for dependency in analysis.unique_dependencies}
     nodes = sorted(analyzed | targets, key=str.casefold)
     lines = ["digraph dependencies {", "  rankdir=LR;"]
     for node in nodes:
@@ -22,21 +22,22 @@ def render_dependency_dot(analysis: AnalysisResult) -> str:
         else:
             attrs.append('kind="dependency_target"')
         lines.append(f"  {_node_id(node)} [{', '.join(attrs)}];")
-    for edge in sorted(
-        analysis.edges,
+    for dependency in sorted(
+        analysis.unique_dependencies,
         key=lambda item: (
             item.source_service.casefold(),
-            item.invoke_id,
+            item.dependency_kind.value,
             item.target_service.casefold(),
         ),
     ):
         attrs = [
-            'label="INVOKES"',
-            f'invoke="{_escape(edge.invoke_id)}"',
-            f'resolved="{str(edge.resolved).lower()}"',
+            f'label="{dependency.dependency_kind.value}"',
+            f'kind="{dependency.dependency_kind.value}"',
+            f'occurrences="{dependency.occurrence_count}"',
+            f'resolved="{str(dependency.resolved).lower()}"',
         ]
         lines.append(
-            f"  {_node_id(edge.source_service)} -> {_node_id(edge.target_service)} "
+            f"  {_node_id(dependency.source_service)} -> {_node_id(dependency.target_service)} "
             f"[{', '.join(attrs)}];"
         )
     lines.append("}")

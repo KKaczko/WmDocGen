@@ -1,0 +1,468 @@
+Prepare the implementation plan for milestone M2.
+
+Do not modify any files.
+
+Do not implement production code.
+
+Do not update dependencies.
+
+Do not create commits.
+
+The M1 baseline has been reviewed, committed and pushed to Git. Treat the current Git revision as the accepted baseline.
+
+## Mandatory preparation
+
+Read completely:
+
+```text
+AGENTS.md
+README.md
+docs/implementation-plan.md
+docs/architecture.md
+docs/fixture-inventory.md
+docs/fixture-provenance.md
+docs/unsupported-constructs.md
+```
+
+Inspect:
+
+```text
+src/
+tests/
+tests/fixtures/checksums.sha256
+samples/OriginalSmall/
+samples/PGP/
+```
+
+Inspect the current M1 canonical IR, FLOW parser, dependency model, JSON renderer, Markdown renderer and DOT renderer.
+
+Run, without changing files:
+
+```text
+git status --short
+uv run pytest
+uv run ruff check .
+uv run mypy
+```
+
+Report the starting Git revision and whether the working tree is clean.
+
+## Accepted M1 baseline
+
+The accepted M1 audit confirmed:
+
+```text
+FLOW services: 24
+
+call occurrences:
+- total: 108
+
+resolved call occurrences:
+- 49
+
+unresolved call occurrences:
+- 59
+```
+
+For the primary webMethods Integration Server 10.15 fixture:
+
+```text
+oa.adapter.geographicAddressManagement:createGeographicAddressValidation
+```
+
+the audit independently confirmed:
+
+```text
+FLOW: 1
+SEQUENCE: 32
+BRANCH: 27
+LOOP: 2
+REPEAT: 0
+
+INVOKE: 13
+MAPINVOKE: 30
+
+EXIT: 9
+MAP: 135
+MAPCOPY: 190
+MAPSET: 21
+MAPDELETE: 8
+MAPSOURCE: 60
+MAPTARGET: 60
+DATA: 21
+```
+
+All 43 OAAdapter call occurrences were verified directly against `flow.xml`.
+
+The M1 audit identified these accepted minor issues:
+
+1. The term `dependency edges` currently means call occurrences.
+2. `INVOKE` and `MAPINVOKE` lose their distinction in dependency kind, Markdown and DOT.
+3. Signature source references are less precise than FLOW call references.
+4. Free-text descriptions are included without a configurable extraction policy.
+5. Markdown filenames need explicit collision testing.
+6. The repository needs incremental milestones rather than one large M2 implementation.
+
+## Planning decision
+
+Split M2 into two separately approved implementation milestones:
+
+```text
+M2a — call/dependency model and control-flow semantics
+M2b — mapping semantics and extraction policies
+```
+
+Do not combine them into one implementation task.
+
+# M2a scope
+
+M2a should implement:
+
+## Call occurrence model
+
+Clearly distinguish concrete call occurrences from unique technical dependencies.
+
+Each call occurrence should retain:
+
+* stable occurrence ID;
+* caller;
+* target;
+* call type;
+* structural order;
+* parent FLOW path;
+* source reference;
+* resolved status.
+
+Required call types:
+
+```text
+INVOKE
+MAPINVOKE
+```
+
+## Unique dependency model
+
+Create unique dependencies using a canonical key similar to:
+
+```text
+caller
+target
+dependency kind
+```
+
+Required dependency kinds:
+
+```text
+INVOKES
+USES_TRANSFORMER
+```
+
+Required mapping:
+
+```text
+INVOKE    → INVOKES
+MAPINVOKE → USES_TRANSFORMER
+```
+
+Repeated call occurrences must not produce duplicate unique dependency records.
+
+Preserve occurrence count and source-reference samples on the unique dependency.
+
+Expose unambiguous metrics:
+
+```text
+call_occurrence_count
+unique_dependency_count
+
+resolved_call_occurrence_count
+unresolved_call_occurrence_count
+
+resolved_unique_dependency_count
+unresolved_unique_dependency_count
+```
+
+## Ordered FLOW hierarchy
+
+Preserve an ordered tree for the observed control-flow structures:
+
+```text
+FLOW
+SEQUENCE
+BRANCH
+branch cases
+LOOP
+INVOKE
+MAPINVOKE
+MAP container
+EXIT
+```
+
+M2a may preserve MAP as a structural container required to correctly position `MAPINVOKE`.
+
+M2a must not yet implement:
+
+```text
+MAPCOPY
+MAPSET
+MAPDELETE
+MAPSOURCE
+MAPTARGET
+DATA
+```
+
+as full typed mapping semantics.
+
+Those belong to M2b.
+
+## SEQUENCE
+
+Plan evidence-based extraction of observed attributes such as:
+
+* label;
+* exit-on behavior;
+* structural role;
+* child order;
+* source reference.
+
+Do not label structures as TRY/CATCH/FINALLY unless fixture evidence proves that interpretation.
+
+## BRANCH
+
+Plan extraction of:
+
+* switch expression or declared switch variable;
+* evaluate-label behavior;
+* ordered cases;
+* case labels;
+* default case;
+* source references.
+
+Do not evaluate conditions.
+
+Do not generate business descriptions from branch labels.
+
+## LOOP
+
+Plan extraction of observed:
+
+* input pipeline path;
+* output pipeline path;
+* label;
+* ordered children;
+* source reference.
+
+Do not simulate loops or infer collection schemas.
+
+## EXIT
+
+Plan parsing of all nine observed EXIT elements.
+
+Extract only fixture-backed attributes, such as:
+
+* declared scope;
+* signal type;
+* failure status;
+* message metadata;
+* structural location.
+
+Do not invent exception semantics.
+
+Unknown EXIT forms must produce explicit findings.
+
+## Canonical schema
+
+M2a changes canonical meaning and should introduce a new schema version, for example:
+
+```text
+analysis.v2
+```
+
+Document migration differences from M1:
+
+* call occurrences versus unique dependencies;
+* `INVOKES` versus `USES_TRANSFORMER`;
+* ordered control-flow tree;
+* typed EXIT;
+* unique DOT edges.
+
+Backward-reading compatibility is not required unless the repository already promises it.
+
+## Markdown
+
+Plan improvements for:
+
+* FLOW overview;
+* sequence, branch, loop and EXIT counts;
+* hierarchical control-flow outline;
+* separate normal service calls and transformer calls;
+* call occurrence metrics;
+* unique dependency metrics;
+* repeated call counts;
+* resolved and unresolved dependencies;
+* precise analysis limitations.
+
+Do not render the complete 1.2 MB FLOW tree without depth or size limits.
+
+## DOT
+
+The default DOT graph should use one edge per:
+
+```text
+caller + target + dependency kind
+```
+
+The edge should preserve occurrence count.
+
+Distinguish:
+
+```text
+INVOKES
+USES_TRANSFORMER
+```
+
+using deterministic labels or attributes.
+
+Do not generate one DOT edge per call occurrence in the default graph.
+
+## Source references
+
+Plan improvements for signature source references where feasible:
+
+* actual source line;
+* actual XML or Values structural path;
+* semantic path;
+* relative source filename.
+
+Do not invent line numbers.
+
+## Findings
+
+Supported EXIT elements should no longer produce generic unsupported findings.
+
+MAP internals that remain deferred to M2b must remain clearly marked as partially supported rather than disappearing.
+
+Unknown tags and malformed structures must continue producing findings.
+
+## M2a tests
+
+Plan fixture-derived tests for:
+
+* 13 OA `INVOKE` occurrences;
+* 30 OA `MAPINVOKE` occurrences;
+* 43 total OA call occurrences;
+* distinct dependency kinds;
+* unique dependency counts;
+* repeated occurrence aggregation;
+* ordered FLOW hierarchy;
+* 32 sequences;
+* 27 branches;
+* 2 loops;
+* 9 EXIT elements;
+* representative branch cases;
+* representative loop attributes;
+* representative EXIT attributes;
+* source references;
+* DOT unique edges;
+* Markdown call-type distinction;
+* schema version;
+* deterministic output;
+* filename collision handling;
+* PGP compatibility;
+* fixture checksum verification.
+
+Tests should assert known source facts rather than merely snapshotting parser output.
+
+# M2b scope
+
+M2b should be planned but not implemented during M2a.
+
+M2b will cover:
+
+```text
+MAP
+MAPCOPY
+MAPSET
+MAPDELETE
+MAPSOURCE
+MAPTARGET
+DATA
+MAPINVOKE input mappings
+MAPINVOKE output mappings
+```
+
+M2b should also introduce:
+
+* literal extraction policy:
+
+  * redact,
+  * include,
+  * omit;
+* free-text extraction policy:
+
+  * include,
+  * redact,
+  * omit;
+* default literal redaction;
+* password and secret values never included;
+* mapping source and target paths;
+* transformer input/output mapping distinction;
+* typed mapping operations;
+* mapping summaries in Markdown.
+
+Do not implement M2b while implementing M2a.
+
+# Out of scope for all of M2
+
+Do not plan implementation of:
+
+* full Document Type parsing;
+* document schema resolution;
+* Java body analysis;
+* JDBC Adapter parsing;
+* UM triggers;
+* JMS triggers;
+* schedulers;
+* process definitions;
+* business descriptions;
+* runtime simulation;
+* dynamic invocation resolution;
+* Ollama integration;
+* SVG or PNG rendering;
+* snapshot diffing;
+* Integration Server connectivity.
+
+# Required plan output
+
+Return a structured implementation plan containing:
+
+1. Baseline repository assessment.
+2. Current M1 model limitations.
+3. Proposed M2a canonical IR changes.
+4. Exact separation between call occurrences and unique dependencies.
+5. Exact separation between `INVOKE` and `MAPINVOKE`.
+6. Proposed ordered FLOW tree.
+7. Observed SEQUENCE representation.
+8. Observed BRANCH representation.
+9. Observed LOOP representation.
+10. Observed EXIT representation.
+11. Proposed findings behavior.
+12. Proposed Markdown changes.
+13. Proposed DOT changes.
+14. Proposed schema-version migration.
+15. M2a test matrix.
+16. Exact files expected to change in M2a.
+17. M2a acceptance criteria.
+18. M2a risks and mitigations.
+19. Explicit list of features deferred to M2b.
+20. Preliminary M2b plan.
+21. Recommended implementation order.
+
+The M2a implementation plan must be small enough for one reviewable branch and one reviewable pull request.
+
+Explicitly identify any part of the requested M2a scope that should be reduced further.
+
+Do not modify repository files.
+
+Do not implement M2a.
+
+Do not implement M2b.
