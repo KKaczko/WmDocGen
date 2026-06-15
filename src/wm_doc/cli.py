@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from wm_doc.analysis import analyze_path
+from wm_doc.config import load_config
+from wm_doc.discovery import scan_path
+from wm_doc.render.analysis_json import render_analysis_json
+from wm_doc.render.dot import write_dependency_dot
+from wm_doc.render.json import render_inventory_json
+from wm_doc.render.markdown import render_inventory_markdown
+from wm_doc.render.service_markdown import write_service_markdown
+
+app = typer.Typer(
+    help="Offline deterministic static inventory for webMethods Integration Server packages."
+)
+
+
+@app.callback()
+def main() -> None:
+    """Offline deterministic static inventory for webMethods packages."""
+
+
+@app.command()
+def scan(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Directory for inventory outputs.")
+    ],
+) -> None:
+    """Discover packages and artifact candidates without executing analyzed code."""
+    inventory = scan_path(packages_path)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "inventory.json").write_text(render_inventory_json(inventory), encoding="utf-8")
+    (output / "fixture-inventory.md").write_text(
+        render_inventory_markdown(inventory), encoding="utf-8"
+    )
+    typer.echo(
+        f"Scanned {len(inventory.packages)} package(s); wrote {output / 'inventory.json'} "
+        f"and {output / 'fixture-inventory.md'}."
+    )
+
+
+@app.command()
+def analyze(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Directory for analysis outputs.")
+    ],
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ] = None,
+) -> None:
+    """Analyze supported FLOW Services and emit deterministic technical outputs."""
+    app_config = load_config(config)
+    analysis = analyze_path(packages_path, app_config)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
+    services = [service for package in analysis.packages for service in package.services]
+    service_paths = write_service_markdown(output, services)
+    dot_path = write_dependency_dot(output, analysis)
+    typer.echo(
+        f"Analyzed {len(services)} FLOW service(s); wrote {output / 'analysis.json'}, "
+        f"{len(service_paths)} service markdown file(s), and {dot_path}."
+    )
