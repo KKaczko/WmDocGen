@@ -2,21 +2,60 @@
 
 ## OriginalSmall / OAAdapter
 
-The prompt states that this is a real sanitized webMethods Integration Server 10.15 FLOW Service.
-It is the primary source of truth for future 10.15 behavior.
+`samples/OriginalSmall/OAAdapter` is a sanitized private fixture. The prompt identifies it as
+originating from Software AG / IBM webMethods Integration Server 10.15.
+
+Known provenance:
+
+- Only the files included in this repository snapshot are available.
+- The fixture has been represented to this project as sanitized.
+- It is not a complete-package coverage claim.
+- It is the primary source of truth for observed webMethods IS 10.15 behavior in this project.
+
+Unknown or not claimed:
+
+- Original repository, author, commit, and license are not available.
+- Runtime Integration Server configuration is not available.
+- No claim is made that this fixture represents all 10.15 package formats.
 
 ## PGP
 
-The public PGP package is used as-is from the local repository snapshot. The fixture contains Apache
-2.0 headers in several files, but the repository does not include:
+`samples/PGP` is a public compatibility and discovery corpus used as-is from the local repository
+snapshot.
 
-- upstream source URL
-- exact commit SHA
-- standalone license file
-- README
-- documented webMethods version
+Observed metadata:
 
-The scanner reports this as `PGP_PROVENANCE_UNKNOWN`.
+- Package directory name: `PGP`.
+- Eclipse project name in `.project`: `WxPGP`.
+- `manifest.v3` version: `1.0`.
+- `manifest.v3` startup service references `wx.pgp.services.common:readConfig`.
+- Package alias evidence observed by the scanner includes `GCS_PGP` and `WxPGP`.
+- Java/config source headers include Software AG 2018 copyright text and `SPDX-License-Identifier:
+  Apache-2.0`.
+- Several files include Apache License 2.0 header text and a URL to the Apache license.
 
-M1 uses PGP to check that the FLOW parser is not hardcoded to the OAAdapter path. PGP remains a
-compatibility corpus only; it is not proof of full webMethods 10.15 compatibility.
+Unavailable in the local fixture:
+
+- Upstream source URL: unknown.
+- Exact upstream commit SHA: unknown.
+- Standalone README: not present.
+- Standalone LICENSE file: not present.
+- Documented webMethods product version: unknown.
+
+The scanner reports this as `PGP_PROVENANCE_UNKNOWN`. PGP remains a compatibility corpus only; it is
+not proof of full webMethods 10.15 compatibility.
+
+## Sensitive Fixture Categories
+
+Potentially sensitive fixture categories are present and should be reviewed before publishing this
+repository:
+
+- PGP demo public key files under `samples/PGP/pub/keys`.
+- PGP demo secret key files under `samples/PGP/pub/keys`.
+- PGP config metadata that references key filenames under `samples/PGP/config`.
+- PGP Java source that contains key/password-handling code paths.
+
+These files originate from the PGP sample corpus and are useful for parser discovery and fixture
+integrity tests. They may be retained for an internal M1 baseline with this provenance note, but they
+should be replaced with clearly safe synthetic fixtures or excluded before public publication unless
+their redistribution status is confirmed.
