@@ -40,8 +40,26 @@ class ServiceType(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
-class DependencyType(StrEnum):
+class CallType(StrEnum):
+    INVOKE = "INVOKE"
+    MAPINVOKE = "MAPINVOKE"
+
+
+class DependencyKind(StrEnum):
     INVOKES = "INVOKES"
+    USES_TRANSFORMER = "USES_TRANSFORMER"
+
+
+class FlowNodeType(StrEnum):
+    FLOW = "FLOW"
+    SEQUENCE = "SEQUENCE"
+    BRANCH = "BRANCH"
+    BRANCH_CASE = "BRANCH_CASE"
+    LOOP = "LOOP"
+    MAP = "MAP"
+    INVOKE = "INVOKE"
+    MAPINVOKE = "MAPINVOKE"
+    EXIT = "EXIT"
 
 
 class Importance(StrEnum):
@@ -128,52 +146,75 @@ class ServiceSignature(BaseModel):
     source: SourceReference
 
 
-class FlowContainer(BaseModel):
+class FlowNode(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
-    type: str
-    name: str | None = None
-    comment: str | None = None
-    attributes: dict[str, str] = Field(default_factory=dict)
-    parent_id: str | None = None
-    source: SourceReference
-
-
-class FlowInvoke(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    id: str
-    type: str
-    target: str
-    static: bool
-    comment: str | None = None
-    parent_containers: list[str] = Field(default_factory=list)
+    type: FlowNodeType
     structural_path: str
     source: SourceReference
+    label: str | None = None
+    attributes: dict[str, str] = Field(default_factory=dict)
+    parent_id: str | None = None
+    children: list[FlowNode] = Field(default_factory=list)
+    exit_on: str | None = None
+    form: str | None = None
+    switch: str | None = None
+    evaluate_labels: bool | None = None
+    is_default_case: bool | None = None
+    in_array: str | None = None
+    out_array: str | None = None
+    exit_from: str | None = None
+    signal: str | None = None
+    failure_message: str | None = None
+    target: str | None = None
+    call_occurrence_id: str | None = None
 
 
-class DependencyEdge(BaseModel):
+class CallOccurrence(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    source_service: str
-    target_service: str
-    dependency_type: DependencyType
+    id: str
+    caller: str
+    target: str
+    call_type: CallType
+    dependency_kind: DependencyKind
+    order: int
+    parent_flow_path: list[str] = Field(default_factory=list)
+    structural_path: str
     resolved: bool
     target_type: ServiceType | None = None
     target_classification: ClassificationResult
-    invoke_id: str
     source: SourceReference
 
 
-class UnresolvedDependency(BaseModel):
+class UniqueDependency(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    id: str
     source_service: str
     target_service: str
-    dependency_type: DependencyType
-    invoke_id: str
-    source: SourceReference
+    dependency_kind: DependencyKind
+    resolved: bool
+    target_type: ServiceType | None = None
+    target_classification: ClassificationResult
+    occurrence_count: int
+    occurrence_ids: list[str] = Field(default_factory=list)
+    source_samples: list[SourceReference] = Field(default_factory=list)
+
+
+class AnalysisMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    call_occurrence_count: int = 0
+    unique_dependency_count: int = 0
+    resolved_call_occurrence_count: int = 0
+    unresolved_call_occurrence_count: int = 0
+    resolved_unique_dependency_count: int = 0
+    unresolved_unique_dependency_count: int = 0
+    call_type_counts: dict[str, int] = Field(default_factory=dict)
+    unique_dependency_kind_counts: dict[str, int] = Field(default_factory=dict)
+    flow_node_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class ServiceSummary(BaseModel):
@@ -192,10 +233,10 @@ class FlowService(BaseModel):
     description: str | None = None
     signature: ServiceSignature
     classification: ClassificationResult
-    containers: list[FlowContainer] = Field(default_factory=list)
-    invokes: list[FlowInvoke] = Field(default_factory=list)
-    dependencies: list[DependencyEdge] = Field(default_factory=list)
-    unresolved_dependencies: list[UnresolvedDependency] = Field(default_factory=list)
+    flow_tree: FlowNode | None = None
+    metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
+    call_occurrences: list[CallOccurrence] = Field(default_factory=list)
+    unique_dependencies: list[UniqueDependency] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
     source: SourceReference
 
@@ -213,11 +254,12 @@ class AnalyzedPackage(BaseModel):
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "analysis.v1"
+    schema_version: str = "analysis.v2"
     tool_version: str
     packages: list[AnalyzedPackage] = Field(default_factory=list)
-    edges: list[DependencyEdge] = Field(default_factory=list)
-    unresolved_dependencies: list[UnresolvedDependency] = Field(default_factory=list)
+    metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
+    call_occurrences: list[CallOccurrence] = Field(default_factory=list)
+    unique_dependencies: list[UniqueDependency] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
 
