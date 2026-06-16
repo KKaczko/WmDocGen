@@ -12,13 +12,20 @@ from wm_doc.ir import (
     DependencyKind,
     FlowNode,
     FlowService,
+    LiteralValue,
+    MappingEndpoint,
+    MappingOperation,
     SignatureField,
+    SourceReference,
+    TextValue,
+    TransformerBinding,
     UniqueDependency,
 )
 
 IMPORTANCE_ORDER = {"IMPORTANT": 0, "NORMAL": 1, "LOW": 2}
 MAX_OUTLINE_DEPTH = 5
 MAX_OUTLINE_ROWS = 80
+MAX_MAPPING_ROWS = 50
 
 _TEMPLATE = Template(
     """# {{ service.identity.full_name }}
@@ -37,10 +44,10 @@ _TEMPLATE = Template(
 
 ## Description
 
-{% if service.description -%}
+{% if description_text -%}
 Extracted description:
 
-{{ service.description }}
+{{ description_text }}
 {% else -%}
 No description was declared in supported metadata.
 {% endif %}
@@ -64,6 +71,37 @@ No description was declared in supported metadata.
 | Call occurrences | {{ service.metrics.call_occurrence_count }} |
 | Unique dependencies | {{ service.metrics.unique_dependency_count }} |
 
+## Mapping Overview
+
+| Metric | Count |
+| --- | ---: |
+| Flow maps | {{ service.metrics.flow_map_count }} |
+| Copy operations | {{ mapping_count("COPY") }} |
+| Set operations | {{ mapping_count("SET") }} |
+| Delete operations | {{ mapping_count("DELETE") }} |
+| Transformer bindings | {{ service.metrics.transformer_binding_count }} |
+| Transformer input bindings | {{ binding_count("INTO_TRANSFORMER") }} |
+| Transformer output bindings | {{ binding_count("FROM_TRANSFORMER") }} |
+| Partially interpreted mappings | {{ service.metrics.partially_interpreted_mapping_count }} |
+| Literal policy | `{{ service.extraction_policy.literal_mode }}` |
+| Free-text policy | `{{ service.extraction_policy.free_text_mode }}` |
+
+## Mapping Copies
+
+{{ render_mapping_operations(copy_operations, "COPY") }}
+
+## Mapping Sets
+
+{{ render_mapping_operations(set_operations, "SET") }}
+
+## Mapping Deletes
+
+{{ render_mapping_operations(delete_operations, "DELETE") }}
+
+## Transformer Bindings
+
+{{ render_transformer_bindings(service.transformer_bindings) }}
+
 ## Normal Service Dependencies
 
 {{ render_dependencies(normal_dependencies) }}
@@ -86,11 +124,11 @@ No description was declared in supported metadata.
 
 ## Unsupported Or Unknown Constructs
 
-{% if service.findings -%}
-{% for finding in service.findings -%}
+{% if service.findings %}
+{% for finding in service.findings %}
 - {{ finding.status }} `{{ finding.code }}` at `{{ finding.source.path }}`: {{ finding.message }}
 {% endfor %}
-{% else -%}
+{% else %}
 No service-level findings.
 {% endif %}
 
@@ -98,10 +136,10 @@ No service-level findings.
 
 - Service metadata: `{{ service.source.path }}`
 - Signature metadata: `{{ service.signature.source.path }}`
-{% for call in service.call_occurrences[:20] -%}
+{% for call in service.call_occurrences[:20] %}
 - {{ call.call_type }} `{{ call.id }}` target `{{ call.target }}`:
   `{{ call.source.path }}`{% if call.source.line %}:{{ call.source.line }}{% endif %}
-{% endfor -%}
+{% endfor %}
 {% if service.call_occurrences|length > 20 %}
 - Source evidence list truncated after 20 call occurrences in Markdown.
   Full evidence is in `analysis.json`.
@@ -109,10 +147,10 @@ No service-level findings.
 
 ## Analysis Limitations
 
-M2a extracts declared signatures, an ordered FLOW tree, typed `EXIT` nodes, static
-`INVOKE` calls and static `MAPINVOKE` transformer calls. It does not interpret
-MAP data-flow semantics, evaluate branch conditions, simulate loops or runtime state,
-resolve dynamic invocation targets, execute Java code, or connect to Integration Server.
+M2b extracts observed MAP copy, set, delete and transformer binding evidence with literal
+disclosure policies. It does not resolve mapped paths against document schemas, evaluate branch
+conditions, simulate loops or runtime state, resolve dynamic invocation targets, execute Java code,
+or connect to Integration Server.
 """,
     trim_blocks=True,
     lstrip_blocks=True,
@@ -124,17 +162,31 @@ def render_service_markdown(service: FlowService) -> str:
     transformer_dependencies = _dependencies_for_kind(service, DependencyKind.USES_TRANSFORMER)
     service_calls = _calls_for_type(service, "INVOKE")
     transformer_calls = _calls_for_type(service, "MAPINVOKE")
+    copy_operations = _operations_for_type(service, "COPY")
+    set_operations = _operations_for_type(service, "SET")
+    delete_operations = _operations_for_type(service, "DELETE")
+    description_text = _text_display(service.description)
     return _TEMPLATE.render(
         service=service,
+        description_text=description_text,
         normal_dependencies=normal_dependencies,
         transformer_dependencies=transformer_dependencies,
         service_calls=service_calls,
         transformer_calls=transformer_calls,
+        copy_operations=copy_operations,
+        set_operations=set_operations,
+        delete_operations=delete_operations,
         flow_outline=_flow_outline(service.flow_tree),
         flow_count=lambda name: service.metrics.flow_node_counts.get(name, 0),
+        mapping_count=lambda name: service.metrics.mapping_operation_type_counts.get(name, 0),
+        binding_count=lambda name: service.metrics.transformer_binding_direction_counts.get(
+            name, 0
+        ),
         render_fields=_render_fields,
         render_dependencies=_render_dependencies,
         render_calls=_render_calls,
+        render_mapping_operations=_render_mapping_operations,
+        render_transformer_bindings=_render_transformer_bindings,
     )
 
 
@@ -163,6 +215,14 @@ def _dependencies_for_kind(
 
 def _calls_for_type(service: FlowService, call_type: str) -> list[CallOccurrence]:
     return [call for call in service.call_occurrences if call.call_type.value == call_type]
+
+
+def _operations_for_type(service: FlowService, operation_type: str) -> list[MappingOperation]:
+    return [
+        operation
+        for operation in service.mapping_operations
+        if operation.operation_type.value == operation_type
+    ]
 
 
 def _render_dependencies(dependencies: list[UniqueDependency]) -> str:
@@ -203,6 +263,80 @@ def _render_calls(calls: list[CallOccurrence], label: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_mapping_operations(operations: list[MappingOperation], label: str) -> str:
+    if not operations:
+        return f"No {label} mapping operations were extracted.\n"
+    lines = [
+        "| Operation | Source | Target | Literal | Evidence |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for operation in operations[:MAX_MAPPING_ROWS]:
+        source = _endpoint_display(operation.source_endpoint or operation.delete_endpoint)
+        target = _endpoint_display(operation.target_endpoint or operation.delete_endpoint)
+        lines.append(
+            "| "
+            f"`{operation.id}` | "
+            f"{source} | "
+            f"{target} | "
+            f"{_literal_display(operation.literal)} | "
+            f"`{_source_display(operation.source)}` |"
+        )
+    if len(operations) > MAX_MAPPING_ROWS:
+        omitted = len(operations) - MAX_MAPPING_ROWS
+        lines.append(f"| ... | ... | ... | {omitted} additional operations omitted | ... |")
+    return "\n".join(lines) + "\n"
+
+
+def _render_transformer_bindings(bindings: list[TransformerBinding]) -> str:
+    if not bindings:
+        return "No MAPINVOKE transformer bindings were extracted.\n"
+    lines = [
+        "| Binding | Direction | Transformer | Pipeline | Literal | Evidence |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for binding in bindings[:MAX_MAPPING_ROWS]:
+        lines.append(
+            "| "
+            f"`{binding.id}` | "
+            f"`{binding.direction.value}` | "
+            f"{_endpoint_display(binding.transformer_endpoint)} | "
+            f"{_endpoint_display(binding.pipeline_endpoint)} | "
+            f"{_literal_display(binding.literal)} | "
+            f"`{_source_display(binding.source)}` |"
+        )
+    if len(bindings) > MAX_MAPPING_ROWS:
+        omitted = len(bindings) - MAX_MAPPING_ROWS
+        lines.append(f"| ... | ... | ... | ... | {omitted} additional bindings omitted | ... |")
+    return "\n".join(lines) + "\n"
+
+
+def _endpoint_display(endpoint: MappingEndpoint | None) -> str:
+    if endpoint is None:
+        return ""
+    return f"`{_escape_table(endpoint.raw_path)}`"
+
+
+def _literal_display(literal: LiteralValue | None) -> str:
+    if literal is None:
+        return ""
+    if not literal.present:
+        return "`not-present`"
+    if literal.value is not None:
+        return f"`{_escape_table(literal.value)}`"
+    if literal.marker:
+        return f"`{literal.marker}`"
+    return f"`{literal.disclosure.value}`"
+
+
+def _source_display(source: SourceReference) -> str:
+    line = f":{source.line}" if source.line else ""
+    return f"{source.path}{line}"
+
+
+def _escape_table(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
+
+
 def _flow_outline(flow_tree: FlowNode | None) -> str:
     if flow_tree is None:
         return "No FLOW tree was extracted.\n"
@@ -218,8 +352,9 @@ def _flow_outline(flow_tree: FlowNode | None) -> str:
             return
         indent = "  " * depth
         detail_parts = []
-        if node.label:
-            detail_parts.append(node.label)
+        label = _text_display(node.label)
+        if label:
+            detail_parts.append(label)
         if node.target:
             detail_parts.append(f"target={node.target}")
         if node.switch:
@@ -267,6 +402,16 @@ def _append_field(lines: list[str], field: SignatureField, depth: int) -> None:
     )
     for child in field.children:
         _append_field(lines, child, depth + 1)
+
+
+def _text_display(text: TextValue | None) -> str | None:
+    if text is None:
+        return None
+    if text.value:
+        return text.value
+    if text.marker:
+        return text.marker
+    return None
 
 
 def write_service_markdown(output_dir: Path, services: list[FlowService]) -> list[Path]:
