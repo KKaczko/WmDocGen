@@ -2,11 +2,13 @@
 
 This project builds an offline static-analysis tool for webMethods Integration Server packages.
 
-Current accepted baseline is milestone M2b remediation: evidence-based FLOW mapping extraction with
-policy-safe free-text handling, filtered raw attributes, and explicit disclosure policy snapshots on
-top of the M2a call/dependency and observed control-flow model. Do not add Document Type resolution,
-Java body analysis, adapter parsers, trigger parsers, process parsers, runtime simulation, Ollama
-integration, or M3 work without a later explicit milestone approval.
+Current accepted baseline is milestone M3 hardening: evidence-based Document Type extraction,
+document field trees, exact local `rec_ref` resolution, service-document dependency extraction from
+observed signatures, deterministic document Markdown with active disclosure policies, explicit
+`MALFORMED_NESTED_RECORD` and `UNSUPPORTED_DOCUMENT_METADATA` findings, and a document-reference DOT
+graph on top of the M2b FLOW mapping and disclosure model. Do not add Java body analysis, adapter
+parsers, trigger parsers, process parsers, runtime simulation, Ollama integration, snapshot diffing,
+or M4 work without a later explicit milestone approval.
 
 Important constraints:
 

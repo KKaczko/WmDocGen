@@ -13,7 +13,8 @@ from wm_doc.config import (
 )
 from wm_doc.discovery import scan_path
 from wm_doc.render.analysis_json import render_analysis_json
-from wm_doc.render.dot import render_dependency_dot
+from wm_doc.render.document_markdown import render_document_markdown
+from wm_doc.render.dot import render_dependency_dot, render_document_dot
 from wm_doc.render.service_markdown import render_service_markdown
 
 
@@ -254,7 +255,7 @@ def test_policy_snapshot_records_secret_guard(tmp_path) -> None:
     analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
     payload = render_analysis_json(analysis)
 
-    assert analysis.schema_version == "analysis.v4"
+    assert analysis.schema_version == "analysis.v5"
     assert analysis.extraction_policy.literal_mode == "redact"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
@@ -290,10 +291,340 @@ def test_mapping_error_findings_are_explicit(tmp_path) -> None:
     assert "UNSUPPORTED_LITERAL_ENCODING" in codes
 
 
+def test_document_type_edge_findings_are_explicit(tmp_path) -> None:
+    doc_a = _document_dir(tmp_path, "docs", "A")
+    doc_b = _document_dir(tmp_path, "docs", "B")
+    _write_document_node(
+        doc_a / "node.ndf",
+        "docs:A",
+        """
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">toB</value>
+        <value name="field_type">recref</value>
+        <value name="field_dim">0</value>
+        <value name="rec_ref">docs:B</value>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">missingTarget</value>
+        <value name="field_type">recref</value>
+        <value name="field_dim">0</value>
+        <value name="rec_ref">docs:Missing</value>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">noTarget</value>
+        <value name="field_type">recref</value>
+        <value name="field_dim">0</value>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">mystery</value>
+        <value name="field_type">mystery</value>
+        <value name="field_dim">x</value>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">toB</value>
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+      </record>
+""",
+    )
+    _write_document_node(
+        doc_b / "node.ndf",
+        "docs:B",
+        """
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">toA</value>
+        <value name="field_type">recref</value>
+        <value name="field_dim">0</value>
+        <value name="rec_ref">docs:A</value>
+      </record>
+""",
+    )
+
+    analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
+    codes = {finding.code for finding in analysis.findings}
+
+    assert analysis.metrics.document_type_count == 2
+    assert analysis.metrics.document_reference_occurrence_count == 3
+    assert analysis.metrics.resolved_document_reference_count == 2
+    assert analysis.metrics.unresolved_document_reference_count == 1
+    assert "UNKNOWN_FIELD_TYPE" in codes
+    assert "INVALID_DIMENSION" in codes
+    assert "MISSING_FIELD_NAME" in codes
+    assert "MISSING_DOCUMENT_REFERENCE_TARGET" in codes
+    assert "DUPLICATE_FIELD_NAME" in codes
+    assert "UNRESOLVED_DOCUMENT_REFERENCE" in codes
+    assert "CYCLIC_DOCUMENT_REFERENCE" in codes
+    assert any(
+        dependency.target_document == "docs:Missing" and not dependency.resolved
+        for dependency in analysis.document_dependencies
+    )
+
+
+def test_document_free_text_and_unknown_metadata_follow_disclosure_policy(tmp_path) -> None:
+    marker = "SAFE_DOCUMENT_TEXT_MARKER"
+    unknown_marker = "SAFE_DOCUMENT_UNKNOWN_MARKER"
+    doc_dir = _document_dir(tmp_path, "docs", "SafeDoc")
+    _write_document_node(
+        doc_dir / "node.ndf",
+        "docs:SafeDoc",
+        f"""
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">field</value>
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+        <value name="node_comment">{marker}</value>
+        <value name="x_unknown">{unknown_marker}</value>
+      </record>
+""",
+        comment=marker,
+    )
+
+    include_analysis = analyze_path(
+        tmp_path, _config(free_text_mode=ExtractionMode.INCLUDE)
+    )
+    include_payload = render_analysis_json(include_analysis)
+    assert marker in include_payload
+    assert unknown_marker not in include_payload
+
+    redact_analysis = analyze_path(
+        tmp_path, _config(free_text_mode=ExtractionMode.REDACT)
+    )
+    redact_payload = render_analysis_json(redact_analysis)
+    assert marker not in redact_payload
+    assert unknown_marker not in redact_payload
+    assert "<redacted:free-text>" in redact_payload
+    assert "<redacted:attribute>" in redact_payload
+
+    omit_analysis = analyze_path(tmp_path, _config(free_text_mode=ExtractionMode.OMIT))
+    omit_payload = render_analysis_json(omit_analysis)
+    assert marker not in omit_payload
+    assert unknown_marker not in omit_payload
+    assert "<redacted:free-text>" not in omit_payload
+
+
+def test_document_markdown_renders_disclosure_policy_modes(tmp_path) -> None:
+    cases = [
+        ("include-redact", ExtractionMode.INCLUDE, ExtractionMode.REDACT),
+        ("redact-redact", ExtractionMode.REDACT, ExtractionMode.REDACT),
+        ("omit-redact", ExtractionMode.OMIT, ExtractionMode.REDACT),
+        ("include-include", ExtractionMode.INCLUDE, ExtractionMode.INCLUDE),
+        ("include-omit", ExtractionMode.INCLUDE, ExtractionMode.OMIT),
+    ]
+    for name, free_text_mode, literal_mode in cases:
+        case_root = tmp_path / name
+        doc_dir = _document_dir(case_root, "docs", "PolicyDoc")
+        _write_document_node(
+            doc_dir / "node.ndf",
+            "docs:PolicyDoc",
+            """
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">field</value>
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+      </record>
+""",
+        )
+        config = _config(literal_mode=literal_mode, free_text_mode=free_text_mode)
+        analysis = analyze_path(case_root, config)
+        markdown = _render_first_document_markdown(analysis)
+
+        assert "## Disclosure Policies" in markdown
+        assert f"- Free text mode: {free_text_mode.value}" in markdown
+        assert f"- Literal mode: {literal_mode.value}" in markdown
+        assert "- Secret guard: enabled" in markdown
+        assert "- Secret guard strategy: secret-guard.v1" in markdown
+
+
+def test_malformed_nested_record_findings_are_explicit(tmp_path) -> None:
+    doc_dir = _document_dir(tmp_path, "docs", "MalformedNested")
+    _write_document_node(
+        doc_dir / "node.ndf",
+        "docs:MalformedNested",
+        """
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">badShape</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <record name="rec_fields">
+          <value name="notAnArray">x</value>
+        </record>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">badChild</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <array name="rec_fields" type="record" depth="1">
+          <value name="notARecord">x</value>
+        </array>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">outer</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <array name="rec_fields" type="record" depth="1">
+          <record javaclass="com.wm.util.Values">
+            <value name="field_name">innerBad</value>
+            <value name="field_type">record</value>
+            <value name="field_dim">0</value>
+            <array name="rec_fields" type="record" depth="1">
+              <value name="notARecord">x</value>
+            </array>
+          </record>
+        </array>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">validEmpty</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <array name="rec_fields" type="record" depth="1" />
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">validParent</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <array name="rec_fields" type="record" depth="1">
+          <record javaclass="com.wm.util.Values">
+            <value name="field_name">child</value>
+            <value name="field_type">string</value>
+            <value name="field_dim">0</value>
+          </record>
+        </array>
+      </record>
+""",
+    )
+
+    analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
+    document = analysis.document_types[0]
+    malformed = [
+        finding for finding in document.findings if finding.code == "MALFORMED_NESTED_RECORD"
+    ]
+    payload = render_analysis_json(analysis)
+
+    assert analysis.metrics.document_type_count == 1
+    assert len(document.fields) == 5
+    assert {field.name for field in document.fields} == {
+        "badShape",
+        "badChild",
+        "outer",
+        "validEmpty",
+        "validParent",
+    }
+    assert len(malformed) == 3
+    assert all(finding.severity == "WARNING" for finding in malformed)
+    assert all(finding.confidence == "PARTIALLY_INTERPRETED" for finding in malformed)
+    assert all(finding.source.line is not None for finding in malformed)
+    assert any(finding.source.source_node == "badShape" for finding in malformed)
+    assert any(finding.source.source_node == "badChild" for finding in malformed)
+    assert any(finding.source.source_node == "outer/innerBad" for finding in malformed)
+    assert not any("validEmpty" in finding.message for finding in malformed)
+    assert not any("validParent" in finding.message for finding in malformed)
+    assert "<record" not in payload
+    assert "<array" not in payload
+
+
+def test_unsupported_document_metadata_findings_are_policy_safe(tmp_path) -> None:
+    marker = "SAFE_UNSUPPORTED_METADATA_MARKER"
+    secret_marker = "SAFE_SECRET_TOKEN_MARKER"
+    for name, free_text_mode, literal_mode in (
+        ("default", ExtractionMode.INCLUDE, ExtractionMode.REDACT),
+        ("redact", ExtractionMode.REDACT, ExtractionMode.REDACT),
+        ("omit", ExtractionMode.OMIT, ExtractionMode.REDACT),
+        ("literal-include", ExtractionMode.REDACT, ExtractionMode.INCLUDE),
+    ):
+        case_root = tmp_path / name
+        doc_dir = _document_dir(case_root, "docs", "UnsupportedMetadata")
+        _write_document_node(
+            doc_dir / "node.ndf",
+            "docs:UnsupportedMetadata",
+            f"""
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">first</value>
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+        <value name="field_content_type">record</value>
+        <value name="x_extra">{marker}</value>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">second</value>
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+        <value name="x_extra">{secret_marker}</value>
+      </record>
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">nested</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <value name="x_extra">{marker}</value>
+        <array name="rec_fields" type="record" depth="1">
+          <record javaclass="com.wm.util.Values">
+            <value name="field_name">child</value>
+            <value name="field_type">string</value>
+            <value name="field_dim">0</value>
+          </record>
+        </array>
+      </record>
+""",
+            extra_document_metadata=f'<value name="x_doc_extra">{marker}</value>',
+        )
+        config = _config(literal_mode=literal_mode, free_text_mode=free_text_mode)
+        analysis = analyze_path(case_root, config)
+        document = analysis.document_types[0]
+        findings = [
+            finding
+            for finding in document.findings
+            if finding.code == "UNSUPPORTED_DOCUMENT_METADATA"
+        ]
+        combined = _document_outputs(analysis)
+
+        assert all(finding.severity == "INFO" for finding in findings)
+        assert all(finding.confidence == "PARTIALLY_INTERPRETED" for finding in findings)
+        if free_text_mode == ExtractionMode.OMIT:
+            assert len(findings) == 2
+            field_finding = next(
+                finding for finding in findings if "field metadata" in finding.message
+            )
+            assert field_finding.occurrence_count == 3
+            assert len(field_finding.sample_source_references) == 3
+        else:
+            assert len(findings) == 3
+            redacted_field_finding = next(
+                finding
+                for finding in findings
+                if "field metadata" in finding.message
+                and "value disclosure: REDACTED" in finding.message
+            )
+            blocked_field_finding = next(
+                finding
+                for finding in findings
+                if "field metadata" in finding.message
+                and "value disclosure: BLOCKED_SECRET" in finding.message
+            )
+            assert redacted_field_finding.occurrence_count == 2
+            assert len(redacted_field_finding.sample_source_references) == 2
+            assert blocked_field_finding.occurrence_count == 1
+        assert "field_content_type" not in "".join(finding.message for finding in findings)
+        assert marker not in combined
+        assert secret_marker not in combined
+        assert "<Values" not in combined
+        assert "<record" not in combined
+        assert "x_extra" in combined
+        assert "x_doc_extra" in combined
+
+
 def _service_dir(tmp_path: Path) -> Path:
     service_dir = tmp_path / "Pkg" / "ns" / "foo" / "bar"
     service_dir.mkdir(parents=True)
     return service_dir
+
+
+def _document_dir(tmp_path: Path, namespace: str, name: str) -> Path:
+    document_dir = tmp_path / "Pkg" / "ns" / namespace / name
+    document_dir.mkdir(parents=True)
+    return document_dir
 
 
 def _write_node(path: Path, comment: str = "") -> None:
@@ -304,6 +635,32 @@ def _write_node(path: Path, comment: str = "") -> None:
   <record name="svc_sig">
     <record name="sig_in"><array name="rec_fields" type="record" depth="1" /></record>
     <record name="sig_out"><array name="rec_fields" type="record" depth="1" /></record>
+  </record>
+</Values>""",
+        encoding="utf-8",
+    )
+
+
+def _write_document_node(
+    path: Path,
+    full_name: str,
+    fields_xml: str,
+    comment: str = "",
+    extra_document_metadata: str = "",
+) -> None:
+    path.write_text(
+        f"""<Values version="2.0">
+  <record name="record" javaclass="com.wm.util.Values">
+    <value name="node_type">record</value>
+    <value name="node_nsName">{full_name}</value>
+    <value name="node_pkg">Pkg</value>
+    <value name="node_comment">{comment}</value>
+    <value name="field_type">record</value>
+    <value name="field_dim">0</value>
+{extra_document_metadata}
+    <array name="rec_fields" type="record" depth="1">
+{fields_xml}
+    </array>
   </record>
 </Values>""",
         encoding="utf-8",
@@ -358,6 +715,42 @@ def _combined_outputs(analysis, service) -> str:
         + render_service_markdown(service)
         + render_dependency_dot(analysis)
         + "".join(finding.message for finding in service.findings)
+    )
+
+
+def _render_first_document_markdown(analysis) -> str:
+    return render_document_markdown(
+        analysis.document_types[0],
+        analysis.document_reference_occurrences,
+        analysis.document_dependencies,
+        analysis.service_document_dependencies,
+        analysis.extraction_policy,
+    )
+
+
+def _document_outputs(analysis) -> str:
+    document_markdown = "".join(
+        render_document_markdown(
+            document,
+            analysis.document_reference_occurrences,
+            analysis.document_dependencies,
+            analysis.service_document_dependencies,
+            analysis.extraction_policy,
+        )
+        for document in analysis.document_types
+    )
+    finding_messages = "".join(finding.message for finding in analysis.findings)
+    finding_messages += "".join(
+        finding.message
+        for document in analysis.document_types
+        for finding in document.findings
+    )
+    return (
+        render_analysis_json(analysis)
+        + document_markdown
+        + render_document_dot(analysis)
+        + render_dependency_dot(analysis)
+        + finding_messages
     )
 
 

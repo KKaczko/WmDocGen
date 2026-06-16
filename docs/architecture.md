@@ -1,8 +1,9 @@
 # Architecture
 
-M2b remediation implements package/artifact inventory plus a FLOW Service static-analysis slice
+M3 implements package/artifact inventory plus a FLOW Service and Document Type static-analysis slice
 focused on traceable calls, unique dependencies, observed control-flow structure, observed mapping
-evidence, and policy-safe disclosure of free text.
+evidence, ordered document field trees, exact document-reference resolution, and policy-safe
+disclosure of free text.
 
 Subsystems:
 
@@ -15,11 +16,15 @@ Subsystems:
   rules take precedence over important service rules.
 - Dependency resolution is exact-name only. It resolves static `INVOKE` and `MAPINVOKE` targets to
   discovered FLOW or Java Service metadata and keeps unresolved targets explicit in the IR.
+- Document Type analysis parses observed `record/node_type=record` metadata into ordered field
+  trees. It resolves `rec_ref` values only by exact local `namespace:name` match and keeps unresolved
+  targets explicit.
 - IR models in `wm_doc.ir` preserve source references, confidence basis, finding statuses,
   classifications, call occurrences, unique dependencies, an ordered FLOW tree, flow maps, typed
-  mapping operations, transformer bindings, extraction policies, and typed findings.
+  mapping operations, transformer bindings, document types, document-reference occurrences,
+  document dependencies, service-document dependencies, extraction policies, and typed findings.
 - Renderers produce deterministic inventory JSON/Markdown and deterministic analysis JSON,
-  per-service Markdown, and Graphviz DOT.
+  per-service Markdown, per-document Markdown, and Graphviz DOT.
 - The CLI exposes `wm-doc scan` and `wm-doc analyze`.
 
 ## Analysis Schema
@@ -66,11 +71,45 @@ M2b remediation migrates to `analysis.v4`:
 - Mapping operations keep service-local discovery order and additionally expose per-map direct-child
   order plus document traversal order. These are evidence orderings, not runtime execution order.
 
+M3 migrates to `analysis.v5`:
+
+- `document_types` stores local Document Type artifacts with package/name identity, source
+  references, policy-safe descriptions, and ordered `DocumentField` trees.
+- `DocumentField` preserves raw field type, canonical field type, raw dimension, interpreted
+  dimension, source order, structural path, display field path, technical metadata, policy-safe text
+  metadata, unknown metadata, and ordered children.
+- `document_reference_occurrences` stores every observed document reference from Document Type fields
+  and service signatures, preserving the declared target and exact local resolution status.
+- `document_dependencies` aggregates document-to-document `REFERENCES_DOCUMENT` occurrences.
+- `service_document_dependencies` aggregates service signature document usage with `INPUT`,
+  `OUTPUT`, or `INPUT_OUTPUT` roles.
+- `graphs/documents.dot` renders unique document-to-document edges and unresolved target nodes. The
+  service-call graph remains separate in `graphs/dependencies.dot`.
+
+M3 hardening keeps `analysis.v5` and adds two traceability improvements:
+
+- Document Markdown receives the active `extraction_policy` snapshot from canonical analysis IR and
+  renders free-text mode, literal mode, secret-guard enabled state, and secret-guard strategy on
+  every document page.
+- `MALFORMED_NESTED_RECORD` is emitted with `WARNING` severity when nested document record metadata
+  is demonstrably malformed but the field can still be represented safely. Current conditions are a
+  non-array `rec_fields` metadata container or non-record child elements inside a `rec_fields` array.
+- `UNSUPPORTED_DOCUMENT_METADATA` is emitted with `INFO` severity when structurally valid document
+  or field metadata is preserved as policy-controlled evidence but not interpreted by the current
+  canonical model. Values remain filtered by the disclosure policy.
+- Repeated unsupported metadata findings aggregate deterministically by metadata name, owner type,
+  file, and disclosure status, with bounded source samples preserving field paths.
+
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
 treating them as silently supported. Mapping paths preserve the raw declared webMethods path as
 authoritative; derived `PipelinePath` fields are lightweight flags, not schema resolution.
 
-Later milestones will add fuller FLOW semantics, document/spec dependency extraction, Java metadata
-expansion, adapter fixtures, trigger fixtures, process graphs, and Ollama input generation. Those are
-intentionally outside M2b.
+M3 document parsing is also feature-based. It maps only observed field types (`string`, `object`,
+`record`, `recref`) and observed dimensions (`0`, `1`). It does not validate mapping paths against
+document schemas, recursively expand referenced documents, interpret field names as business
+semantics, or model Specification artifacts as Document Types.
+
+Later milestones will add fuller FLOW semantics, Java metadata expansion, adapter fixtures, trigger
+fixtures, process graphs, Service Specification IR, package dependency graphs, snapshot diffing, and
+Ollama input generation. Those are intentionally outside M3.

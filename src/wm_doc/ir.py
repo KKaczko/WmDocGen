@@ -50,6 +50,37 @@ class DependencyKind(StrEnum):
     USES_TRANSFORMER = "USES_TRANSFORMER"
 
 
+class DocumentDependencyKind(StrEnum):
+    REFERENCES_DOCUMENT = "REFERENCES_DOCUMENT"
+    USES_DOCUMENT = "USES_DOCUMENT"
+
+
+class DocumentReferenceOwnerKind(StrEnum):
+    DOCUMENT = "DOCUMENT"
+    SERVICE_SIGNATURE = "SERVICE_SIGNATURE"
+
+
+class DocumentFieldType(StrEnum):
+    STRING = "STRING"
+    OBJECT = "OBJECT"
+    RECORD = "RECORD"
+    DOCUMENT_REFERENCE = "DOCUMENT_REFERENCE"
+    UNKNOWN = "UNKNOWN"
+
+
+class DocumentDimensionKind(StrEnum):
+    SCALAR = "SCALAR"
+    LIST = "LIST"
+    MULTIDIMENSIONAL = "MULTIDIMENSIONAL"
+    UNKNOWN = "UNKNOWN"
+
+
+class ServiceDocumentUsageRole(StrEnum):
+    INPUT = "INPUT"
+    OUTPUT = "OUTPUT"
+    INPUT_OUTPUT = "INPUT_OUTPUT"
+
+
 class FlowNodeType(StrEnum):
     FLOW = "FLOW"
     SEQUENCE = "SEQUENCE"
@@ -133,6 +164,8 @@ class AnalysisFinding(BaseModel):
     code: str
     message: str
     source: SourceReference
+    severity: FindingSeverity | None = None
+    confidence: str | None = None
     occurrence_count: int = 1
     sample_source_references: list[SourceReference] = Field(default_factory=list)
 
@@ -258,6 +291,98 @@ class LiteralValue(BaseModel):
     marker: str | None = None
     value: str | None = None
     source: SourceReference | None = None
+
+
+class DocumentIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    package: str
+    namespace: str
+    name: str
+    full_name: str
+    basis: FactBasis
+    source: SourceReference
+    declared_package: str | None = None
+
+
+class DocumentField(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    raw_field_type: str | None = None
+    field_type: DocumentFieldType
+    raw_dimension: str | None = None
+    dimension: DocumentDimensionKind
+    optional: bool | None = None
+    wrapper_type: str | None = None
+    document_reference: str | None = None
+    declared_order: int
+    structural_path: str
+    field_path: str
+    source: SourceReference
+    technical_metadata: dict[str, str] = Field(default_factory=dict)
+    text_metadata: dict[str, TextValue] = Field(default_factory=dict)
+    unknown_metadata: list[AttributeValue] = Field(default_factory=list)
+    children: list[DocumentField] = Field(default_factory=list)
+
+
+class DocumentType(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    identity: DocumentIdentity
+    description: TextValue | None = None
+    fields: list[DocumentField] = Field(default_factory=list)
+    source: SourceReference
+    confidence: InterpretationConfidence = InterpretationConfidence.CONFIRMED
+    findings: list[AnalysisFinding] = Field(default_factory=list)
+
+
+class DocumentReferenceOccurrence(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    owner_kind: DocumentReferenceOwnerKind
+    owner_name: str
+    owner_id: str | None = None
+    source_field_id: str | None = None
+    source_field_path: str
+    declared_target: str
+    canonical_target: str | None = None
+    resolved: bool
+    dimension: DocumentDimensionKind
+    raw_dimension: str | None = None
+    dependency_kind: DocumentDependencyKind
+    usage_role: ServiceDocumentUsageRole | None = None
+    source: SourceReference
+
+
+class DocumentDependency(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    source_document: str
+    target_document: str
+    dependency_kind: DocumentDependencyKind
+    resolved: bool
+    occurrence_count: int
+    occurrence_ids: list[str] = Field(default_factory=list)
+    source_samples: list[SourceReference] = Field(default_factory=list)
+
+
+class ServiceDocumentDependency(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    service: str
+    target_document: str
+    dependency_kind: DocumentDependencyKind
+    usage_role: ServiceDocumentUsageRole
+    resolved: bool
+    occurrence_count: int
+    occurrence_ids: list[str] = Field(default_factory=list)
+    source_samples: list[SourceReference] = Field(default_factory=list)
 
 
 class MapSchemaMetadata(BaseModel):
@@ -409,6 +534,13 @@ class AnalysisMetrics(BaseModel):
     transformer_binding_count: int = 0
     transformer_binding_direction_counts: dict[str, int] = Field(default_factory=dict)
     partially_interpreted_mapping_count: int = 0
+    document_type_count: int = 0
+    document_field_count: int = 0
+    document_reference_occurrence_count: int = 0
+    resolved_document_reference_count: int = 0
+    unresolved_document_reference_count: int = 0
+    unique_document_dependency_count: int = 0
+    service_document_dependency_count: int = 0
 
 
 class ServiceSummary(BaseModel):
@@ -434,6 +566,8 @@ class FlowService(BaseModel):
     flow_maps: list[FlowMap] = Field(default_factory=list)
     mapping_operations: list[MappingOperation] = Field(default_factory=list)
     transformer_bindings: list[TransformerBinding] = Field(default_factory=list)
+    document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
+    service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
     extraction_policy: ExtractionPolicySnapshot = Field(default_factory=ExtractionPolicySnapshot)
     findings: list[AnalysisFinding] = Field(default_factory=list)
     source: SourceReference
@@ -445,6 +579,7 @@ class AnalyzedPackage(BaseModel):
     name: str
     root: str
     services: list[FlowService] = Field(default_factory=list)
+    document_types: list[DocumentType] = Field(default_factory=list)
     service_index: list[ServiceSummary] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
@@ -452,7 +587,7 @@ class AnalyzedPackage(BaseModel):
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "analysis.v4"
+    schema_version: str = "analysis.v5"
     tool_version: str
     packages: list[AnalyzedPackage] = Field(default_factory=list)
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
@@ -462,6 +597,10 @@ class AnalysisResult(BaseModel):
     flow_maps: list[FlowMap] = Field(default_factory=list)
     mapping_operations: list[MappingOperation] = Field(default_factory=list)
     transformer_bindings: list[TransformerBinding] = Field(default_factory=list)
+    document_types: list[DocumentType] = Field(default_factory=list)
+    document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
+    document_dependencies: list[DocumentDependency] = Field(default_factory=list)
+    service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
 

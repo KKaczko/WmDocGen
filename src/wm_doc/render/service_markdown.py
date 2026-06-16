@@ -10,17 +10,20 @@ from jinja2 import Template
 from wm_doc.ir import (
     CallOccurrence,
     DependencyKind,
+    DocumentReferenceOccurrence,
     FlowNode,
     FlowService,
     LiteralValue,
     MappingEndpoint,
     MappingOperation,
+    ServiceDocumentDependency,
     SignatureField,
     SourceReference,
     TextValue,
     TransformerBinding,
     UniqueDependency,
 )
+from wm_doc.render.document_markdown import document_markdown_filename
 
 IMPORTANCE_ORDER = {"IMPORTANT": 0, "NORMAL": 1, "LOW": 2}
 MAX_OUTLINE_DEPTH = 5
@@ -59,6 +62,24 @@ No description was declared in supported metadata.
 ## Output Signature
 
 {{ render_fields(service.signature.outputs) }}
+
+## Document Type Usage
+
+### Input Document Types
+
+{{ render_document_usage(input_document_dependencies) }}
+
+### Output Document Types
+
+{{ render_document_usage(output_document_dependencies) }}
+
+### Resolved Document References
+
+{{ render_document_references(resolved_document_references) }}
+
+### Unresolved Document References
+
+{{ render_document_references(unresolved_document_references) }}
 
 ## FLOW Overview
 
@@ -162,6 +183,22 @@ def render_service_markdown(service: FlowService) -> str:
     transformer_dependencies = _dependencies_for_kind(service, DependencyKind.USES_TRANSFORMER)
     service_calls = _calls_for_type(service, "INVOKE")
     transformer_calls = _calls_for_type(service, "MAPINVOKE")
+    input_document_dependencies = [
+        dependency
+        for dependency in service.service_document_dependencies
+        if dependency.usage_role.value in {"INPUT", "INPUT_OUTPUT"}
+    ]
+    output_document_dependencies = [
+        dependency
+        for dependency in service.service_document_dependencies
+        if dependency.usage_role.value in {"OUTPUT", "INPUT_OUTPUT"}
+    ]
+    resolved_document_references = [
+        reference for reference in service.document_reference_occurrences if reference.resolved
+    ]
+    unresolved_document_references = [
+        reference for reference in service.document_reference_occurrences if not reference.resolved
+    ]
     copy_operations = _operations_for_type(service, "COPY")
     set_operations = _operations_for_type(service, "SET")
     delete_operations = _operations_for_type(service, "DELETE")
@@ -173,6 +210,10 @@ def render_service_markdown(service: FlowService) -> str:
         transformer_dependencies=transformer_dependencies,
         service_calls=service_calls,
         transformer_calls=transformer_calls,
+        input_document_dependencies=input_document_dependencies,
+        output_document_dependencies=output_document_dependencies,
+        resolved_document_references=resolved_document_references,
+        unresolved_document_references=unresolved_document_references,
         copy_operations=copy_operations,
         set_operations=set_operations,
         delete_operations=delete_operations,
@@ -184,6 +225,8 @@ def render_service_markdown(service: FlowService) -> str:
         ),
         render_fields=_render_fields,
         render_dependencies=_render_dependencies,
+        render_document_usage=_render_document_usage,
+        render_document_references=_render_document_references,
         render_calls=_render_calls,
         render_mapping_operations=_render_mapping_operations,
         render_transformer_bindings=_render_transformer_bindings,
@@ -240,6 +283,69 @@ def _render_dependencies(dependencies: list[UniqueDependency]) -> str:
             f"`{dependency.target_service}` |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _render_document_usage(dependencies: list[ServiceDocumentDependency]) -> str:
+    if not dependencies:
+        return "No document dependencies were extracted for this usage role.\n"
+    lines = [
+        "| Usage | Resolved | Document | Occurrences |",
+        "| --- | --- | --- | ---: |",
+    ]
+    for dependency in sorted(
+        dependencies,
+        key=lambda item: (
+            item.usage_role.value,
+            item.target_document.casefold(),
+            item.id,
+        ),
+    ):
+        document = _document_link(dependency.target_document, dependency.resolved)
+        lines.append(
+            "| "
+            f"`{dependency.usage_role.value}` | "
+            f"{dependency.resolved} | "
+            f"{document} | "
+            f"{dependency.occurrence_count} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _render_document_references(references: list[DocumentReferenceOccurrence]) -> str:
+    if not references:
+        return "No document reference occurrences were extracted for this section.\n"
+    lines = [
+        "| Usage | Field | Resolved | Target | Source |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for reference in sorted(
+        references,
+        key=lambda item: (
+            item.usage_role.value if item.usage_role else "",
+            item.source_field_path.casefold(),
+            item.declared_target.casefold(),
+            item.id,
+        ),
+    ):
+        source = reference.source.path + (
+            f":{reference.source.line}" if reference.source.line else ""
+        )
+        lines.append(
+            "| "
+            f"`{reference.usage_role.value if reference.usage_role else ''}` | "
+            f"`{reference.source_field_path}` | "
+            f"{reference.resolved} | "
+            f"{_document_link(reference.declared_target, reference.resolved)} | "
+            f"`{source}` |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _document_link(full_name: str, resolved: bool) -> str:
+    if not resolved:
+        return f"`{full_name}`"
+    filename = document_markdown_filename(full_name)
+    return f"[`{full_name}`](../documents/{filename})"
 
 
 def _render_calls(calls: list[CallOccurrence], label: str) -> str:
