@@ -194,7 +194,17 @@ def test_free_text_policy_covers_flow_labels_and_attributes(tmp_path) -> None:
 
 def test_secret_guard_covers_free_text_and_literals_under_include(tmp_path) -> None:
     for index, term in enumerate(
-        ("password", "secret", "credential", "token", "private-key", "private key"), start=1
+        (
+            "password",
+            "secret",
+            "credential",
+            "token",
+            "private key",
+            "private-key",
+            "private_key",
+            "privatekey",
+        ),
+        start=1,
     ):
         marker = f"SAFE_{term.replace(' ', '_').replace('-', '_').upper()}_MARKER"
         case_root = tmp_path / f"{index}_{term.replace(' ', '_').replace('-', '_')}"
@@ -219,12 +229,16 @@ def test_secret_guard_covers_free_text_and_literals_under_include(tmp_path) -> N
         )
         analysis = analyze_path(case_root, config)
         service = analysis.packages[0].services[0]
-        assert marker not in _combined_outputs(analysis, service)
+        _assert_marker_absent_from_disclosure_surfaces(analysis, service, marker)
+        _assert_marker_absent_from_raw_attribute_collections(service, marker)
 
         _write_flow_with_mapset(service_dir / "flow.xml", f"/{term};1;0", marker)
         literal_analysis = analyze_path(case_root, config)
         literal_service = literal_analysis.packages[0].services[0]
-        assert marker not in _combined_outputs(literal_analysis, literal_service)
+        _assert_marker_absent_from_disclosure_surfaces(
+            literal_analysis, literal_service, marker
+        )
+        _assert_marker_absent_from_raw_attribute_collections(literal_service, marker)
         literal = literal_service.mapping_operations[0].literal
         assert literal is not None
         assert literal.disclosure == "BLOCKED_SECRET"
@@ -345,6 +359,32 @@ def _combined_outputs(analysis, service) -> str:
         + render_dependency_dot(analysis)
         + "".join(finding.message for finding in service.findings)
     )
+
+
+def _assert_marker_absent_from_disclosure_surfaces(analysis, service, marker: str) -> None:
+    assert marker not in render_analysis_json(analysis)
+    assert marker not in render_service_markdown(service)
+    assert marker not in render_dependency_dot(analysis)
+    assert marker not in "".join(finding.message for finding in service.findings)
+
+
+def _assert_marker_absent_from_raw_attribute_collections(service, marker: str) -> None:
+    collections: list[dict[str, str]] = []
+    collections.extend(flow_map.raw_attrs for flow_map in service.flow_maps)
+    collections.extend(flow_map.technical_attrs for flow_map in service.flow_maps)
+    collections.extend(operation.raw_attrs for operation in service.mapping_operations)
+    collections.extend(operation.technical_attrs for operation in service.mapping_operations)
+
+    def visit(node) -> None:
+        collections.append(node.attributes)
+        for child in node.children:
+            visit(child)
+
+    if service.flow_tree is not None:
+        visit(service.flow_tree)
+
+    for attributes in collections:
+        assert marker not in "".join(attributes.values())
 
 
 def _config(
