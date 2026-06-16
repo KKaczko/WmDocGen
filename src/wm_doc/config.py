@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,28 @@ class ClassificationConfig(BaseModel):
     layers: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class ExtractionMode(StrEnum):
+    REDACT = "redact"
+    INCLUDE = "include"
+    OMIT = "omit"
+
+
+class LiteralExtractionConfig(BaseModel):
+    mode: ExtractionMode = ExtractionMode.REDACT
+
+
+class FreeTextExtractionConfig(BaseModel):
+    mode: ExtractionMode = ExtractionMode.INCLUDE
+
+
+class ExtractionConfig(BaseModel):
+    literals: LiteralExtractionConfig = Field(default_factory=LiteralExtractionConfig)
+    freeText: FreeTextExtractionConfig = Field(default_factory=FreeTextExtractionConfig)
+
+
 class AppConfig(BaseModel):
     classification: ClassificationConfig = Field(default_factory=ClassificationConfig)
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
 
 
 DEFAULT_CONFIG = AppConfig(

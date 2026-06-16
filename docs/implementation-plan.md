@@ -134,6 +134,114 @@ Not implemented in M2a:
 
 ## Next Milestone Gate
 
-M2b should start only after explicit approval. Recommended M2b scope: mapping IR for observed MAP
-internals, configurable literal/free-text extraction policies with redaction defaults, and Markdown
-mapping summaries backed by fixture-derived tests.
+M2b FLOW mapping extraction and disclosure policies was explicitly approved and implemented.
+
+## M2b FLOW Mapping Extraction And Disclosure Policies
+
+Implemented in this milestone:
+
+- Analysis schema migration from `analysis.v2` to `analysis.v3`
+- Globally stable SHA-derived IDs for call occurrences, flow maps, mapping operations, and
+  transformer bindings
+- Canonical `FlowMap` records for observed `MAP` elements, including `MODE`, parent call
+  references, raw attributes, structural paths, source evidence, and map-level source/target schema
+  metadata summaries
+- Typed mapping operations for observed `MAPCOPY`, `MAPSET` with child `DATA`, and `MAPDELETE`
+- Lightweight `PipelinePath` parsing that preserves the declared raw path and only records simple
+  features such as absolute paths, indexes, wildcards, and document-reference markers
+- Literal disclosure policy configuration: `redact` by default, plus explicit `include` and `omit`
+  modes
+- Free-text disclosure policy configuration: `include` by default, plus `redact` and `omit` modes
+- Secret guard for secret-like mapping contexts, which blocks literal value disclosure even under
+  explicit include mode
+- MAPINVOKE transformer bindings derived from child `MODE="INVOKEINPUT"` and
+  `MODE="INVOKEOUTPUT"` maps
+- Markdown mapping overview and bounded tables for copies, sets, deletes, and transformer bindings
+- Continued dependency DOT behavior with unique dependency edges only
+- Fixture and synthetic tests for mapping counts, literal policies, secret guard behavior,
+  malformed mapping endpoints, unsupported DATA encodings, and deterministic outputs
+
+Verification baseline:
+
+- Analyzed FLOW Services: 24
+- Call occurrences: 108
+- Unique dependencies: 86
+- `INVOKE` occurrences: 68
+- `MAPINVOKE` occurrences: 40
+- Unique `INVOKES` dependencies: 61
+- Unique `USES_TRANSFORMER` dependencies: 25
+- Resolved call occurrences: 49
+- Unresolved call occurrences: 59
+- Flow maps: 265
+- Mapping operations: 568
+- `COPY` operations: 297
+- `SET` operations: 93
+- `DELETE` operations: 178
+- Transformer bindings: 198
+- `INTO_TRANSFORMER` bindings: 132
+- `FROM_TRANSFORMER` bindings: 66
+- Primary OAAdapter maps: 135
+- Primary OAAdapter mapping operations: 219
+- Primary OAAdapter transformer bindings: 168
+
+Not implemented in M2b:
+
+- Document Type parsing or validation that mapped paths exist in schemas
+- Full MAP data-lineage semantics beyond typed operation evidence
+- MAP operation DOT graphs
+- Branch condition evaluation
+- Loop iteration simulation
+- Java source decoding or Java body analysis
+- JDBC Adapter Services
+- Universal Messaging or JMS triggers
+- Schedulers
+- Process models
+- Dynamic invocation resolution
+- Ollama documentation generation
+
+## Next Milestone Gate
+
+M2b remediation was explicitly approved and implemented after acceptance audit found that free-text
+policy coverage did not yet include FLOW labels or free-text-like attributes.
+
+## M2b Remediation: Free-Text Disclosure And Policy Hardening
+
+Implemented in this remediation:
+
+- Analysis schema migration from `analysis.v3` to `analysis.v4`
+- Policy-safe text metadata for service descriptions, FLOW labels, free-text `NAME` attributes,
+  display labels, mapping operation names, and free-text-like attributes
+- Filtered raw attributes so canonical IR no longer stores complete unfiltered XML attribute
+  dictionaries
+- Explicit extraction policy snapshot with literal mode, free-text mode, and enabled secret guard
+  strategy version
+- Deterministic secret guard for literal and free-text contexts under include and redact modes
+- Mapping operation ordering fields with distinct meanings:
+  service-local discovery `order`, containing-map `map_operation_order`, and
+  `document_traversal_order`
+- Markdown mapping overview with transformer input/output binding counts
+- Tests for free-text redact/include/omit, secret guard behavior, raw-attribute bypass prevention,
+  policy snapshot, ordering semantics, independent raw XML counts, and regression metrics
+
+Verification baseline remains unchanged:
+
+- Analyzed FLOW Services: 24
+- Call occurrences: 108
+- Unique dependencies: 86
+- Unique `INVOKES` dependencies: 61
+- Unique `USES_TRANSFORMER` dependencies: 25
+- Flow maps: 265
+- Mapping operations: 568, split into 297 `COPY`, 93 `SET`, and 178 `DELETE`
+- Transformer bindings: 198, split into 132 `INTO_TRANSFORMER` and 66 `FROM_TRANSFORMER`
+
+Not implemented in M2b remediation:
+
+- Any M3 document/spec/package graph work
+- Document Type parsing or schema-aware mapping validation
+- Java body analysis
+- Adapter, trigger, scheduler, process, Ollama, snapshot diff, or Integration Server connectivity
+
+## Next Milestone Gate
+
+M3 must start only after explicit approval. Recommended M3 scope remains document types,
+specifications, `rec_ref` usage, and package graph extraction from observed fixtures.

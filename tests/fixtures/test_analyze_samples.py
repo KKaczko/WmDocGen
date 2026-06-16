@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from lxml import etree
 from typer.testing import CliRunner
 
 from wm_doc.analysis import analyze_path
@@ -61,6 +62,7 @@ def test_primary_oaadapter_identity_signature_and_call_model() -> None:
         "MAPINVOKE": 30,
     }
     first_call = service.call_occurrences[0]
+    assert first_call.id.startswith("call_")
     assert first_call.target == "pub.list:sizeOfList"
     assert first_call.call_type == "MAPINVOKE"
     assert first_call.dependency_kind == "USES_TRANSFORMER"
@@ -142,7 +144,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v2"
+    assert analysis.schema_version == "analysis.v4"
     assert analysis.metrics.call_occurrence_count == 108
     assert analysis.metrics.call_type_counts == {"INVOKE": 68, "MAPINVOKE": 40}
     assert analysis.metrics.resolved_call_occurrence_count == 49
@@ -154,8 +156,13 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     }
     assert analysis.metrics.resolved_unique_dependency_count == 45
     assert analysis.metrics.unresolved_unique_dependency_count == 41
+    assert analysis.extraction_policy.literal_mode == "redact"
+    assert analysis.extraction_policy.free_text_mode == "include"
+    assert analysis.extraction_policy.secret_guard.enabled is True
+    assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v1"
     assert len(analysis.call_occurrences) == 108
     assert len(analysis.unique_dependencies) == 86
+    assert all(call.id.startswith("call_") for call in analysis.call_occurrences)
     assert any(
         call.target == "pgp.services.registry:getPubKey"
         for call in analysis.call_occurrences
@@ -164,6 +171,128 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert any(
         dependency.occurrence_count > 1 for dependency in analysis.unique_dependencies
     )
+
+
+def test_mapping_operations_and_transformer_bindings_are_extracted() -> None:
+    analysis = _analysis()
+    service = _service(OA_FULL_NAME)
+
+    assert analysis.metrics.flow_map_count == 265
+    assert analysis.metrics.mapping_operation_count == 568
+    assert analysis.metrics.mapping_operation_type_counts == {
+        "COPY": 297,
+        "DELETE": 178,
+        "SET": 93,
+    }
+    assert analysis.metrics.transformer_binding_count == 198
+    assert analysis.metrics.transformer_binding_direction_counts == {
+        "FROM_TRANSFORMER": 66,
+        "INTO_TRANSFORMER": 132,
+    }
+
+    assert service.metrics.flow_map_count == 135
+    assert service.metrics.mapping_operation_count == 219
+    assert service.metrics.mapping_operation_type_counts == {
+        "COPY": 190,
+        "DELETE": 8,
+        "SET": 21,
+    }
+    assert service.metrics.transformer_binding_count == 168
+    assert service.metrics.transformer_binding_direction_counts == {
+        "FROM_TRANSFORMER": 56,
+        "INTO_TRANSFORMER": 112,
+    }
+
+    assert sum(1 for flow_map in service.flow_maps if flow_map.source_schema) == 60
+    assert sum(1 for flow_map in service.flow_maps if flow_map.target_schema) == 60
+    assert all(operation.id.startswith("mapop_") for operation in service.mapping_operations)
+    assert all(flow_map.id.startswith("map_") for flow_map in service.flow_maps)
+    assert all(binding.id.startswith("bind_") for binding in service.transformer_bindings)
+
+    set_operation = next(
+        operation for operation in service.mapping_operations if operation.source.line == 118
+    )
+    assert set_operation.operation_type == "SET"
+    assert set_operation.target_endpoint is not None
+    assert set_operation.literal is not None
+    assert set_operation.literal.declared_type == "string"
+    assert set_operation.literal.length == 1
+    assert set_operation.literal.disclosure == "REDACTED"
+    assert set_operation.literal.value is None
+
+    indexed_copy = next(
+        operation
+        for operation in service.mapping_operations
+        if operation.source_endpoint and operation.source_endpoint.path.contains_index
+    )
+    assert indexed_copy.source.line == 3752
+    assert indexed_copy.source_endpoint is not None
+    assert indexed_copy.source_endpoint.raw_path.startswith("/geographicAddresses[0]")
+
+    assert any(operation.operation_type == "DELETE" for operation in service.mapping_operations)
+
+    first_binding = service.transformer_bindings[0]
+    assert first_binding.direction == "INTO_TRANSFORMER"
+    assert first_binding.call_occurrence_id.startswith("call_")
+    assert first_binding.pipeline_endpoint is not None
+    assert first_binding.transformer_endpoint is not None
+
+
+def test_raw_xml_mapping_counts_are_independently_verified() -> None:
+    tags = {
+        "MAP",
+        "MAPCOPY",
+        "MAPSET",
+        "MAPDELETE",
+        "MAPSOURCE",
+        "MAPTARGET",
+        "DATA",
+        "MAPINVOKE",
+    }
+    parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+    counts: Counter[str] = Counter()
+    for flow_path in sorted(_samples().rglob("flow.xml")):
+        root = etree.parse(str(flow_path), parser).getroot()
+        for element in root.iter():
+            if isinstance(element.tag, str) and element.tag in tags:
+                counts[element.tag] += 1
+
+    assert counts == {
+        "DATA": 93,
+        "MAP": 265,
+        "MAPCOPY": 297,
+        "MAPDELETE": 178,
+        "MAPINVOKE": 40,
+        "MAPSET": 93,
+        "MAPSOURCE": 150,
+        "MAPTARGET": 150,
+    }
+
+
+def test_mapping_operation_ordering_fields_are_unambiguous() -> None:
+    service = _service(OA_FULL_NAME)
+    operations_by_id = {operation.id: operation for operation in service.mapping_operations}
+    traversal_orders = [
+        operation.document_traversal_order for operation in service.mapping_operations
+    ]
+
+    assert all(order is not None for order in traversal_orders)
+    assert len(set(traversal_orders)) == len(traversal_orders)
+    for flow_map in service.flow_maps:
+        direct_orders = [
+            operations_by_id[operation_id].map_operation_order
+            for operation_id in flow_map.operation_ids
+        ]
+        assert direct_orders == list(range(1, len(direct_orders) + 1))
+
+    earlier_nested = next(
+        operation for operation in service.mapping_operations if operation.source.line == 5343
+    )
+    later_parent_direct = next(
+        operation for operation in service.mapping_operations if operation.source.line == 5356
+    )
+    assert earlier_nested.order > later_parent_direct.order
+    assert earlier_nested.document_traversal_order < later_parent_direct.document_traversal_order
 
 
 def test_low_dependency_target_is_retained_in_graph() -> None:
@@ -181,25 +310,34 @@ def test_low_dependency_target_is_retained_in_graph() -> None:
     assert 'occurrences="' in dot
 
 
-def test_deferred_map_findings_are_explicit_without_generic_map_or_exit_findings() -> None:
+def test_parsed_map_and_exit_constructs_do_not_emit_deferred_findings() -> None:
     service = _service(OA_FULL_NAME)
+    finding_codes = {finding.code for finding in service.findings}
     messages = {finding.message for finding in service.findings}
 
-    assert {finding.code for finding in service.findings} == {"MAP_OPERATION_DEFERRED"}
-    assert any("MAPCOPY" in message for message in messages)
+    assert "MAP_OPERATION_DEFERRED" not in finding_codes
+    assert "UNSUPPORTED_FLOW_ELEMENT" not in finding_codes
     assert not any("FLOW element MAP is observed" in message for message in messages)
     assert not any("FLOW element EXIT is observed" in message for message in messages)
 
 
-def test_markdown_separates_service_and_transformer_calls() -> None:
+def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     markdown = render_service_markdown(_service(OA_FULL_NAME))
 
     assert "## FLOW Overview" in markdown
+    assert "## Mapping Overview" in markdown
+    assert "## Mapping Copies" in markdown
+    assert "## Mapping Sets" in markdown
+    assert "## Transformer Bindings" in markdown
+    assert "Transformer input bindings | 112" in markdown
+    assert "Transformer output bindings | 56" in markdown
     assert "## Normal Service Dependencies" in markdown
     assert "## Transformer Dependencies" in markdown
     assert "## Call Occurrences" in markdown
     assert "## Transformer Call Occurrences" in markdown
-    assert "MAP data-flow semantics" in markdown
+    assert "<redacted:literal>" in markdown
+    assert "`OK`" not in markdown
+    assert "M2b extracts observed MAP copy" in markdown
 
 
 def test_deterministic_analysis_json_markdown_and_dot() -> None:
@@ -222,6 +360,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
+    assert "analysis.v4" in payload
 
     data = json.loads(payload)
     source_paths = []
