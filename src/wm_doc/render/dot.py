@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from wm_doc.ir import AnalysisResult
+from wm_doc.ir import AnalysisResult, DocumentDependency
 
 
 def render_dependency_dot(analysis: AnalysisResult) -> str:
@@ -50,6 +50,50 @@ def write_dependency_dot(output_dir: Path, analysis: AnalysisResult) -> Path:
     path = graph_dir / "dependencies.dot"
     path.write_text(render_dependency_dot(analysis), encoding="utf-8")
     return path
+
+
+def render_document_dot(analysis: AnalysisResult) -> str:
+    local_documents = {document.identity.full_name for document in analysis.document_types}
+    targets = {dependency.target_document for dependency in analysis.document_dependencies}
+    sources = {dependency.source_document for dependency in analysis.document_dependencies}
+    nodes = sorted(local_documents | targets | sources, key=str.casefold)
+    lines = ["digraph documents {", "  rankdir=LR;"]
+    for node in nodes:
+        attrs = [f'label="{_escape(node)}"']
+        if node in local_documents:
+            attrs.append('kind="document_type"')
+        else:
+            attrs.append('kind="unresolved_document"')
+        lines.append(f"  {_node_id(node)} [{', '.join(attrs)}];")
+    for dependency in sorted(analysis.document_dependencies, key=_document_dependency_key):
+        attrs = [
+            f'label="{dependency.dependency_kind.value}"',
+            f'kind="{dependency.dependency_kind.value}"',
+            f'occurrences="{dependency.occurrence_count}"',
+            f'resolved="{str(dependency.resolved).lower()}"',
+        ]
+        lines.append(
+            f"  {_node_id(dependency.source_document)} -> {_node_id(dependency.target_document)} "
+            f"[{', '.join(attrs)}];"
+        )
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def write_document_dot(output_dir: Path, analysis: AnalysisResult) -> Path:
+    graph_dir = output_dir / "graphs"
+    graph_dir.mkdir(parents=True, exist_ok=True)
+    path = graph_dir / "documents.dot"
+    path.write_text(render_document_dot(analysis), encoding="utf-8")
+    return path
+
+
+def _document_dependency_key(dependency: DocumentDependency) -> tuple[str, str, str]:
+    return (
+        dependency.source_document.casefold(),
+        dependency.target_document.casefold(),
+        dependency.id,
+    )
 
 
 def _node_id(value: str) -> str:

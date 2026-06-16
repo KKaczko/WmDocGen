@@ -22,8 +22,18 @@ from wm_doc.ir import (
     CallType,
     ClassificationResult,
     DependencyKind,
+    DocumentDependency,
+    DocumentDependencyKind,
+    DocumentDimensionKind,
+    DocumentField,
+    DocumentFieldType,
+    DocumentIdentity,
+    DocumentReferenceOccurrence,
+    DocumentReferenceOwnerKind,
+    DocumentType,
     ExtractionPolicySnapshot,
     FactBasis,
+    FindingSeverity,
     FindingStatus,
     FlowMap,
     FlowNode,
@@ -38,6 +48,8 @@ from wm_doc.ir import (
     MapSchemaMetadata,
     PackageInventory,
     PipelinePath,
+    ServiceDocumentDependency,
+    ServiceDocumentUsageRole,
     ServiceIdentity,
     ServiceSignature,
     ServiceSummary,
@@ -56,6 +68,7 @@ from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
 
 ANALYZABLE_FLOW_ARTIFACTS = {"flow_service", "flow_service_metadata_without_flow"}
 SERVICE_INDEX_ARTIFACTS = {"flow_service", "java_service"}
+DOCUMENT_ARTIFACTS = {"document_type"}
 CALL_TAGS = {"INVOKE": CallType.INVOKE, "MAPINVOKE": CallType.MAPINVOKE}
 FLOW_NODE_TAGS = {
     "FLOW": FlowNodeType.FLOW,
@@ -75,7 +88,9 @@ UNRESOLVED_SOURCE_SAMPLE_LIMIT = 3
 SOURCE_SAMPLE_LIMIT = 3
 AGGREGATABLE_FINDINGS = {
     "AMBIGUOUS_TRANSFORMER_DIRECTION",
+    "CYCLIC_DOCUMENT_REFERENCE",
     "ID_COLLISION_RESOLVED",
+    "MALFORMED_NESTED_RECORD",
     "MISSING_LITERAL_DATA",
     "ORPHAN_MAPSOURCE",
     "ORPHAN_MAPTARGET",
@@ -84,6 +99,8 @@ AGGREGATABLE_FINDINGS = {
     "UNKNOWN_MAPPING_ATTRIBUTE",
     "UNKNOWN_MAPPING_CHILD",
     "UNSUPPORTED_LITERAL_ENCODING",
+    "UNSUPPORTED_DOCUMENT_METADATA",
+    "UNRESOLVED_DOCUMENT_REFERENCE",
 }
 SECRET_TERMS = (
     "password",
@@ -114,6 +131,49 @@ MAPPING_TECHNICAL_ATTRIBUTES: dict[str, set[str]] = {
     "MAPDELETE": {"FIELD"},
 }
 MAPPING_FREE_TEXT_ATTRIBUTES = {"NAME"}
+DOCUMENT_TECHNICAL_METADATA = {
+    "field_content_type",
+    "field_options_count",
+    "field_password",
+    "field_usereditable",
+    "field_largerEditor",
+    "form_qualified",
+    "is_global",
+    "is_public",
+    "is_soap_array_encoding_used",
+    "modifiable",
+    "nillable",
+    "node_subtype",
+    "node_type",
+    "rec_closed",
+}
+DOCUMENT_FREE_TEXT_METADATA = {"node_comment"}
+DOCUMENT_ROOT_KNOWN_METADATA = {
+    "field_dim",
+    "field_type",
+    "node_comment",
+    "node_hints",
+    "node_nsName",
+    "node_pkg",
+    "rec_fields",
+    "wrapper_type",
+    *DOCUMENT_TECHNICAL_METADATA,
+    *DOCUMENT_FREE_TEXT_METADATA,
+}
+DOCUMENT_FIELD_KNOWN_METADATA = {
+    "field_dim",
+    "field_name",
+    "field_opt",
+    "field_options",
+    "field_type",
+    "node_comment",
+    "node_hints",
+    "rec_fields",
+    "rec_ref",
+    "wrapper_type",
+    *DOCUMENT_TECHNICAL_METADATA,
+    *DOCUMENT_FREE_TEXT_METADATA,
+}
 FREE_TEXT_ATTRIBUTE_NAMES = {
     "COMMENT",
     "DESCRIPTION",
@@ -168,14 +228,28 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
     id_factory = StableIdFactory()
     service_classifications: dict[str, ClassificationResult] = {}
     package_services: dict[str, list[FlowService]] = {}
+    package_documents: dict[str, list[DocumentType]] = {}
     pending_services: list[FlowService] = []
+    all_document_reference_occurrences: list[DocumentReferenceOccurrence] = []
+    service_reference_inputs: list[tuple[str, ArtifactCandidate]] = []
     all_findings: list[AnalysisFinding] = list(inventory.findings)
 
     package_shells: list[AnalyzedPackage] = []
     for package in inventory.packages:
         package_findings = sorted(package.findings, key=_finding_key)
         services: list[FlowService] = []
+        documents: list[DocumentType] = []
         for artifact in package.artifacts:
+            if artifact.probable_type in SERVICE_INDEX_ARTIFACTS:
+                service_reference_inputs.append((package.name, artifact))
+            if artifact.probable_type in DOCUMENT_ARTIFACTS:
+                document, references = _parse_document_type(
+                    scan_root, package.name, artifact, config, extraction_policy, id_factory
+                )
+                documents.append(document)
+                all_document_reference_occurrences.extend(references)
+                all_findings.extend(document.findings)
+                continue
             if artifact.probable_type not in ANALYZABLE_FLOW_ARTIFACTS:
                 continue
             service = _parse_flow_service(
@@ -185,12 +259,14 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
             pending_services.append(service)
             service_classifications[service.identity.full_name] = service.classification
         package_services[package.name] = services
+        package_documents[package.name] = documents
         all_findings.extend(package_findings)
         package_shells.append(
             AnalyzedPackage(
                 name=package.name,
                 root=package.root,
                 services=[],
+                document_types=[],
                 service_index=sorted(
                     service_index.values(), key=lambda item: item.identity.full_name.casefold()
                 ),
@@ -230,16 +306,48 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
         all_transformer_bindings.extend(service.transformer_bindings)
         resolved_services[service.identity.package].append(service)
 
+    all_document_types = sorted(
+        [document for documents in package_documents.values() for document in documents],
+        key=_document_type_key,
+    )
+    document_index = {document.identity.full_name: document for document in all_document_types}
+    all_document_reference_occurrences.extend(
+        _parse_service_document_reference_occurrences(
+            scan_root, service_reference_inputs, id_factory
+        )
+    )
+    all_document_reference_occurrences = _resolve_document_references(
+        all_document_reference_occurrences, document_index, all_findings
+    )
+    all_document_dependencies = _aggregate_document_dependencies(
+        all_document_reference_occurrences, document_index, id_factory
+    )
+    all_service_document_dependencies = _aggregate_service_document_dependencies(
+        all_document_reference_occurrences, id_factory
+    )
+    all_findings.extend(
+        _cycle_findings(all_document_dependencies, document_index, scan_root)
+    )
     all_findings.extend(id_factory.findings)
     final_packages: list[AnalyzedPackage] = []
     for analyzed_package in package_shells:
+        services_with_document_refs = [
+            _attach_service_document_dependencies(
+                service, all_document_reference_occurrences, all_service_document_dependencies
+            )
+            for service in resolved_services.get(analyzed_package.name, [])
+        ]
         final_packages.append(
             analyzed_package.model_copy(
                 update={
                     "services": sorted(
-                        resolved_services.get(analyzed_package.name, []),
+                        services_with_document_refs,
                         key=lambda item: item.identity.full_name.casefold(),
-                    )
+                    ),
+                    "document_types": sorted(
+                        package_documents.get(analyzed_package.name, []),
+                        key=_document_type_key,
+                    ),
                 }
             )
         )
@@ -249,6 +357,13 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
     all_flow_maps = sorted(all_flow_maps, key=_flow_map_key)
     all_mapping_operations = sorted(all_mapping_operations, key=_mapping_operation_key)
     all_transformer_bindings = sorted(all_transformer_bindings, key=_transformer_binding_key)
+    all_document_reference_occurrences = sorted(
+        all_document_reference_occurrences, key=_document_reference_key
+    )
+    all_document_dependencies = sorted(all_document_dependencies, key=_document_dependency_key)
+    all_service_document_dependencies = sorted(
+        all_service_document_dependencies, key=_service_document_dependency_key
+    )
     return AnalysisResult(
         tool_version=__version__,
         packages=sorted(final_packages, key=lambda item: item.name.casefold()),
@@ -259,6 +374,9 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
             all_mapping_operations,
             all_transformer_bindings,
             final_packages,
+            all_document_reference_occurrences,
+            all_document_dependencies,
+            all_service_document_dependencies,
         ),
         extraction_policy=extraction_policy,
         call_occurrences=all_calls,
@@ -266,6 +384,10 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
         flow_maps=all_flow_maps,
         mapping_operations=all_mapping_operations,
         transformer_bindings=all_transformer_bindings,
+        document_types=all_document_types,
+        document_reference_occurrences=all_document_reference_occurrences,
+        document_dependencies=all_document_dependencies,
+        service_document_dependencies=all_service_document_dependencies,
         findings=_aggregate_findings(all_findings),
     )
 
@@ -293,6 +415,429 @@ def _build_service_index(packages: Iterable[PackageInventory]) -> dict[str, Serv
                 identity=identity, service_type=service_type, source=artifact.source
             )
     return dict(sorted(index.items(), key=lambda item: item[0].casefold()))
+
+
+def _parse_document_type(
+    scan_root: Path,
+    package_name: str,
+    artifact: ArtifactCandidate,
+    config: AppConfig,
+    extraction_policy: ExtractionPolicySnapshot,
+    id_factory: StableIdFactory,
+) -> tuple[DocumentType, list[DocumentReferenceOccurrence]]:
+    del extraction_policy
+    node_path = _artifact_node_path(scan_root, artifact)
+    findings: list[AnalysisFinding] = []
+    references: list[DocumentReferenceOccurrence] = []
+    fallback_identity = _document_identity_from_artifact(package_name, artifact)
+    source = source_for_node(node_path, scan_root, "document_type")
+    identity = DocumentIdentity(
+        package=package_name,
+        namespace=fallback_identity.namespace,
+        name=fallback_identity.name,
+        full_name=fallback_identity.full_name,
+        basis=FactBasis.RECONSTRUCTED,
+        source=source,
+    )
+    description: TextValue | None = None
+    fields: list[DocumentField] = []
+
+    try:
+        root = parse_xml_file(node_path)
+        record = _record_child(root, "record")
+        if record is None or _value_child(record, "node_type") != "record":
+            findings.append(
+                AnalysisFinding(
+                    status=FindingStatus.MALFORMED,
+                    code="DOCUMENT_TYPE_MALFORMED",
+                    message="Document Type metadata is missing record/node_type=record.",
+                    source=source,
+                )
+            )
+        else:
+            source = _element_source(node_path, scan_root, record, "document_type")
+            declared_full_name = _value_child(record, "node_nsName")
+            declared_package = _value_child(record, "node_pkg")
+            if declared_full_name:
+                namespace, name = _split_full_name(declared_full_name)
+                identity = DocumentIdentity(
+                    package=package_name,
+                    namespace=namespace,
+                    name=name,
+                    full_name=declared_full_name,
+                    basis=FactBasis.CONFIRMED,
+                    source=source,
+                    declared_package=declared_package,
+                )
+                if declared_full_name != fallback_identity.full_name:
+                    findings.append(
+                        AnalysisFinding(
+                            status=FindingStatus.PARTIALLY_SUPPORTED,
+                            code="DOCUMENT_IDENTITY_MISMATCH",
+                            message=(
+                                "Document node_nsName differs from namespace path identity "
+                                f"{fallback_identity.full_name!r}."
+                            ),
+                            source=source,
+                        )
+                    )
+            description = _apply_free_text_policy(
+                _blank_to_none(_value_child(record, "node_comment")),
+                "document_description",
+                source,
+                config,
+                "node_comment",
+            )
+            findings.extend(
+                _unsupported_document_metadata_findings(
+                    record,
+                    node_path,
+                    scan_root,
+                    "document",
+                    identity.full_name,
+                    config,
+                    DOCUMENT_ROOT_KNOWN_METADATA,
+                )
+            )
+            document_id = id_factory.make(
+                "doc", source, package_name, "document", identity.full_name
+            )
+            rec_fields = _array_child(record, "rec_fields")
+            if rec_fields is not None:
+                fields, references = _parse_document_fields(
+                    fields_parent=rec_fields,
+                    scan_root=scan_root,
+                    node_path=node_path,
+                    document_id=document_id,
+                    document_full_name=identity.full_name,
+                    package_name=package_name,
+                    config=config,
+                    id_factory=id_factory,
+                    findings=findings,
+                    parent_structural_path="",
+                    parent_field_path="",
+                )
+            return (
+                DocumentType(
+                    id=document_id,
+                    identity=identity,
+                    description=description,
+                    fields=fields,
+                    source=source,
+                    findings=_aggregate_findings(findings),
+                ),
+                references,
+            )
+    except (XmlParseError, XmlSecurityError) as exc:
+        findings.append(_xml_finding(exc, node_path, scan_root, "document_type"))
+
+    document_id = id_factory.make("doc", source, package_name, "document", identity.full_name)
+    return (
+        DocumentType(
+            id=document_id,
+            identity=identity,
+            description=description,
+            fields=fields,
+            source=source,
+            confidence=InterpretationConfidence.RAW_ONLY,
+            findings=_aggregate_findings(findings),
+        ),
+        references,
+    )
+
+
+def _parse_document_fields(
+    *,
+    fields_parent: etree._Element,
+    scan_root: Path,
+    node_path: Path,
+    document_id: str,
+    document_full_name: str,
+    package_name: str,
+    config: AppConfig,
+    id_factory: StableIdFactory,
+    findings: list[AnalysisFinding],
+    parent_structural_path: str,
+    parent_field_path: str,
+) -> tuple[list[DocumentField], list[DocumentReferenceOccurrence]]:
+    fields: list[DocumentField] = []
+    references: list[DocumentReferenceOccurrence] = []
+    seen_names: set[str] = set()
+    for child in fields_parent:
+        if isinstance(child.tag, str) and child.tag != "record":
+            source_node = parent_field_path or parent_structural_path or "document"
+            findings.append(
+                _malformed_nested_record_finding(
+                    node_path,
+                    scan_root,
+                    child,
+                    document_full_name,
+                    source_node,
+                    "rec_fields contains a non-record child element.",
+                )
+            )
+    for order, field_record in enumerate(_direct_children(fields_parent, "record"), start=1):
+        field, field_refs = _parse_document_field(
+            field_record=field_record,
+            scan_root=scan_root,
+            node_path=node_path,
+            document_id=document_id,
+            document_full_name=document_full_name,
+            package_name=package_name,
+            config=config,
+            id_factory=id_factory,
+            findings=findings,
+            declared_order=order,
+            parent_structural_path=parent_structural_path,
+            parent_field_path=parent_field_path,
+        )
+        normalized = field.name.casefold()
+        if normalized in seen_names:
+            findings.append(
+                AnalysisFinding(
+                    status=FindingStatus.PARTIALLY_SUPPORTED,
+                    code="DUPLICATE_FIELD_NAME",
+                    message=f"Duplicate field name {field.name!r} appears within one record.",
+                    source=field.source,
+                )
+            )
+        seen_names.add(normalized)
+        fields.append(field)
+        references.extend(field_refs)
+    return fields, references
+
+
+def _parse_document_field(
+    *,
+    field_record: etree._Element,
+    scan_root: Path,
+    node_path: Path,
+    document_id: str,
+    document_full_name: str,
+    package_name: str,
+    config: AppConfig,
+    id_factory: StableIdFactory,
+    findings: list[AnalysisFinding],
+    declared_order: int,
+    parent_structural_path: str,
+    parent_field_path: str,
+) -> tuple[DocumentField, list[DocumentReferenceOccurrence]]:
+    source = _element_source(node_path, scan_root, field_record, "document_field")
+    name = _value_child(field_record, "field_name")
+    if name is None or name == "":
+        name = "<unnamed>"
+        findings.append(
+            AnalysisFinding(
+                status=FindingStatus.MALFORMED,
+                code="MISSING_FIELD_NAME",
+                message="Document field is missing field_name.",
+                source=source,
+            )
+        )
+    structural_path = f"{parent_structural_path}/field[{declared_order}]".strip("/")
+    field_path = f"{parent_field_path}/{name}".strip("/")
+    field_id = id_factory.make(
+        "docfield", source, package_name, document_full_name, "field", structural_path
+    )
+    raw_field_type = _value_child(field_record, "field_type")
+    field_type = _document_field_type(raw_field_type, source, findings)
+    raw_dimension = _value_child(field_record, "field_dim")
+    dimension = _document_dimension(raw_dimension, source, findings)
+
+    child_fields: list[DocumentField] = []
+    references: list[DocumentReferenceOccurrence] = []
+    rec_fields_children = _named_children(field_record, "rec_fields")
+    child_records = _array_child(field_record, "rec_fields")
+    if field_type == DocumentFieldType.RECORD:
+        for child in rec_fields_children:
+            if child.tag != "array":
+                findings.append(
+                    _malformed_nested_record_finding(
+                        node_path,
+                        scan_root,
+                        child,
+                        document_full_name,
+                        field_path,
+                        "rec_fields metadata is not an array container.",
+                    )
+                )
+    if child_records is not None:
+        child_fields, references = _parse_document_fields(
+            fields_parent=child_records,
+            scan_root=scan_root,
+            node_path=node_path,
+            document_id=document_id,
+            document_full_name=document_full_name,
+            package_name=package_name,
+            config=config,
+            id_factory=id_factory,
+            findings=findings,
+            parent_structural_path=structural_path,
+            parent_field_path=field_path,
+        )
+
+    declared_target = _value_child(field_record, "rec_ref")
+    if field_type == DocumentFieldType.DOCUMENT_REFERENCE:
+        if not declared_target:
+            findings.append(
+                AnalysisFinding(
+                    status=FindingStatus.UNRESOLVED,
+                    code="MISSING_DOCUMENT_REFERENCE_TARGET",
+                    message="Document reference field is missing rec_ref.",
+                    source=source,
+                )
+            )
+        else:
+            references.append(
+                DocumentReferenceOccurrence(
+                    id=id_factory.make(
+                        "docref",
+                        source,
+                        DocumentReferenceOwnerKind.DOCUMENT.value,
+                        document_full_name,
+                        structural_path,
+                        declared_target,
+                    ),
+                    owner_kind=DocumentReferenceOwnerKind.DOCUMENT,
+                    owner_name=document_full_name,
+                    owner_id=document_id,
+                    source_field_id=field_id,
+                    source_field_path=field_path,
+                    declared_target=declared_target,
+                    resolved=False,
+                    dimension=dimension,
+                    raw_dimension=raw_dimension,
+                    dependency_kind=DocumentDependencyKind.REFERENCES_DOCUMENT,
+                    source=source,
+                )
+            )
+
+    return (
+        DocumentField(
+            id=field_id,
+            name=name,
+            raw_field_type=raw_field_type,
+            field_type=field_type,
+            raw_dimension=raw_dimension,
+            dimension=dimension,
+            optional=_parse_optional(_value_child(field_record, "field_opt")),
+            wrapper_type=_value_child(field_record, "wrapper_type"),
+            document_reference=declared_target,
+            declared_order=declared_order,
+            structural_path=structural_path,
+            field_path=field_path,
+            source=source.model_copy(update={"source_node": field_path}),
+            technical_metadata=_document_technical_metadata(field_record),
+            text_metadata=_document_text_metadata(field_record, source, config),
+            unknown_metadata=_document_unknown_metadata(
+                field_record, node_path, scan_root, field_path, config, findings
+            ),
+            children=child_fields,
+        ),
+        references,
+    )
+
+
+def _parse_service_document_reference_occurrences(
+    scan_root: Path,
+    service_inputs: list[tuple[str, ArtifactCandidate]],
+    id_factory: StableIdFactory,
+) -> list[DocumentReferenceOccurrence]:
+    occurrences: list[DocumentReferenceOccurrence] = []
+    for package_name, artifact in service_inputs:
+        del package_name
+        if artifact.identity is None or artifact.identity.full_name is None:
+            continue
+        node_path = _artifact_node_path(scan_root, artifact)
+        try:
+            root = parse_xml_file(node_path)
+        except (XmlParseError, XmlSecurityError):
+            continue
+        svc_sig = _record_child(root, "svc_sig")
+        service_name = artifact.identity.full_name
+        for direction, role in (
+            ("sig_in", ServiceDocumentUsageRole.INPUT),
+            ("sig_out", ServiceDocumentUsageRole.OUTPUT),
+        ):
+            direction_record = _record_child(svc_sig, direction)
+            rec_fields = _array_child(direction_record, "rec_fields")
+            if rec_fields is None:
+                continue
+            occurrences.extend(
+                _service_signature_document_refs(
+                    rec_fields,
+                    scan_root,
+                    node_path,
+                    service_name,
+                    role,
+                    id_factory,
+                    parent_structural_path=direction,
+                    parent_field_path="",
+                )
+            )
+    return occurrences
+
+
+def _service_signature_document_refs(
+    fields_parent: etree._Element,
+    scan_root: Path,
+    node_path: Path,
+    service_name: str,
+    role: ServiceDocumentUsageRole,
+    id_factory: StableIdFactory,
+    *,
+    parent_structural_path: str,
+    parent_field_path: str,
+) -> list[DocumentReferenceOccurrence]:
+    occurrences: list[DocumentReferenceOccurrence] = []
+    for order, field_record in enumerate(_direct_children(fields_parent, "record"), start=1):
+        name = _value_child(field_record, "field_name") or "<unnamed>"
+        structural_path = f"{parent_structural_path}/field[{order}]"
+        field_path = f"{parent_field_path}/{name}".strip("/")
+        raw_type = _value_child(field_record, "field_type")
+        raw_dimension = _value_child(field_record, "field_dim")
+        declared_target = _value_child(field_record, "rec_ref")
+        source = _element_source(node_path, scan_root, field_record, "signature_field").model_copy(
+            update={"source_node": structural_path}
+        )
+        if raw_type == "recref" and declared_target:
+            occurrences.append(
+                DocumentReferenceOccurrence(
+                    id=id_factory.make(
+                        "docref",
+                        source,
+                        DocumentReferenceOwnerKind.SERVICE_SIGNATURE.value,
+                        service_name,
+                        structural_path,
+                        declared_target,
+                    ),
+                    owner_kind=DocumentReferenceOwnerKind.SERVICE_SIGNATURE,
+                    owner_name=service_name,
+                    source_field_path=field_path,
+                    declared_target=declared_target,
+                    resolved=False,
+                    dimension=_document_dimension(raw_dimension, source, []),
+                    raw_dimension=raw_dimension,
+                    dependency_kind=DocumentDependencyKind.USES_DOCUMENT,
+                    usage_role=role,
+                    source=source,
+                )
+            )
+        child_records = _array_child(field_record, "rec_fields")
+        if child_records is not None:
+            occurrences.extend(
+                _service_signature_document_refs(
+                    child_records,
+                    scan_root,
+                    node_path,
+                    service_name,
+                    role,
+                    id_factory,
+                    parent_structural_path=structural_path,
+                    parent_field_path=field_path,
+                )
+            )
+    return occurrences
 
 
 def _parse_flow_service(
@@ -1212,6 +1757,426 @@ def _parse_mapset_literal(
     )
 
 
+def _artifact_node_path(scan_root: Path, artifact: ArtifactCandidate) -> Path:
+    for file in artifact.files:
+        if Path(file.path).name == "node.ndf":
+            return scan_root / file.path
+    return scan_root / artifact.relative_path / "node.ndf"
+
+
+def source_for_node(path: Path, scan_root: Path, artifact_type: str) -> SourceReference:
+    return SourceReference(path=stable_relative_path(path, scan_root), artifact_type=artifact_type)
+
+
+def _document_identity_from_artifact(
+    package_name: str, artifact: ArtifactCandidate
+) -> DocumentIdentity:
+    namespace = artifact.identity.namespace if artifact.identity else ""
+    name = artifact.identity.name if artifact.identity else ""
+    full_name = artifact.identity.full_name if artifact.identity else f"{namespace}:{name}"
+    return DocumentIdentity(
+        package=package_name,
+        namespace=namespace or "",
+        name=name or "",
+        full_name=full_name or "",
+        basis=artifact.identity.basis if artifact.identity else FactBasis.RECONSTRUCTED,
+        source=artifact.source,
+    )
+
+
+def _split_full_name(full_name: str) -> tuple[str, str]:
+    if ":" not in full_name:
+        return "", full_name
+    namespace, name = full_name.rsplit(":", 1)
+    return namespace, name
+
+
+def _document_field_type(
+    raw_field_type: str | None, source: SourceReference, findings: list[AnalysisFinding]
+) -> DocumentFieldType:
+    if raw_field_type == "string":
+        return DocumentFieldType.STRING
+    if raw_field_type == "object":
+        return DocumentFieldType.OBJECT
+    if raw_field_type == "record":
+        return DocumentFieldType.RECORD
+    if raw_field_type == "recref":
+        return DocumentFieldType.DOCUMENT_REFERENCE
+    findings.append(
+        AnalysisFinding(
+            status=FindingStatus.PARTIALLY_SUPPORTED,
+            code="UNKNOWN_FIELD_TYPE",
+            message=f"Document field type {raw_field_type!r} is not recognized.",
+            source=source,
+        )
+    )
+    return DocumentFieldType.UNKNOWN
+
+
+def _document_dimension(
+    raw_dimension: str | None, source: SourceReference, findings: list[AnalysisFinding]
+) -> DocumentDimensionKind:
+    if raw_dimension == "0":
+        return DocumentDimensionKind.SCALAR
+    if raw_dimension == "1":
+        return DocumentDimensionKind.LIST
+    if raw_dimension is None:
+        findings.append(
+            AnalysisFinding(
+                status=FindingStatus.PARTIALLY_SUPPORTED,
+                code="INVALID_DIMENSION",
+                message="Document field is missing field_dim.",
+                source=source,
+            )
+        )
+        return DocumentDimensionKind.UNKNOWN
+    if raw_dimension.isdecimal() and int(raw_dimension) > 1:
+        findings.append(
+            AnalysisFinding(
+                status=FindingStatus.PARTIALLY_SUPPORTED,
+                code="UNSUPPORTED_DIMENSION",
+                message=f"Document field dimension {raw_dimension!r} is preserved as raw metadata.",
+                source=source,
+            )
+        )
+        return DocumentDimensionKind.MULTIDIMENSIONAL
+    findings.append(
+        AnalysisFinding(
+            status=FindingStatus.PARTIALLY_SUPPORTED,
+            code="INVALID_DIMENSION",
+            message=f"Document field dimension {raw_dimension!r} is invalid.",
+            source=source,
+        )
+    )
+    return DocumentDimensionKind.UNKNOWN
+
+
+def _document_technical_metadata(field_record: etree._Element) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for name in sorted(DOCUMENT_TECHNICAL_METADATA):
+        if name == "field_options_count":
+            field_options = _array_child(field_record, "field_options")
+            if field_options is not None:
+                metadata[name] = str(len(_direct_children(field_options, "value")))
+            continue
+        value = _value_child(field_record, name)
+        if value is not None:
+            metadata[name] = value
+    node_hints = _record_child(field_record, "node_hints")
+    if node_hints is not None:
+        for name in ("field_usereditable", "field_largerEditor", "field_password"):
+            value = _value_child(node_hints, name)
+            if value is not None:
+                metadata[name] = value
+    return dict(sorted(metadata.items()))
+
+
+def _document_text_metadata(
+    field_record: etree._Element, source: SourceReference, config: AppConfig
+) -> dict[str, TextValue]:
+    metadata: dict[str, TextValue] = {}
+    for name in sorted(DOCUMENT_FREE_TEXT_METADATA):
+        text = _apply_free_text_policy(
+            _blank_to_none(_value_child(field_record, name)),
+            f"document_field.{name}",
+            source,
+            config,
+            name,
+        )
+        if text is not None:
+            metadata[name] = text
+    return metadata
+
+
+def _document_unknown_metadata(
+    field_record: etree._Element,
+    node_path: Path,
+    scan_root: Path,
+    field_path: str,
+    config: AppConfig,
+    findings: list[AnalysisFinding],
+) -> list[AttributeValue]:
+    unknown: list[AttributeValue] = []
+    for child in field_record:
+        if not isinstance(child.tag, str):
+            continue
+        name = child.get("name")
+        if not name or name in DOCUMENT_FIELD_KNOWN_METADATA:
+            continue
+        source = _element_source(node_path, scan_root, child, "document_field").model_copy(
+            update={"source_node": field_path}
+        )
+        if child.tag == "value":
+            attribute = _unknown_attribute(name, child.text or "", source, config)
+        else:
+            attribute = _unknown_attribute(name, f"<{child.tag}>", source, config)
+        unknown.append(attribute)
+        findings.append(_unsupported_document_metadata_finding(name, "field", source, attribute))
+    return sorted(unknown, key=lambda item: item.name.casefold())
+
+
+def _unsupported_document_metadata_findings(
+    element: etree._Element,
+    node_path: Path,
+    scan_root: Path,
+    owner_type: str,
+    owner_path: str,
+    config: AppConfig,
+    known_names: set[str],
+) -> list[AnalysisFinding]:
+    findings: list[AnalysisFinding] = []
+    for child in element:
+        if not isinstance(child.tag, str):
+            continue
+        name = child.get("name")
+        if not name or name in known_names:
+            continue
+        source = _element_source(node_path, scan_root, child, f"document_{owner_type}").model_copy(
+            update={"source_node": owner_path}
+        )
+        value = (child.text or "") if child.tag == "value" else f"<{child.tag}>"
+        attribute = _unknown_attribute(name, value, source, config)
+        findings.append(_unsupported_document_metadata_finding(name, owner_type, source, attribute))
+    return findings
+
+
+def _unsupported_document_metadata_finding(
+    name: str, owner_type: str, source: SourceReference, attribute: AttributeValue
+) -> AnalysisFinding:
+    disclosure = (
+        attribute.text.disclosure.value
+        if attribute.text is not None
+        else TextDisclosure.OMITTED.value
+    )
+    return AnalysisFinding(
+        status=FindingStatus.PARTIALLY_SUPPORTED,
+        severity=FindingSeverity.INFO,
+        confidence=InterpretationConfidence.PARTIALLY_INTERPRETED.value,
+        code="UNSUPPORTED_DOCUMENT_METADATA",
+        message=(
+            f"Unsupported document metadata {name!r} on {owner_type} metadata "
+            "was preserved without semantic interpretation "
+            f"(value disclosure: {disclosure})."
+        ),
+        source=source,
+    )
+
+
+def _malformed_nested_record_finding(
+    node_path: Path,
+    scan_root: Path,
+    element: etree._Element,
+    document_full_name: str,
+    field_path: str,
+    reason: str,
+) -> AnalysisFinding:
+    return AnalysisFinding(
+        status=FindingStatus.PARTIALLY_SUPPORTED,
+        severity=FindingSeverity.WARNING,
+        confidence=InterpretationConfidence.PARTIALLY_INTERPRETED.value,
+        code="MALFORMED_NESTED_RECORD",
+        message=(
+            f"Malformed nested record metadata in document {document_full_name!r} "
+            f"at field {field_path!r}: {reason}"
+        ),
+        source=_element_source(node_path, scan_root, element, "document_field").model_copy(
+            update={"source_node": field_path}
+        ),
+    )
+
+
+def _resolve_document_references(
+    references: list[DocumentReferenceOccurrence],
+    document_index: dict[str, DocumentType],
+    findings: list[AnalysisFinding],
+) -> list[DocumentReferenceOccurrence]:
+    resolved: list[DocumentReferenceOccurrence] = []
+    for reference in references:
+        is_resolved = reference.declared_target in document_index
+        if not is_resolved:
+            findings.append(
+                AnalysisFinding(
+                    status=FindingStatus.UNRESOLVED,
+                    code="UNRESOLVED_DOCUMENT_REFERENCE",
+                    message=(
+                        "Document reference target "
+                        f"{reference.declared_target!r} is not present in the analyzed snapshot."
+                    ),
+                    source=reference.source,
+                )
+            )
+        resolved.append(
+            reference.model_copy(
+                update={
+                    "resolved": is_resolved,
+                    "canonical_target": reference.declared_target if is_resolved else None,
+                }
+            )
+        )
+    return resolved
+
+
+def _aggregate_document_dependencies(
+    references: list[DocumentReferenceOccurrence],
+    document_index: dict[str, DocumentType],
+    id_factory: StableIdFactory,
+) -> list[DocumentDependency]:
+    del document_index
+    grouped: dict[tuple[str, str, DocumentDependencyKind], list[DocumentReferenceOccurrence]] = (
+        defaultdict(list)
+    )
+    for reference in references:
+        if reference.owner_kind != DocumentReferenceOwnerKind.DOCUMENT:
+            continue
+        target = reference.canonical_target or reference.declared_target
+        grouped[(reference.owner_name, target, reference.dependency_kind)].append(reference)
+
+    dependencies: list[DocumentDependency] = []
+    for (source_document, target_document, kind), occurrences in grouped.items():
+        ordered = sorted(occurrences, key=_document_reference_key)
+        dependencies.append(
+            DocumentDependency(
+                id=id_factory.make(
+                    "docdep",
+                    ordered[0].source,
+                    source_document,
+                    kind.value,
+                    target_document,
+                ),
+                source_document=source_document,
+                target_document=target_document,
+                dependency_kind=kind,
+                resolved=all(occurrence.resolved for occurrence in ordered),
+                occurrence_count=len(ordered),
+                occurrence_ids=[occurrence.id for occurrence in ordered],
+                source_samples=[occurrence.source for occurrence in ordered[:SOURCE_SAMPLE_LIMIT]],
+            )
+        )
+    return sorted(dependencies, key=_document_dependency_key)
+
+
+def _aggregate_service_document_dependencies(
+    references: list[DocumentReferenceOccurrence],
+    id_factory: StableIdFactory,
+) -> list[ServiceDocumentDependency]:
+    grouped: dict[tuple[str, str], list[DocumentReferenceOccurrence]] = defaultdict(list)
+    for reference in references:
+        if reference.owner_kind != DocumentReferenceOwnerKind.SERVICE_SIGNATURE:
+            continue
+        target = reference.canonical_target or reference.declared_target
+        grouped[(reference.owner_name, target)].append(reference)
+
+    dependencies: list[ServiceDocumentDependency] = []
+    for (service, target_document), occurrences in grouped.items():
+        ordered = sorted(occurrences, key=_document_reference_key)
+        roles = {occurrence.usage_role for occurrence in ordered}
+        if {ServiceDocumentUsageRole.INPUT, ServiceDocumentUsageRole.OUTPUT}.issubset(roles):
+            role = ServiceDocumentUsageRole.INPUT_OUTPUT
+        elif ServiceDocumentUsageRole.INPUT in roles:
+            role = ServiceDocumentUsageRole.INPUT
+        else:
+            role = ServiceDocumentUsageRole.OUTPUT
+        dependencies.append(
+            ServiceDocumentDependency(
+                id=id_factory.make(
+                    "svcdoc",
+                    ordered[0].source,
+                    service,
+                    DocumentDependencyKind.USES_DOCUMENT.value,
+                    target_document,
+                    role.value,
+                ),
+                service=service,
+                target_document=target_document,
+                dependency_kind=DocumentDependencyKind.USES_DOCUMENT,
+                usage_role=role,
+                resolved=all(occurrence.resolved for occurrence in ordered),
+                occurrence_count=len(ordered),
+                occurrence_ids=[occurrence.id for occurrence in ordered],
+                source_samples=[occurrence.source for occurrence in ordered[:SOURCE_SAMPLE_LIMIT]],
+            )
+        )
+    return sorted(dependencies, key=_service_document_dependency_key)
+
+
+def _attach_service_document_dependencies(
+    service: FlowService,
+    references: list[DocumentReferenceOccurrence],
+    dependencies: list[ServiceDocumentDependency],
+) -> FlowService:
+    service_references = sorted(
+        [
+            reference
+            for reference in references
+            if reference.owner_kind == DocumentReferenceOwnerKind.SERVICE_SIGNATURE
+            and reference.owner_name == service.identity.full_name
+        ],
+        key=_document_reference_key,
+    )
+    service_dependencies = sorted(
+        [
+            dependency
+            for dependency in dependencies
+            if dependency.service == service.identity.full_name
+        ],
+        key=_service_document_dependency_key,
+    )
+    return service.model_copy(
+        update={
+            "document_reference_occurrences": service_references,
+            "service_document_dependencies": service_dependencies,
+        }
+    )
+
+
+def _cycle_findings(
+    dependencies: list[DocumentDependency],
+    document_index: dict[str, DocumentType],
+    scan_root: Path,
+) -> list[AnalysisFinding]:
+    graph: dict[str, list[str]] = defaultdict(list)
+    for dependency in dependencies:
+        if dependency.resolved:
+            graph[dependency.source_document].append(dependency.target_document)
+
+    findings: list[AnalysisFinding] = []
+    visited: set[str] = set()
+    stack: list[str] = []
+    reported: set[tuple[str, ...]] = set()
+
+    def visit(node: str) -> None:
+        if node in stack:
+            cycle = tuple(stack[stack.index(node) :] + [node])
+            canonical = tuple(sorted(set(cycle)))
+            if canonical not in reported:
+                reported.add(canonical)
+                document = document_index.get(node)
+                source = document.source if document is not None else SourceReference(path=".")
+                findings.append(
+                    AnalysisFinding(
+                        status=FindingStatus.PARTIALLY_SUPPORTED,
+                        code="CYCLIC_DOCUMENT_REFERENCE",
+                        message=(
+                            "Document reference cycle was detected and not expanded "
+                            "recursively."
+                        ),
+                        source=source,
+                    )
+                )
+            return
+        if node in visited:
+            return
+        visited.add(node)
+        stack.append(node)
+        for target in sorted(graph.get(node, []), key=str.casefold):
+            visit(target)
+        stack.pop()
+
+    for document_name in sorted(graph, key=str.casefold):
+        visit(document_name)
+    return findings
+
+
 def _resolve_service_dependencies(
     service: FlowService,
     service_index: dict[str, ServiceSummary],
@@ -1315,6 +2280,9 @@ def _top_level_metrics(
     mapping_operations: list[MappingOperation],
     transformer_bindings: list[TransformerBinding],
     packages: list[AnalyzedPackage],
+    document_references: list[DocumentReferenceOccurrence],
+    document_dependencies: list[DocumentDependency],
+    service_document_dependencies: list[ServiceDocumentDependency],
 ) -> AnalysisMetrics:
     metrics = _metrics(
         calls,
@@ -1325,12 +2293,28 @@ def _top_level_metrics(
         transformer_bindings,
     )
     flow_node_counts = Counter[str]()
+    document_types = [document for package in packages for document in package.document_types]
     for package in packages:
         for service in package.services:
             if service.flow_tree is not None:
                 _count_flow_nodes(service.flow_tree, flow_node_counts)
     return metrics.model_copy(
-        update={"flow_node_counts": dict(sorted(flow_node_counts.items()))}
+        update={
+            "flow_node_counts": dict(sorted(flow_node_counts.items())),
+            "document_type_count": len(document_types),
+            "document_field_count": sum(
+                _count_document_fields(document.fields) for document in document_types
+            ),
+            "document_reference_occurrence_count": len(document_references),
+            "resolved_document_reference_count": sum(
+                1 for reference in document_references if reference.resolved
+            ),
+            "unresolved_document_reference_count": sum(
+                1 for reference in document_references if not reference.resolved
+            ),
+            "unique_document_dependency_count": len(document_dependencies),
+            "service_document_dependency_count": len(service_document_dependencies),
+        }
     )
 
 
@@ -1338,6 +2322,10 @@ def _count_flow_nodes(node: FlowNode, counts: Counter[str]) -> None:
     counts[node.type.value] += 1
     for child in node.children:
         _count_flow_nodes(child, counts)
+
+
+def _count_document_fields(fields: list[DocumentField]) -> int:
+    return sum(1 + _count_document_fields(field.children) for field in fields)
 
 
 def _validate_exit(
@@ -1405,6 +2393,16 @@ def _direct_named_child(
         if isinstance(child.tag, str) and child.tag == tag and child.get("name") == name:
             return child
     return None
+
+
+def _named_children(element: etree._Element | None, name: str) -> list[etree._Element]:
+    if element is None:
+        return []
+    return [
+        child
+        for child in element
+        if isinstance(child.tag, str) and child.get("name") == name
+    ]
 
 
 def _direct_children(element: etree._Element, tag: str) -> list[etree._Element]:
@@ -1653,6 +2651,41 @@ def _transformer_binding_key(binding: TransformerBinding) -> tuple[str, int, str
         binding.order,
         binding.structural_path,
         binding.id,
+    )
+
+
+def _document_type_key(document: DocumentType) -> tuple[str, str]:
+    return (document.identity.full_name.casefold(), document.id)
+
+
+def _document_reference_key(
+    reference: DocumentReferenceOccurrence,
+) -> tuple[str, str, str, str, str]:
+    return (
+        reference.owner_kind.value,
+        reference.owner_name.casefold(),
+        reference.source_field_path.casefold(),
+        reference.declared_target.casefold(),
+        reference.id,
+    )
+
+
+def _document_dependency_key(dependency: DocumentDependency) -> tuple[str, str, str]:
+    return (
+        dependency.source_document.casefold(),
+        dependency.target_document.casefold(),
+        dependency.id,
+    )
+
+
+def _service_document_dependency_key(
+    dependency: ServiceDocumentDependency,
+) -> tuple[str, str, str, str]:
+    return (
+        dependency.service.casefold(),
+        dependency.target_document.casefold(),
+        dependency.usage_role.value,
+        dependency.id,
     )
 
 

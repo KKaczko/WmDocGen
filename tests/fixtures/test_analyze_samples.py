@@ -21,7 +21,8 @@ from wm_doc.ir import (
     SourceReference,
 )
 from wm_doc.render.analysis_json import render_analysis_json
-from wm_doc.render.dot import render_dependency_dot
+from wm_doc.render.document_markdown import render_document_markdown
+from wm_doc.render.dot import render_dependency_dot, render_document_dot
 from wm_doc.render.service_markdown import render_service_markdown, write_service_markdown
 
 OA_FULL_NAME = "oa.adapter.geographicAddressManagement:createGeographicAddressValidation"
@@ -144,7 +145,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v4"
+    assert analysis.schema_version == "analysis.v5"
     assert analysis.metrics.call_occurrence_count == 108
     assert analysis.metrics.call_type_counts == {"INVOKE": 68, "MAPINVOKE": 40}
     assert analysis.metrics.resolved_call_occurrence_count == 49
@@ -171,6 +172,138 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert any(
         dependency.occurrence_count > 1 for dependency in analysis.unique_dependencies
     )
+
+
+def test_document_types_are_extracted_with_ordered_fields() -> None:
+    analysis = _analysis()
+    documents = {document.identity.full_name: document for document in analysis.document_types}
+
+    assert analysis.metrics.document_type_count == 7
+    assert analysis.metrics.document_field_count == 33
+    assert set(documents) == {
+        "pgp.documents.config:KeyConfig",
+        "pgp.documents.config:PGPconfig",
+        "pgp.documents:KeyRegData",
+        "pgp.documents:PrivateKeyData",
+        "pgp.documents:PubKeyRegEntry",
+        "pgp.documents:PublicKeyData",
+        "pgp.documents:SecKeyRegEntry",
+    }
+
+    top_counts = {
+        name: len(document.fields) for name, document in sorted(documents.items())
+    }
+    assert top_counts == {
+        "pgp.documents.config:KeyConfig": 3,
+        "pgp.documents.config:PGPconfig": 2,
+        "pgp.documents:KeyRegData": 4,
+        "pgp.documents:PrivateKeyData": 7,
+        "pgp.documents:PubKeyRegEntry": 2,
+        "pgp.documents:PublicKeyData": 8,
+        "pgp.documents:SecKeyRegEntry": 2,
+    }
+
+    key_config = documents["pgp.documents.config:KeyConfig"]
+    assert [field.name for field in key_config.fields] == ["@userId", "pub", "sec"]
+    assert [field.name for field in key_config.fields[1].children] == [
+        "filename",
+        "exchangeAlgorithm",
+    ]
+    assert key_config.fields[1].field_type == "RECORD"
+    assert key_config.fields[1].dimension == "SCALAR"
+    assert key_config.fields[1].technical_metadata["rec_closed"] == "true"
+
+    pgp_config = documents["pgp.documents.config:PGPconfig"]
+    nested_reference = pgp_config.fields[1].children[0]
+    assert nested_reference.name == "keys"
+    assert nested_reference.field_path == "keys/keys"
+    assert nested_reference.raw_field_type == "recref"
+    assert nested_reference.field_type == "DOCUMENT_REFERENCE"
+    assert nested_reference.raw_dimension == "1"
+    assert nested_reference.dimension == "LIST"
+    assert nested_reference.document_reference == "pgp.documents.config:KeyConfig"
+
+
+def test_document_reference_dependencies_are_resolved_exactly() -> None:
+    analysis = _analysis()
+
+    assert analysis.metrics.document_reference_occurrence_count == 12
+    assert analysis.metrics.resolved_document_reference_count == 10
+    assert analysis.metrics.unresolved_document_reference_count == 2
+    assert analysis.metrics.unique_document_dependency_count == 5
+    assert analysis.metrics.service_document_dependency_count == 7
+
+    document_edges = {
+        (dependency.source_document, dependency.target_document, dependency.resolved)
+        for dependency in analysis.document_dependencies
+    }
+    assert document_edges == {
+        ("pgp.documents.config:PGPconfig", "pgp.documents.config:KeyConfig", True),
+        ("pgp.documents:PubKeyRegEntry", "pgp.documents:KeyRegData", True),
+        ("pgp.documents:PubKeyRegEntry", "pgp.documents:PublicKeyData", True),
+        ("pgp.documents:SecKeyRegEntry", "pgp.documents:KeyRegData", True),
+        ("pgp.documents:SecKeyRegEntry", "pgp.documents:PrivateKeyData", True),
+    }
+
+    service_dependencies = {
+        (
+            dependency.service,
+            dependency.target_document,
+            dependency.usage_role.value,
+            dependency.resolved,
+        )
+        for dependency in analysis.service_document_dependencies
+    }
+    assert (
+        "oa.adapter.geographicAddressManagement:createGeographicAddressValidation",
+        "oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
+        "docCreateGeographicAddressValidationInput",
+        "INPUT",
+        False,
+    ) in service_dependencies
+    assert (
+        "oa.adapter.geographicAddressManagement:createGeographicAddressValidation",
+        "oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
+        "docCreateGeographicAddressValidationOutput",
+        "OUTPUT",
+        False,
+    ) in service_dependencies
+    assert (
+        "pgp.services.common:selectFromConfig",
+        "pgp.documents.config:PGPconfig",
+        "INPUT",
+        True,
+    ) in service_dependencies
+    assert (
+        "pgp.services.common:selectFromConfig",
+        "pgp.documents.config:KeyConfig",
+        "OUTPUT",
+        True,
+    ) in service_dependencies
+
+    document_finding_codes = {
+        finding.code
+        for document in analysis.document_types
+        for finding in document.findings
+    }
+    assert "MALFORMED_NESTED_RECORD" not in document_finding_codes
+    assert "UNSUPPORTED_DOCUMENT_METADATA" not in document_finding_codes
+
+
+def test_raw_document_and_spec_counts_are_independently_verified() -> None:
+    parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+    document_count = 0
+    spec_count = 0
+    for node_path in sorted(_samples().rglob("node.ndf")):
+        root = etree.parse(str(node_path), parser).getroot()
+        if _value_child(root, "svc_type") == "spec":
+            spec_count += 1
+        record = _record_child(root, "record")
+        if record is not None and _value_child(record, "node_type") == "record":
+            document_count += 1
+
+    assert document_count == 7
+    assert spec_count == 8
 
 
 def test_mapping_operations_and_transformer_bindings_are_extracted() -> None:
@@ -324,6 +457,10 @@ def test_parsed_map_and_exit_constructs_do_not_emit_deferred_findings() -> None:
 def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     markdown = render_service_markdown(_service(OA_FULL_NAME))
 
+    assert "## Document Type Usage" in markdown
+    assert "## FLOW Overview" in markdown
+    assert "docCreateGeographicAddressValidationInput" in markdown
+    assert "docCreateGeographicAddressValidationOutput" in markdown
     assert "## FLOW Overview" in markdown
     assert "## Mapping Overview" in markdown
     assert "## Mapping Copies" in markdown
@@ -343,10 +480,25 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
 def test_deterministic_analysis_json_markdown_and_dot() -> None:
     analysis = _analysis()
     service = _service(OA_FULL_NAME)
+    document = analysis.document_types[0]
 
     assert render_analysis_json(analysis) == render_analysis_json(_analysis())
     assert render_service_markdown(service) == render_service_markdown(_service(OA_FULL_NAME))
     assert render_dependency_dot(analysis) == render_dependency_dot(_analysis())
+    assert render_document_dot(analysis) == render_document_dot(_analysis())
+    assert render_document_markdown(
+        document,
+        analysis.document_reference_occurrences,
+        analysis.document_dependencies,
+        analysis.service_document_dependencies,
+        analysis.extraction_policy,
+    ) == render_document_markdown(
+        _analysis().document_types[0],
+        _analysis().document_reference_occurrences,
+        _analysis().document_dependencies,
+        _analysis().service_document_dependencies,
+        _analysis().extraction_policy,
+    )
 
 
 def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
@@ -354,17 +506,33 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     payload = render_analysis_json(analysis)
     markdown = render_service_markdown(_service(OA_FULL_NAME))
     dot = render_dependency_dot(analysis)
-    combined = payload + markdown + dot
+    document_dot = render_document_dot(analysis)
+    document_markdown = render_document_markdown(
+        analysis.document_types[0],
+        analysis.document_reference_occurrences,
+        analysis.document_dependencies,
+        analysis.service_document_dependencies,
+        analysis.extraction_policy,
+    )
+    combined = payload + markdown + dot + document_dot + document_markdown
 
     assert "D:/Dev" not in combined
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v4" in payload
+    assert "analysis.v5" in payload
+    assert "## Disclosure Policies" in document_markdown
+    assert "- Free text mode: include" in document_markdown
+    assert "- Literal mode: redact" in document_markdown
+    assert "- Secret guard: enabled" in document_markdown
+    assert "- Secret guard strategy: secret-guard.v1" in document_markdown
 
     data = json.loads(payload)
     source_paths = []
     for package in data["packages"]:
+        for document in package["document_types"]:
+            source_paths.append(document["source"]["path"])
+            source_paths.extend(field["source"]["path"] for field in document["fields"])
         for service in package["services"]:
             source_paths.append(service["source"]["path"])
             source_paths.extend(field["source"]["path"] for field in service["signature"]["inputs"])
@@ -383,7 +551,9 @@ def test_analyze_cli_writes_expected_outputs(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert (output / "analysis.json").exists()
     assert (output / "graphs" / "dependencies.dot").exists()
+    assert (output / "graphs" / "documents.dot").exists()
     assert len(list((output / "services").glob("*.md"))) == 24
+    assert len(list((output / "documents").glob("*.md"))) == 7
 
 
 def test_pgp_and_oaadapter_fixture_formats_differ() -> None:
@@ -425,6 +595,30 @@ def _nodes(root: FlowNode, node_type: str) -> list[FlowNode]:
     for child in root.children:
         nodes.extend(_nodes(child, node_type))
     return nodes
+
+
+def _value_child(element: etree._Element | None, name: str) -> str | None:
+    if element is None:
+        return None
+    child = _direct_named_child(element, "value", name)
+    if child is None:
+        return None
+    return child.text
+
+
+def _record_child(element: etree._Element | None, name: str) -> etree._Element | None:
+    return _direct_named_child(element, "record", name)
+
+
+def _direct_named_child(
+    element: etree._Element | None, tag: str, name: str
+) -> etree._Element | None:
+    if element is None:
+        return None
+    for child in element:
+        if isinstance(child.tag, str) and child.tag == tag and child.get("name") == name:
+            return child
+    return None
 
 
 def _minimal_service(full_name: str) -> FlowService:

@@ -9,6 +9,33 @@ Observed from current fixtures:
 - Specifications use `node.ndf` with `svc_type=spec`.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
+- Observed active Document Types in current fixtures all come from PGP. OAAdapter contains service
+  signature `rec_ref` values but no local Document Type artifacts in the included snapshot.
+- Observed Document Type identities use `record/node_nsName` in exact `namespace:name` form. The
+  analyzer keeps the directory-derived identity as fallback evidence and reports mismatches instead
+  of aliasing names.
+- Observed Document Type metadata includes `node_pkg`, `node_comment`, `node_hints`,
+  `wrapper_type`, `nillable`, `form_qualified`, `is_global`, `is_public`, `modifiable`,
+  `rec_closed`, `field_content_type`, `is_soap_array_encoding_used`, and `field_options`.
+- Observed document field types are `string`, `object`, `record`, and `recref`. These map to
+  canonical `STRING`, `OBJECT`, `RECORD`, and `DOCUMENT_REFERENCE`; any other type is reported as
+  `UNKNOWN_FIELD_TYPE`.
+- Observed document dimensions are raw `0` and `1`, interpreted as `SCALAR` and `LIST`. Missing,
+  invalid, or unsupported dimensions are explicit findings.
+- Nested document records are preserved as ordered field trees. Readable `field_path` values such as
+  `keys/keys` are derived only for display; structural paths use source-order indexes.
+- Empty nested record containers are accepted. `MALFORMED_NESTED_RECORD` is emitted only when
+  nested-record metadata is structurally incompatible with observed Values shape: a `rec_fields`
+  metadata child exists but is not an array, or a `rec_fields` array contains direct children that
+  are not record elements. Parsing continues and valid sibling fields remain available.
+- Observed `recref` document fields use exact `rec_ref` full names. Resolution is local exact-match
+  only; the analyzer does not do alias, fuzzy, package-prefix, or runtime resolution.
+- Metadata names in the document allowlist are treated as supported technical or policy-controlled
+  metadata. Other structurally valid named metadata emits `UNSUPPORTED_DOCUMENT_METADATA`; the
+  metadata name and source remain visible, while values are represented through the existing
+  disclosure policy and are not interpreted semantically.
+- Specification artifacts can also contain service-signature-style `rec_ref` values, but M3 does not
+  classify specifications as Document Types or model a Specification IR.
 - FLOW roots observed in active fixtures use `<FLOW VERSION="3.0" CLEANUP="true">`.
 - Observed FLOW Services carry signatures in `node.ndf` under `svc_sig/sig_in/sig_out`.
 - Observed signature fields can carry `field_name`, `field_type`, `field_dim`, `field_opt`,
@@ -62,5 +89,10 @@ Observed from current fixtures:
 - `flow.xml.bak` files appear beside active FLOW files and are reported as helper backups.
 - PGP contains package-name evidence that differs from the directory name: `.project` reports
   `WxPGP`, and document metadata includes `node_pkg` values such as `GCS_PGP` and `WxPGP`.
+- M3 adds document Markdown and document DOT rendering. These outputs include technical identifiers,
+  field paths, dimensions, and resolved/unresolved reference evidence, but not raw XML, Java bodies,
+  key material, defaults, or business descriptions.
+- M3 hardening adds a disclosure-policy section to every document Markdown page. The values come
+  from the canonical analysis policy snapshot and do not include local config paths.
 
 This document records observed behavior only; it is not a compatibility claim.

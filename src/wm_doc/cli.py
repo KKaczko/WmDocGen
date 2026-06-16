@@ -9,7 +9,8 @@ from wm_doc.analysis import analyze_path
 from wm_doc.config import load_config
 from wm_doc.discovery import scan_path
 from wm_doc.render.analysis_json import render_analysis_json
-from wm_doc.render.dot import write_dependency_dot
+from wm_doc.render.document_markdown import write_document_markdown
+from wm_doc.render.dot import write_dependency_dot, write_document_dot
 from wm_doc.render.json import render_inventory_json
 from wm_doc.render.markdown import render_inventory_markdown
 from wm_doc.render.service_markdown import write_service_markdown
@@ -65,9 +66,20 @@ def analyze(
     output.mkdir(parents=True, exist_ok=True)
     (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
     services = [service for package in analysis.packages for service in package.services]
+    documents = [document for package in analysis.packages for document in package.document_types]
     service_paths = write_service_markdown(output, services)
+    document_paths = write_document_markdown(
+        output,
+        documents,
+        analysis.document_reference_occurrences,
+        analysis.document_dependencies,
+        analysis.service_document_dependencies,
+        analysis.extraction_policy,
+    )
     dot_path = write_dependency_dot(output, analysis)
+    document_dot_path = write_document_dot(output, analysis)
     typer.echo(
         f"Analyzed {len(services)} FLOW service(s); wrote {output / 'analysis.json'}, "
-        f"{len(service_paths)} service markdown file(s), and {dot_path}."
+        f"{len(service_paths)} service markdown file(s), "
+        f"{len(document_paths)} document markdown file(s), {dot_path}, and {document_dot_path}."
     )

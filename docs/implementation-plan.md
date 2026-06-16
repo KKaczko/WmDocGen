@@ -243,5 +243,124 @@ Not implemented in M2b remediation:
 
 ## Next Milestone Gate
 
-M3 must start only after explicit approval. Recommended M3 scope remains document types,
-specifications, `rec_ref` usage, and package graph extraction from observed fixtures.
+M3 Document Type extraction and document-reference graph work was explicitly approved and
+implemented.
+
+## M3 Document Type Extraction And Document-Reference Graph
+
+Implemented in this milestone:
+
+- Analysis schema migration from `analysis.v4` to `analysis.v5`
+- Canonical Document Type IR for observed `record/node_type=record` artifacts
+- Document identity from `record/node_nsName`, with namespace-path fallback and mismatch findings
+- Ordered document field trees with raw field types, canonical field types, raw dimensions,
+  interpreted dimensions, source order, structural paths, display field paths, source references,
+  technical metadata, policy-safe text metadata, and unknown metadata policy filtering
+- Supported observed field types: `string`, `object`, `record`, and `recref`
+- Supported observed dimensions: `0 -> SCALAR` and `1 -> LIST`
+- Document reference occurrences from `recref` fields with `rec_ref`
+- Service signature document reference occurrences from observed FLOW and Java service metadata
+- Exact local document-reference resolution by declared `namespace:name` full name
+- Unique document-to-document dependencies with `REFERENCES_DOCUMENT`
+- Unique service-to-document dependencies with `USES_DOCUMENT` and `INPUT`, `OUTPUT`, or
+  `INPUT_OUTPUT` usage roles
+- Cycle detection for locally resolved document-reference graphs without recursive expansion
+- Deterministic document Markdown under `documents/*.md`
+- Service Markdown sections for compact input/output document usage and resolved/unresolved
+  document references
+- Graphviz document graph under `graphs/documents.dot`
+- Tests for fixture-derived document counts, field trees, reference resolution, service-document
+  dependencies, specification non-misclassification, document edge findings, policy behavior,
+  deterministic outputs, and regression metrics
+
+Verification baseline:
+
+- Analyzed FLOW Services: 24
+- Call occurrences: 108
+- Unique service-call dependencies: 86
+- Flow maps: 265
+- Mapping operations: 568
+- Transformer bindings: 198
+- Document Types: 7
+- Document fields: 33
+- Document reference occurrences: 12
+- Resolved document reference occurrences: 10
+- Unresolved document reference occurrences: 2
+- Unique document-to-document dependencies: 5
+- Service-document dependencies: 7
+- Specification artifacts observed but not classified as Document Types: 8
+
+Observed local document-to-document dependencies:
+
+- `pgp.documents.config:PGPconfig -> pgp.documents.config:KeyConfig`
+- `pgp.documents:PubKeyRegEntry -> pgp.documents:KeyRegData`
+- `pgp.documents:PubKeyRegEntry -> pgp.documents:PublicKeyData`
+- `pgp.documents:SecKeyRegEntry -> pgp.documents:KeyRegData`
+- `pgp.documents:SecKeyRegEntry -> pgp.documents:PrivateKeyData`
+
+Observed service-document dependencies:
+
+- Five PGP service signature references resolve to local PGP Document Types.
+- Two OAAdapter service signature references remain unresolved because the corresponding Document
+  Type artifacts are not present in the analyzed snapshot.
+
+Not implemented in M3:
+
+- Specification IR or specification document-reference dependency modeling
+- Package dependency graph extraction
+- Schema-aware validation that mapping paths exist in Document Types
+- Recursive document expansion
+- Business descriptions or semantic enrichment
+- Java service body decoding or analysis
+- Adapter, trigger, scheduler, process, Ollama, snapshot diff, or Integration Server connectivity
+
+## Next Milestone Gate
+
+M3 hardening was explicitly approved to address accepted M3 audit issues before M4.
+
+## M3 Hardening: Document Markdown Policies And Document Findings
+
+Implemented in this hardening milestone:
+
+- Document Markdown now renders the active disclosure policy snapshot on every document page:
+  free-text mode, literal mode, secret-guard enabled state, and secret-guard strategy.
+- `MALFORMED_NESTED_RECORD` is emitted with `WARNING` severity when nested record metadata is
+  structurally malformed but safe parsing can continue. Supported conditions are non-array
+  `rec_fields` metadata and non-record direct children inside a `rec_fields` array.
+- Empty record fields remain allowed and do not emit `MALFORMED_NESTED_RECORD` by themselves.
+- `UNSUPPORTED_DOCUMENT_METADATA` is emitted with `INFO` severity when a document or field contains
+  structurally valid metadata that is preserved as policy-controlled evidence but not interpreted by
+  the current IR.
+- Unsupported metadata values remain filtered through the existing disclosure policy. Findings expose
+  metadata names, owner type, source evidence, disclosure status, occurrence count, and bounded
+  source samples without printing raw values.
+- Repetitive unsupported metadata findings aggregate deterministically by metadata name, owner type,
+  source file, artifact type, and disclosure status.
+
+Verification baseline remains unchanged:
+
+- Analyzed FLOW Services: 24
+- Call occurrences: 108
+- Unique service-call dependencies: 86
+- Flow maps: 265
+- Mapping operations: 568
+- Transformer bindings: 198
+- Document Types: 7
+- Document fields: 33
+- Document reference occurrences: 12
+- Resolved document reference occurrences: 10
+- Unresolved document reference occurrences: 2
+- Unique document-to-document dependencies: 5
+- Service-document dependencies: 7
+
+Not implemented in M3 hardening:
+
+- Document default/fixed-value extraction
+- Specification IR
+- Schema-aware mapping validation
+- Java service body decoding or analysis
+- Adapter, trigger, scheduler, process, Ollama, snapshot diff, or Integration Server connectivity
+
+## Next Milestone Gate
+
+M4 or any later milestone must be explicitly approved before implementation.
