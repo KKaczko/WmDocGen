@@ -34,11 +34,13 @@ Observed from current fixtures:
 - Observed `MAPSOURCE` and `MAPTARGET` elements are direct children of `MAP`, paired in the current
   active fixtures, and are treated as map-level pipeline/schema metadata summaries.
 - Observed `MAPCOPY` elements use `FROM` and `TO` attributes as declared endpoints. Optional
-  `NAME` attributes are preserved in raw attributes when present.
+  `NAME` and other free-text-like attributes are represented with the policy-aware text model and
+  are not preserved verbatim in raw attributes.
 - Observed `MAPSET` elements use `FIELD` as the target endpoint and a child `DATA` payload. Literal
   values default to redacted output; type/name/length metadata is kept when safely available.
-- Observed `MAPDELETE` elements use `FIELD` as the deleted endpoint. Optional `NAME` attributes are
-  preserved in raw attributes when present.
+- Observed `MAPDELETE` elements use `FIELD` as the deleted endpoint. Optional `NAME` and other
+  free-text-like attributes are represented with the policy-aware text model and are not preserved
+  verbatim in raw attributes.
 - Observed `DATA` payloads under active fixture `MAPSET` elements use `ENCODING="XMLValues"` and
   `I18N="true"`. The parser extracts scalar literal evidence only according to the configured
   disclosure policy.
@@ -55,7 +57,8 @@ Observed from current fixtures:
   remain available as static evidence.
 - Unknown attributes are not exposed as complete raw dictionaries. The analyzer preserves attribute
   name/source/presence and policy metadata, but not raw unknown values unless a later milestone
-  explicitly classifies them as technical evidence.
+  explicitly classifies them as technical evidence. Unknown attribute names may remain visible for
+  diagnostics while their values are filtered according to the active policy.
 - `flow.xml.bak` files appear beside active FLOW files and are reported as helper backups.
 - PGP contains package-name evidence that differs from the directory name: `.project` reports
   `WxPGP`, and document metadata includes `node_pkg` values such as `GCS_PGP` and `WxPGP`.
