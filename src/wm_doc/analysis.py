@@ -40,6 +40,13 @@ from wm_doc.ir import (
     FlowNodeType,
     FlowService,
     InterpretationConfidence,
+    JavaImport,
+    JavaInvocationOccurrence,
+    JavaInvocationTargetStatus,
+    JavaPipelineAccess,
+    JavaServiceAnalysis,
+    JavaSourceStatus,
+    JavaTypeReference,
     LiteralDisclosure,
     LiteralValue,
     MappingEndpoint,
@@ -63,6 +70,7 @@ from wm_doc.ir import (
     UniqueDependency,
     stable_relative_path,
 )
+from wm_doc.java_analysis import analyze_java_service
 from wm_doc.values import parse_values_file, scalar_value
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
 
@@ -101,6 +109,16 @@ AGGREGATABLE_FINDINGS = {
     "UNSUPPORTED_LITERAL_ENCODING",
     "UNSUPPORTED_DOCUMENT_METADATA",
     "UNRESOLVED_DOCUMENT_REFERENCE",
+    "DYNAMIC_PIPELINE_KEY",
+    "DYNAMIC_SERVICE_TARGET",
+    "JAVA_IMPORT_SOURCE_MISMATCH",
+    "JAVA_SOURCE_FRAGMENT_MISMATCH",
+    "JAVA_SOURCE_IDENTITY_MISMATCH",
+    "JAVA_SOURCE_METHOD_AMBIGUOUS",
+    "JAVA_SOURCE_METHOD_NOT_FOUND",
+    "JAVA_SOURCE_METHOD_SIGNATURE_UNSUPPORTED",
+    "JAVA_SOURCE_PARTIAL_PARSE",
+    "PARTIALLY_STATIC_SERVICE_TARGET",
 }
 SECRET_TERMS = (
     "password",
@@ -239,6 +257,7 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
         package_findings = sorted(package.findings, key=_finding_key)
         services: list[FlowService] = []
         documents: list[DocumentType] = []
+        java_analyses: list[JavaServiceAnalysis] = []
         for artifact in package.artifacts:
             if artifact.probable_type in SERVICE_INDEX_ARTIFACTS:
                 service_reference_inputs.append((package.name, artifact))
@@ -249,6 +268,22 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
                 documents.append(document)
                 all_document_reference_occurrences.extend(references)
                 all_findings.extend(document.findings)
+                continue
+            if artifact.probable_type == "java_service":
+                service = _parse_java_service(
+                    scan_root,
+                    package.name,
+                    artifact,
+                    config,
+                    extraction_policy,
+                    id_factory,
+                )
+                services.append(service)
+                pending_services.append(service)
+                if service.java_analysis is not None:
+                    java_analyses.append(service.java_analysis)
+                    all_findings.extend(service.java_analysis.findings)
+                service_classifications[service.identity.full_name] = service.classification
                 continue
             if artifact.probable_type not in ANALYZABLE_FLOW_ARTIFACTS:
                 continue
@@ -266,6 +301,7 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
                 name=package.name,
                 root=package.root,
                 services=[],
+                java_service_analyses=[],
                 document_types=[],
                 service_index=sorted(
                     service_index.values(), key=lambda item: item.identity.full_name.casefold()
@@ -284,6 +320,11 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
         resolved_calls, unique_dependencies = _resolve_service_dependencies(
             service, service_index, service_classifications, config
         )
+        java_analysis = (
+            _resolve_java_invocations(service.java_analysis, resolved_calls)
+            if service.java_analysis is not None
+            else None
+        )
         service = service.model_copy(
             update={
                 "call_occurrences": resolved_calls,
@@ -295,7 +336,9 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
                     service.flow_maps,
                     service.mapping_operations,
                     service.transformer_bindings,
+                    java_analysis,
                 ),
+                "java_analysis": java_analysis,
                 "findings": _aggregate_findings(service.findings),
             }
         )
@@ -344,6 +387,14 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
                         services_with_document_refs,
                         key=lambda item: item.identity.full_name.casefold(),
                     ),
+                    "java_service_analyses": sorted(
+                        [
+                            service.java_analysis
+                            for service in services_with_document_refs
+                            if service.java_analysis is not None
+                        ],
+                        key=_java_service_analysis_key,
+                    ),
                     "document_types": sorted(
                         package_documents.get(analyzed_package.name, []),
                         key=_document_type_key,
@@ -364,6 +415,30 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
     all_service_document_dependencies = sorted(
         all_service_document_dependencies, key=_service_document_dependency_key
     )
+    all_java_analyses = sorted(
+        [
+            analysis
+            for package in final_packages
+            for analysis in package.java_service_analyses
+        ],
+        key=_java_service_analysis_key,
+    )
+    all_java_imports = sorted(
+        [item for analysis in all_java_analyses for item in analysis.imports],
+        key=_java_import_key,
+    )
+    all_java_type_references = sorted(
+        [item for analysis in all_java_analyses for item in analysis.referenced_types],
+        key=_java_type_reference_key,
+    )
+    all_java_pipeline_accesses = sorted(
+        [item for analysis in all_java_analyses for item in analysis.pipeline_accesses],
+        key=_java_pipeline_access_key,
+    )
+    all_java_invocations = sorted(
+        [item for analysis in all_java_analyses for item in analysis.invocation_occurrences],
+        key=_java_invocation_key,
+    )
     return AnalysisResult(
         tool_version=__version__,
         packages=sorted(final_packages, key=lambda item: item.name.casefold()),
@@ -377,6 +452,9 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
             all_document_reference_occurrences,
             all_document_dependencies,
             all_service_document_dependencies,
+            all_java_analyses,
+            all_java_pipeline_accesses,
+            all_java_invocations,
         ),
         extraction_policy=extraction_policy,
         call_occurrences=all_calls,
@@ -388,6 +466,11 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
         document_reference_occurrences=all_document_reference_occurrences,
         document_dependencies=all_document_dependencies,
         service_document_dependencies=all_service_document_dependencies,
+        java_service_analyses=all_java_analyses,
+        java_imports=all_java_imports,
+        java_type_references=all_java_type_references,
+        java_pipeline_accesses=all_java_pipeline_accesses,
+        java_invocation_occurrences=all_java_invocations,
         findings=_aggregate_findings(all_findings),
     )
 
@@ -942,6 +1025,86 @@ def _parse_flow_service(
         transformer_bindings=transformer_bindings,
         extraction_policy=extraction_policy,
         findings=findings,
+        source=artifact.source,
+    )
+
+
+def _parse_java_service(
+    scan_root: Path,
+    package_name: str,
+    artifact: ArtifactCandidate,
+    config: AppConfig,
+    extraction_policy: ExtractionPolicySnapshot,
+    id_factory: StableIdFactory,
+) -> FlowService:
+    identity = _service_identity(package_name, artifact)
+    service_dir = scan_root / artifact.relative_path
+    node_path = service_dir / "node.ndf"
+    findings: list[AnalysisFinding] = []
+    signature = ServiceSignature(
+        source=SourceReference(
+            path=stable_relative_path(node_path, scan_root), artifact_type="node_ndf"
+        )
+    )
+    description: TextValue | None = None
+
+    try:
+        values = parse_values_file(node_path)
+        description = _apply_free_text_policy(
+            _blank_to_none(scalar_value(values, "node_comment")),
+            "service_description",
+            SourceReference(
+                path=stable_relative_path(node_path, scan_root), artifact_type="node_comment"
+            ),
+            config,
+            "node_comment",
+        )
+        node_root = parse_xml_file(node_path)
+        signature = _parse_signature(node_root, node_path, scan_root)
+    except (XmlParseError, XmlSecurityError) as exc:
+        findings.append(_xml_finding(exc, node_path, scan_root, "node_ndf"))
+
+    java_analysis, java_calls = analyze_java_service(
+        scan_root=scan_root,
+        package_name=package_name,
+        artifact=artifact,
+        identity=identity,
+        signature=signature,
+        id_factory=id_factory,
+    )
+    findings.extend(java_analysis.findings)
+    classification = classify_service(identity.full_name, identity.name, config)
+    return FlowService(
+        identity=identity,
+        service_type=ServiceType.JAVA,
+        description=description,
+        signature=signature,
+        classification=classification,
+        metrics=_metrics(java_calls, [], None, [], [], [], java_analysis),
+        call_occurrences=java_calls,
+        java_analysis=java_analysis,
+        extraction_policy=extraction_policy,
+        findings=findings,
+        source=artifact.source,
+    )
+
+
+def _service_identity(package_name: str, artifact: ArtifactCandidate) -> ServiceIdentity:
+    if artifact.identity is None or artifact.identity.full_name is None:
+        return ServiceIdentity(
+            package=package_name,
+            namespace="",
+            name=artifact.relative_path.rsplit("/", 1)[-1],
+            full_name=artifact.relative_path,
+            basis=FactBasis.UNRESOLVED,
+            source=artifact.source,
+        )
+    return ServiceIdentity(
+        package=package_name,
+        namespace=artifact.identity.namespace or "",
+        name=artifact.identity.name or "",
+        full_name=artifact.identity.full_name,
+        basis=FactBasis.RECONSTRUCTED,
         source=artifact.source,
     )
 
@@ -2202,6 +2365,35 @@ def _resolve_service_dependencies(
     return sorted(resolved_calls, key=_call_key), _aggregate_unique_dependencies(resolved_calls)
 
 
+def _resolve_java_invocations(
+    java_analysis: JavaServiceAnalysis | None, resolved_calls: list[CallOccurrence]
+) -> JavaServiceAnalysis | None:
+    if java_analysis is None:
+        return None
+    calls_by_target = {
+        call.target: call for call in resolved_calls if call.call_type == CallType.JAVA_INVOKE
+    }
+    resolved_invocations = []
+    for invocation in java_analysis.invocation_occurrences:
+        call = (
+            calls_by_target.get(invocation.canonical_target)
+            if invocation.canonical_target is not None
+            else None
+        )
+        if call is None:
+            resolved_invocations.append(invocation)
+            continue
+        resolved_invocations.append(
+            invocation.model_copy(
+                update={
+                    "resolved": call.resolved,
+                    "target_type": call.target_type,
+                }
+            )
+        )
+    return java_analysis.model_copy(update={"invocation_occurrences": resolved_invocations})
+
+
 def _aggregate_unique_dependencies(calls: list[CallOccurrence]) -> list[UniqueDependency]:
     grouped: dict[tuple[str, str, DependencyKind], list[CallOccurrence]] = defaultdict(list)
     for call in calls:
@@ -2236,6 +2428,7 @@ def _metrics(
     flow_maps: list[FlowMap],
     mapping_operations: list[MappingOperation],
     transformer_bindings: list[TransformerBinding],
+    java_analysis: JavaServiceAnalysis | None = None,
 ) -> AnalysisMetrics:
     call_type_counts = Counter(call.call_type.value for call in calls)
     unique_kind_counts = Counter(dep.dependency_kind.value for dep in unique_dependencies)
@@ -2248,9 +2441,35 @@ def _metrics(
     flow_node_counts = Counter[str]()
     if flow_tree is not None:
         _count_flow_nodes(flow_tree, flow_node_counts)
+    flow_calls = [call for call in calls if call.call_type != CallType.JAVA_INVOKE]
+    java_static_calls = [call for call in calls if call.call_type == CallType.JAVA_INVOKE]
+    flow_dependencies = [
+        dependency
+        for dependency in unique_dependencies
+        if not any(
+            occurrence_id.startswith("call_java_")
+            for occurrence_id in dependency.occurrence_ids
+        )
+    ]
+    java_dependencies = [
+        dependency
+        for dependency in unique_dependencies
+        if any(
+            occurrence_id.startswith("call_java_")
+            for occurrence_id in dependency.occurrence_ids
+        )
+    ]
+    java_metrics = java_analysis.metrics if java_analysis is not None else AnalysisMetrics()
     return AnalysisMetrics(
         call_occurrence_count=len(calls),
+        flow_call_occurrence_count=len(flow_calls),
+        java_static_call_occurrence_count=len(java_static_calls),
+        java_dynamic_call_occurrence_count=java_metrics.java_dynamic_call_occurrence_count,
+        total_call_occurrence_count=len(calls),
         unique_dependency_count=len(unique_dependencies),
+        flow_unique_dependency_count=len(flow_dependencies),
+        java_unique_dependency_count=len(java_dependencies),
+        total_unique_dependency_count=len(unique_dependencies),
         resolved_call_occurrence_count=sum(1 for call in calls if call.resolved),
         unresolved_call_occurrence_count=sum(1 for call in calls if not call.resolved),
         resolved_unique_dependency_count=sum(1 for dep in unique_dependencies if dep.resolved),
@@ -2270,6 +2489,19 @@ def _metrics(
             for operation in mapping_operations
             if operation.confidence != InterpretationConfidence.CONFIRMED
         ),
+        java_service_analysis_count=java_metrics.java_service_analysis_count,
+        java_source_match_count=java_metrics.java_source_match_count,
+        java_source_only_count=java_metrics.java_source_only_count,
+        java_fragment_only_count=java_metrics.java_fragment_only_count,
+        java_source_mismatch_count=java_metrics.java_source_mismatch_count,
+        java_source_method_not_found_count=java_metrics.java_source_method_not_found_count,
+        java_source_method_ambiguous_count=java_metrics.java_source_method_ambiguous_count,
+        java_source_identity_mismatch_count=java_metrics.java_source_identity_mismatch_count,
+        java_source_partial_parse_count=java_metrics.java_source_partial_parse_count,
+        java_pipeline_access_count=java_metrics.java_pipeline_access_count,
+        java_pipeline_access_kind_counts=java_metrics.java_pipeline_access_kind_counts,
+        java_pipeline_cursor_scope_counts=java_metrics.java_pipeline_cursor_scope_counts,
+        java_invocation_occurrence_count=java_metrics.java_invocation_occurrence_count,
     )
 
 
@@ -2283,6 +2515,9 @@ def _top_level_metrics(
     document_references: list[DocumentReferenceOccurrence],
     document_dependencies: list[DocumentDependency],
     service_document_dependencies: list[ServiceDocumentDependency],
+    java_analyses: list[JavaServiceAnalysis],
+    java_pipeline_accesses: list[JavaPipelineAccess],
+    java_invocations: list[JavaInvocationOccurrence],
 ) -> AnalysisMetrics:
     metrics = _metrics(
         calls,
@@ -2294,6 +2529,23 @@ def _top_level_metrics(
     )
     flow_node_counts = Counter[str]()
     document_types = [document for package in packages for document in package.document_types]
+    java_status_counts = Counter(analysis.source_set.status.value for analysis in java_analyses)
+    java_access_counts = Counter(access.access_kind.value for access in java_pipeline_accesses)
+    java_scope_counts = Counter(access.cursor_scope.value for access in java_pipeline_accesses)
+    java_static_call_count = sum(1 for call in calls if call.call_type == CallType.JAVA_INVOKE)
+    java_dynamic_call_count = sum(
+        1
+        for invocation in java_invocations
+        if invocation.target_status != JavaInvocationTargetStatus.STATIC_TARGET
+    )
+    java_dependencies = [
+        dependency
+        for dependency in unique_dependencies
+        if any(
+            occurrence_id.startswith("call_java_")
+            for occurrence_id in dependency.occurrence_ids
+        )
+    ]
     for package in packages:
         for service in package.services:
             if service.flow_tree is not None:
@@ -2314,6 +2566,40 @@ def _top_level_metrics(
             ),
             "unique_document_dependency_count": len(document_dependencies),
             "service_document_dependency_count": len(service_document_dependencies),
+            "flow_call_occurrence_count": sum(
+                1 for call in calls if call.call_type != CallType.JAVA_INVOKE
+            ),
+            "java_static_call_occurrence_count": java_static_call_count,
+            "java_dynamic_call_occurrence_count": java_dynamic_call_count,
+            "total_call_occurrence_count": len(calls),
+            "flow_unique_dependency_count": len(unique_dependencies) - len(java_dependencies),
+            "java_unique_dependency_count": len(java_dependencies),
+            "total_unique_dependency_count": len(unique_dependencies),
+            "java_service_analysis_count": len(java_analyses),
+            "java_source_match_count": java_status_counts[
+                JavaSourceStatus.SOURCE_AND_FRAGMENT_MATCH.value
+            ],
+            "java_source_only_count": java_status_counts[JavaSourceStatus.SOURCE_ONLY.value],
+            "java_fragment_only_count": java_status_counts[JavaSourceStatus.FRAGMENT_ONLY.value],
+            "java_source_mismatch_count": java_status_counts[
+                JavaSourceStatus.SOURCE_FRAGMENT_MISMATCH.value
+            ],
+            "java_source_method_not_found_count": java_status_counts[
+                JavaSourceStatus.SOURCE_METHOD_NOT_FOUND.value
+            ],
+            "java_source_method_ambiguous_count": java_status_counts[
+                JavaSourceStatus.SOURCE_METHOD_AMBIGUOUS.value
+            ],
+            "java_source_identity_mismatch_count": java_status_counts[
+                JavaSourceStatus.SOURCE_IDENTITY_MISMATCH.value
+            ],
+            "java_source_partial_parse_count": java_status_counts[
+                JavaSourceStatus.SOURCE_PARTIAL_PARSE.value
+            ],
+            "java_pipeline_access_count": len(java_pipeline_accesses),
+            "java_pipeline_access_kind_counts": dict(sorted(java_access_counts.items())),
+            "java_pipeline_cursor_scope_counts": dict(sorted(java_scope_counts.items())),
+            "java_invocation_occurrence_count": len(java_invocations),
         }
     )
 
@@ -2687,6 +2973,34 @@ def _service_document_dependency_key(
         dependency.usage_role.value,
         dependency.id,
     )
+
+
+def _java_service_analysis_key(analysis: JavaServiceAnalysis) -> tuple[str, str]:
+    return (analysis.identity.full_name.casefold(), analysis.id)
+
+
+def _java_import_key(java_import: JavaImport) -> tuple[str, int, str]:
+    return (
+        java_import.service.casefold(),
+        java_import.declaration_order,
+        java_import.declaration.casefold(),
+    )
+
+
+def _java_type_reference_key(reference: JavaTypeReference) -> tuple[str, int, str]:
+    return (
+        reference.service.casefold(),
+        reference.token_ordinal,
+        reference.type_name.casefold(),
+    )
+
+
+def _java_pipeline_access_key(access: JavaPipelineAccess) -> tuple[str, int, str]:
+    return (access.service.casefold(), access.token_ordinal, access.id)
+
+
+def _java_invocation_key(invocation: JavaInvocationOccurrence) -> tuple[str, int, str]:
+    return (invocation.caller.casefold(), invocation.token_ordinal, invocation.id)
 
 
 def _finding_key(finding: AnalysisFinding) -> tuple[str, str, str]:

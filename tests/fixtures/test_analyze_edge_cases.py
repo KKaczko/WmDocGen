@@ -255,7 +255,7 @@ def test_policy_snapshot_records_secret_guard(tmp_path) -> None:
     analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
     payload = render_analysis_json(analysis)
 
-    assert analysis.schema_version == "analysis.v5"
+    assert analysis.schema_version == "analysis.v6"
     assert analysis.extraction_policy.literal_mode == "redact"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True

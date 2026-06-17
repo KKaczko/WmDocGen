@@ -43,6 +43,7 @@ class ServiceType(StrEnum):
 class CallType(StrEnum):
     INVOKE = "INVOKE"
     MAPINVOKE = "MAPINVOKE"
+    JAVA_INVOKE = "JAVA_INVOKE"
 
 
 class DependencyKind(StrEnum):
@@ -79,6 +80,71 @@ class ServiceDocumentUsageRole(StrEnum):
     INPUT = "INPUT"
     OUTPUT = "OUTPUT"
     INPUT_OUTPUT = "INPUT_OUTPUT"
+
+
+class JavaSourceStatus(StrEnum):
+    SOURCE_AND_FRAGMENT_MATCH = "SOURCE_AND_FRAGMENT_MATCH"
+    SOURCE_ONLY = "SOURCE_ONLY"
+    FRAGMENT_ONLY = "FRAGMENT_ONLY"
+    SOURCE_FRAGMENT_MISMATCH = "SOURCE_FRAGMENT_MISMATCH"
+    SOURCE_METHOD_NOT_FOUND = "SOURCE_METHOD_NOT_FOUND"
+    SOURCE_METHOD_AMBIGUOUS = "SOURCE_METHOD_AMBIGUOUS"
+    SOURCE_IDENTITY_MISMATCH = "SOURCE_IDENTITY_MISMATCH"
+    SOURCE_PARTIAL_PARSE = "SOURCE_PARTIAL_PARSE"
+
+
+class JavaFragmentKind(StrEnum):
+    COMPLETE_COMPILATION_UNIT = "COMPLETE_COMPILATION_UNIT"
+    CLASS_FRAGMENT = "CLASS_FRAGMENT"
+    METHOD_FRAGMENT = "METHOD_FRAGMENT"
+    METHOD_BODY = "METHOD_BODY"
+    GENERATED_FRAGMENT = "GENERATED_FRAGMENT"
+    UNKNOWN_FRAGMENT = "UNKNOWN_FRAGMENT"
+
+
+class JavaParserMode(StrEnum):
+    COMPLETE_SOURCE = "COMPLETE_SOURCE"
+    FRAGMENT_FALLBACK = "FRAGMENT_FALLBACK"
+    METADATA_ONLY = "METADATA_ONLY"
+
+
+class JavaImportProvenance(StrEnum):
+    COMPLETE_SOURCE = "COMPLETE_SOURCE"
+    NODE_IDF = "NODE_IDF"
+    BOTH = "BOTH"
+
+
+class JavaTypeCategory(StrEnum):
+    WEBMETHODS_API = "WEBMETHODS_API"
+    JAVA_STANDARD_LIBRARY = "JAVA_STANDARD_LIBRARY"
+    PACKAGE_LOCAL_CLASS = "PACKAGE_LOCAL_CLASS"
+    THIRD_PARTY_LIBRARY = "THIRD_PARTY_LIBRARY"
+    UNKNOWN = "UNKNOWN"
+
+
+class JavaReferenceKind(StrEnum):
+    DECLARED_IMPORT = "DECLARED_IMPORT"
+    REFERENCED_TYPE = "REFERENCED_TYPE"
+
+
+class JavaPipelineAccessKind(StrEnum):
+    READ = "READ"
+    WRITE = "WRITE"
+    REMOVE = "REMOVE"
+    UNKNOWN_ACCESS = "UNKNOWN_ACCESS"
+
+
+class JavaCursorScope(StrEnum):
+    ROOT_PIPELINE = "ROOT_PIPELINE"
+    NESTED_IDATA = "NESTED_IDATA"
+    UNKNOWN_CURSOR = "UNKNOWN_CURSOR"
+
+
+class JavaInvocationTargetStatus(StrEnum):
+    STATIC_TARGET = "STATIC_TARGET"
+    PARTIALLY_STATIC_TARGET = "PARTIALLY_STATIC_TARGET"
+    DYNAMIC_TARGET = "DYNAMIC_TARGET"
+    MALFORMED_TARGET = "MALFORMED_TARGET"
 
 
 class FlowNodeType(StrEnum):
@@ -155,6 +221,11 @@ class SourceReference(BaseModel):
     xml_path: str | None = None
     source_node: str | None = None
     line: int | None = None
+    column: int | None = None
+    end_line: int | None = None
+    end_column: int | None = None
+    class_name: str | None = None
+    method_name: str | None = None
 
 
 class AnalysisFinding(BaseModel):
@@ -291,6 +362,119 @@ class LiteralValue(BaseModel):
     marker: str | None = None
     value: str | None = None
     source: SourceReference | None = None
+
+
+class JavaSourceReference(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    primary: SourceReference
+    corroborating: SourceReference | None = None
+    token_ordinal: int | None = None
+
+
+class JavaMethodRange(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    start_line: int
+    start_column: int
+    end_line: int
+    end_column: int
+    source: SourceReference
+
+
+class JavaSourceSet(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: JavaSourceStatus
+    node_path: str
+    fragment_path: str | None = None
+    complete_source_path: str | None = None
+    related_helper_sources: list[str] = Field(default_factory=list)
+    matched_class: str | None = None
+    matched_method: str | None = None
+    method_range: JavaMethodRange | None = None
+    fragment_kind: JavaFragmentKind = JavaFragmentKind.UNKNOWN_FRAGMENT
+    token_match: bool | None = None
+    parser_mode: JavaParserMode = JavaParserMode.METADATA_ONLY
+    confidence: InterpretationConfidence = InterpretationConfidence.RAW_ONLY
+    primary_source: SourceReference | None = None
+    corroborating_source: SourceReference | None = None
+
+
+class JavaImport(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    service: str
+    declaration: str
+    is_static: bool = False
+    is_wildcard: bool = False
+    imported_name: str
+    declaration_order: int
+    provenance: JavaImportProvenance
+    category: JavaTypeCategory
+    source: SourceReference
+
+
+class JavaTypeReference(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    service: str
+    reference_kind: JavaReferenceKind = JavaReferenceKind.REFERENCED_TYPE
+    type_name: str
+    resolved_import: str | None = None
+    category: JavaTypeCategory
+    token_ordinal: int
+    source: JavaSourceReference
+
+
+class JavaPipelineAccess(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    service: str
+    access_kind: JavaPipelineAccessKind
+    api_form: str
+    field_key: str | None = None
+    dynamic_key: bool = False
+    cursor_scope: JavaCursorScope
+    evidenced_java_type: str | None = None
+    token_ordinal: int
+    source: JavaSourceReference
+    confidence: InterpretationConfidence = InterpretationConfidence.CONFIRMED
+
+
+class JavaInvocationOccurrence(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    caller: str
+    api_form: str
+    target_status: JavaInvocationTargetStatus
+    declared_target: str | None = None
+    canonical_target: str | None = None
+    synchronous: bool | None = None
+    token_ordinal: int
+    source: JavaSourceReference
+    resolved: bool = False
+    target_type: ServiceType | None = None
+    confidence: InterpretationConfidence = InterpretationConfidence.RAW_ONLY
+
+
+class JavaServiceAnalysis(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    identity: ServiceIdentity
+    source_set: JavaSourceSet
+    signature: ServiceSignature
+    imports: list[JavaImport] = Field(default_factory=list)
+    referenced_types: list[JavaTypeReference] = Field(default_factory=list)
+    pipeline_accesses: list[JavaPipelineAccess] = Field(default_factory=list)
+    invocation_occurrences: list[JavaInvocationOccurrence] = Field(default_factory=list)
+    findings: list[AnalysisFinding] = Field(default_factory=list)
+    metrics: AnalysisMetrics = Field(default_factory=lambda: AnalysisMetrics())
 
 
 class DocumentIdentity(BaseModel):
@@ -520,7 +704,14 @@ class AnalysisMetrics(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     call_occurrence_count: int = 0
+    flow_call_occurrence_count: int = 0
+    java_static_call_occurrence_count: int = 0
+    java_dynamic_call_occurrence_count: int = 0
+    total_call_occurrence_count: int = 0
     unique_dependency_count: int = 0
+    flow_unique_dependency_count: int = 0
+    java_unique_dependency_count: int = 0
+    total_unique_dependency_count: int = 0
     resolved_call_occurrence_count: int = 0
     unresolved_call_occurrence_count: int = 0
     resolved_unique_dependency_count: int = 0
@@ -541,6 +732,19 @@ class AnalysisMetrics(BaseModel):
     unresolved_document_reference_count: int = 0
     unique_document_dependency_count: int = 0
     service_document_dependency_count: int = 0
+    java_service_analysis_count: int = 0
+    java_source_match_count: int = 0
+    java_source_only_count: int = 0
+    java_fragment_only_count: int = 0
+    java_source_mismatch_count: int = 0
+    java_source_method_not_found_count: int = 0
+    java_source_method_ambiguous_count: int = 0
+    java_source_identity_mismatch_count: int = 0
+    java_source_partial_parse_count: int = 0
+    java_pipeline_access_count: int = 0
+    java_pipeline_access_kind_counts: dict[str, int] = Field(default_factory=dict)
+    java_pipeline_cursor_scope_counts: dict[str, int] = Field(default_factory=dict)
+    java_invocation_occurrence_count: int = 0
 
 
 class ServiceSummary(BaseModel):
@@ -566,6 +770,7 @@ class FlowService(BaseModel):
     flow_maps: list[FlowMap] = Field(default_factory=list)
     mapping_operations: list[MappingOperation] = Field(default_factory=list)
     transformer_bindings: list[TransformerBinding] = Field(default_factory=list)
+    java_analysis: JavaServiceAnalysis | None = None
     document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
     service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
     extraction_policy: ExtractionPolicySnapshot = Field(default_factory=ExtractionPolicySnapshot)
@@ -579,6 +784,7 @@ class AnalyzedPackage(BaseModel):
     name: str
     root: str
     services: list[FlowService] = Field(default_factory=list)
+    java_service_analyses: list[JavaServiceAnalysis] = Field(default_factory=list)
     document_types: list[DocumentType] = Field(default_factory=list)
     service_index: list[ServiceSummary] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
@@ -587,7 +793,7 @@ class AnalyzedPackage(BaseModel):
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "analysis.v5"
+    schema_version: str = "analysis.v6"
     tool_version: str
     packages: list[AnalyzedPackage] = Field(default_factory=list)
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
@@ -601,6 +807,11 @@ class AnalysisResult(BaseModel):
     document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
     document_dependencies: list[DocumentDependency] = Field(default_factory=list)
     service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
+    java_service_analyses: list[JavaServiceAnalysis] = Field(default_factory=list)
+    java_imports: list[JavaImport] = Field(default_factory=list)
+    java_type_references: list[JavaTypeReference] = Field(default_factory=list)
+    java_pipeline_accesses: list[JavaPipelineAccess] = Field(default_factory=list)
+    java_invocation_occurrences: list[JavaInvocationOccurrence] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
 

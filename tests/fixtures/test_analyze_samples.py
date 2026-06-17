@@ -135,6 +135,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
         service.identity.full_name
         for package in analysis.packages
         for service in package.services
+        if service.service_type == "FLOW"
     }
 
     assert "pgp.services.encrypt:encryptString" in full_names
@@ -145,12 +146,19 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v5"
+    assert analysis.schema_version == "analysis.v6"
     assert analysis.metrics.call_occurrence_count == 108
+    assert analysis.metrics.flow_call_occurrence_count == 108
+    assert analysis.metrics.java_static_call_occurrence_count == 0
+    assert analysis.metrics.java_dynamic_call_occurrence_count == 0
+    assert analysis.metrics.total_call_occurrence_count == 108
     assert analysis.metrics.call_type_counts == {"INVOKE": 68, "MAPINVOKE": 40}
     assert analysis.metrics.resolved_call_occurrence_count == 49
     assert analysis.metrics.unresolved_call_occurrence_count == 59
     assert analysis.metrics.unique_dependency_count == 86
+    assert analysis.metrics.flow_unique_dependency_count == 86
+    assert analysis.metrics.java_unique_dependency_count == 0
+    assert analysis.metrics.total_unique_dependency_count == 86
     assert analysis.metrics.unique_dependency_kind_counts == {
         "INVOKES": 61,
         "USES_TRANSFORMER": 25,
@@ -172,6 +180,141 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert any(
         dependency.occurrence_count > 1 for dependency in analysis.unique_dependencies
     )
+
+
+def test_java_services_are_analyzed_source_first() -> None:
+    analysis = _analysis()
+    java_services = [
+        service
+        for package in analysis.packages
+        for service in package.services
+        if service.service_type == "JAVA"
+    ]
+
+    assert _independent_java_service_artifact_count() == 11
+    assert len(java_services) == 11
+    assert len(analysis.java_service_analyses) == 11
+    assert analysis.metrics.java_service_analysis_count == 11
+    assert analysis.metrics.java_source_match_count == 11
+    assert analysis.metrics.java_source_only_count == 0
+    assert analysis.metrics.java_fragment_only_count == 0
+    assert analysis.metrics.java_source_mismatch_count == 0
+    assert analysis.metrics.java_source_method_not_found_count == 0
+    assert analysis.metrics.java_source_method_ambiguous_count == 0
+    assert analysis.metrics.java_source_identity_mismatch_count == 0
+    assert analysis.metrics.java_source_partial_parse_count == 0
+    assert analysis.metrics.java_invocation_occurrence_count == 0
+
+    source_paths = {
+        analysis_record.source_set.complete_source_path
+        for analysis_record in analysis.java_service_analyses
+    }
+    assert source_paths == {
+        "PGP/code/source/pgp/services/common.java",
+        "PGP/code/source/pgp/services/decrypt.java",
+        "PGP/code/source/pgp/services/encrypt.java",
+        "PGP/code/source/pgp/services/keys.java",
+    }
+
+    for analysis_record in analysis.java_service_analyses:
+        source_set = analysis_record.source_set
+        assert source_set.status == "SOURCE_AND_FRAGMENT_MATCH"
+        assert source_set.parser_mode == "COMPLETE_SOURCE"
+        assert source_set.token_match is True
+        assert source_set.complete_source_path is not None
+        assert source_set.fragment_path is not None
+        assert source_set.matched_method == analysis_record.identity.name
+        assert source_set.matched_class == analysis_record.identity.namespace.rsplit(".", 1)[-1]
+        assert source_set.method_range is not None
+        assert source_set.method_range.start_line > 0
+        assert source_set.primary_source is not None
+        assert source_set.primary_source.path == source_set.complete_source_path
+        assert source_set.primary_source.class_name == source_set.matched_class
+        assert source_set.primary_source.method_name == analysis_record.identity.name
+        assert source_set.corroborating_source is not None
+        assert source_set.corroborating_source.path == source_set.fragment_path
+        assert all(
+            helper.startswith("PGP/code/source/com/softwareag/pgp/")
+            for helper in source_set.related_helper_sources
+        )
+
+    assert not any(
+        service.identity.namespace.startswith("com.softwareag")
+        for package in analysis.packages
+        for service in package.services
+    )
+
+
+def test_java_pipeline_access_counts_and_scopes() -> None:
+    analysis = _analysis()
+    access_counts = Counter(access.access_kind.value for access in analysis.java_pipeline_accesses)
+    scope_counts = Counter(
+        (access.access_kind.value, access.cursor_scope.value)
+        for access in analysis.java_pipeline_accesses
+    )
+
+    assert analysis.metrics.java_pipeline_access_count == 73
+    assert analysis.metrics.java_pipeline_access_kind_counts == {
+        "READ": 37,
+        "WRITE": 36,
+    }
+    assert access_counts == {"READ": 37, "WRITE": 36}
+    assert scope_counts == {
+        ("READ", "ROOT_PIPELINE"): 34,
+        ("READ", "NESTED_IDATA"): 3,
+        ("WRITE", "ROOT_PIPELINE"): 21,
+        ("WRITE", "NESTED_IDATA"): 15,
+    }
+    assert {
+        access.field_key
+        for access in analysis.java_pipeline_accesses
+        if access.service == "pgp.services.decrypt:decryptAndVerify"
+        and access.access_kind == "READ"
+    } >= {"publicKeyRingCollection", "privateKeyRingCollection"}
+    assert not any(access.access_kind == "REMOVE" for access in analysis.java_pipeline_accesses)
+    assert all(
+        access.source.primary.path.startswith("PGP/code/source/")
+        for access in analysis.java_pipeline_accesses
+    )
+    assert all(
+        access.source.primary.line is not None for access in analysis.java_pipeline_accesses
+    )
+    per_service = {
+        record.identity.full_name: Counter(
+            access.access_kind.value for access in record.pipeline_accesses
+        )
+        for record in analysis.java_service_analyses
+    }
+    assert per_service == {
+        "pgp.services.common:getFileContent": {"READ": 2, "WRITE": 1},
+        "pgp.services.common:getPackagePath": {"READ": 3, "WRITE": 1},
+        "pgp.services.common:getSupportedEncodings": {"READ": 1, "WRITE": 3},
+        "pgp.services.common:selectFromConfig": {"READ": 5, "WRITE": 1},
+        "pgp.services.decrypt:decryptAndVerify": {"READ": 10, "WRITE": 5},
+        "pgp.services.encrypt:encryptAndSign": {"READ": 12, "WRITE": 5},
+        "pgp.services.keys:listEncryptionAlgorithms": {"WRITE": 1},
+        "pgp.services.keys:listKeyExchangeAlgorithms": {"WRITE": 1},
+        "pgp.services.keys:listSignatureAlgorithms": {"WRITE": 1},
+        "pgp.services.keys:readPrivateKeys": {"READ": 2, "WRITE": 8},
+        "pgp.services.keys:readPublicKeys": {"READ": 2, "WRITE": 9},
+    }
+
+
+def test_java_markdown_sections_are_rendered_without_source_bodies() -> None:
+    service = _service("pgp.services.encrypt:encryptAndSign")
+    markdown = render_service_markdown(service)
+
+    assert "## Java Analysis" in markdown
+    assert "### Source Consistency" in markdown
+    assert "SOURCE_AND_FRAGMENT_MATCH" in markdown
+    assert "### Observed Pipeline Reads" in markdown
+    assert "### Observed Pipeline Writes" in markdown
+    assert "### Static Integration Server Calls" in markdown
+    assert "No Java Integration Server invocation sites were extracted" in markdown
+    assert "### Declared Imports" in markdown
+    assert "### Referenced Java Types" in markdown
+    assert "public static final void" not in markdown
+    assert "--- <<IS-START" not in markdown
 
 
 def test_document_types_are_extracted_with_ordered_fields() -> None:
@@ -474,7 +617,7 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     assert "## Transformer Call Occurrences" in markdown
     assert "<redacted:literal>" in markdown
     assert "`OK`" not in markdown
-    assert "M2b extracts observed MAP copy" in markdown
+    assert "M4a extracts observed FLOW, mapping, document-reference, and Java Service" in markdown
 
 
 def test_deterministic_analysis_json_markdown_and_dot() -> None:
@@ -520,7 +663,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v5" in payload
+    assert "analysis.v6" in payload
     assert "## Disclosure Policies" in document_markdown
     assert "- Free text mode: include" in document_markdown
     assert "- Literal mode: redact" in document_markdown
@@ -549,10 +692,23 @@ def test_analyze_cli_writes_expected_outputs(tmp_path) -> None:
     result = CliRunner().invoke(app, ["analyze", str(_samples()), "--output", str(output)])
 
     assert result.exit_code == 0, result.output
+    assert "Analyzed services:" in result.output
+    assert "- FLOW: 24" in result.output
+    assert "- Java: 11" in result.output
+    assert "- total: 35" in result.output
+    assert "Service call occurrences:" in result.output
+    assert "- FLOW: 108" in result.output
+    assert "- Java static: 0" in result.output
+    assert "- Java dynamic/partial: 0" in result.output
+    assert "- total promoted calls: 108" in result.output
+    assert "Unique service dependencies:" in result.output
+    assert "- FLOW-derived: 86" in result.output
+    assert "- Java-derived: 0" in result.output
+    assert "- total: 86" in result.output
     assert (output / "analysis.json").exists()
     assert (output / "graphs" / "dependencies.dot").exists()
     assert (output / "graphs" / "documents.dot").exists()
-    assert len(list((output / "services").glob("*.md"))) == 24
+    assert len(list((output / "services").glob("*.md"))) == 35
     assert len(list((output / "documents").glob("*.md"))) == 7
 
 
@@ -619,6 +775,16 @@ def _direct_named_child(
         if isinstance(child.tag, str) and child.tag == tag and child.get("name") == name:
             return child
     return None
+
+
+def _independent_java_service_artifact_count() -> int:
+    parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+    count = 0
+    for node_path in sorted(_samples().rglob("node.ndf")):
+        root = etree.parse(str(node_path), parser).getroot()
+        if _value_child(root, "svc_type") == "java" and (node_path.parent / "java.frag").exists():
+            count += 1
+    return count
 
 
 def _minimal_service(full_name: str) -> FlowService:

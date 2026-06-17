@@ -6,6 +6,9 @@ Observed from current fixtures:
 - Namespace folders use `node.idf` with `node_type=interface`.
 - FLOW Services use `node.ndf` with `svc_type=flow` and usually have sibling `flow.xml`.
 - Java Services use `node.ndf` with `svc_type=java` and sibling `java.frag`.
+- Java Service generated source is stored under `code/source` using the namespace class path, such
+  as `pgp.services.decrypt:decryptAndVerify` mapping to
+  `PGP/code/source/pgp/services/decrypt.java`.
 - Specifications use `node.ndf` with `svc_type=spec`.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
@@ -40,6 +43,9 @@ Observed from current fixtures:
 - Observed FLOW Services carry signatures in `node.ndf` under `svc_sig/sig_in/sig_out`.
 - Observed signature fields can carry `field_name`, `field_type`, `field_dim`, `field_opt`,
   `wrapper_type`, nested `rec_fields`, and document references in `rec_ref`.
+- Observed Java Service `node.ndf` files may omit local `svc_sig` records while naming a
+  Specification with `svc_spec`. M4a keeps declared signatures and observed Java pipeline accesses
+  separate and does not require a Java access key to appear in the declared signature.
 - Observed static service calls use `INVOKE` or `MAPINVOKE` with a `SERVICE` attribute.
 - M2a treats `INVOKE` as a normal service call and `MAPINVOKE` as a transformer call. M2b adds
   evidence-only transformer binding extraction for observed `MAPINVOKE` child maps.
@@ -94,5 +100,34 @@ Observed from current fixtures:
   key material, defaults, or business descriptions.
 - M3 hardening adds a disclosure-policy section to every document Markdown page. The values come
   from the canonical analysis policy snapshot and do not include local config paths.
+- M4a adds source-first Java Service analysis. In the current fixtures all 11 Java Services match
+  their complete source methods and `java.frag` bodies after token normalization. The complete source
+  method is the primary parsing surface for those services.
+- Java comments, block comments, Javadocs, strings, character literals, and text blocks are
+  tokenized so embedded fake API calls are ignored. Balanced braces and parentheses define class and
+  method ranges; ambiguous, missing, mismatched, or identity-inconsistent source falls back to
+  `java.frag` when available.
+- A complete-source service method is authoritative only when it is a direct generated-class method
+  with the exact service name, `static`, `void`, and exactly one `IData` parameter. The parameter can
+  use the imported short name or `com.wm.data.IData`, and parameter annotations are ignored for this
+  shape check. Wrong signatures emit `JAVA_SOURCE_METHOD_SIGNATURE_UNSUPPORTED` and fall back to
+  `java.frag` when present; multiple compatible methods emit `JAVA_SOURCE_METHOD_AMBIGUOUS`.
+- M4a extracts observed Java facts from the direct service-method body. Normal control-flow blocks
+  such as `if`, loops, `try/catch`, `switch`, and `synchronized` remain in scope. Lambda bodies,
+  anonymous-class methods, and local-class bodies are not promoted as direct service evidence and
+  emit bounded `JAVA_NESTED_EXECUTABLE_BODY_SKIPPED` findings if supported-looking API sites appear
+  there. This finding does not claim the nested code never executes.
+- Unbalanced or malformed complete-source class/method structure emits `JAVA_SOURCE_PARTIAL_PARSE`
+  and uses `java.frag` fallback where available.
+- Non-imported fully qualified type usages are an M4a limitation; referenced Java type counts cover
+  imported type names observed in the direct service method.
+- Observed Java pipeline accesses in the current fixtures total 73: 37 `READ` and 36 `WRITE`, with
+  no `REMOVE`. Scope counts are 34 root reads, 3 nested reads, 21 root writes, and 15 nested writes.
+- `pgp.services.decrypt:decryptAndVerify` contains two multiline
+  `IDataUtil .get(pc, "...KeyRingCollection")` calls. Because `pc` is assigned from
+  `pipeline.getCursor()`, both `publicKeyRingCollection` and `privateKeyRingCollection` are genuine
+  root pipeline reads even though they are not local `svc_sig` fields.
+- Current PGP Java Services contain no observed `Service.doInvoke` sites, so M4a adds no Java
+  service-call edges to `graphs/dependencies.dot` for the fixture baseline.
 
 This document records observed behavior only; it is not a compatibility claim.
