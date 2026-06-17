@@ -363,4 +363,127 @@ Not implemented in M3 hardening:
 
 ## Next Milestone Gate
 
-M4 or any later milestone must be explicitly approved before implementation.
+M4a deterministic Java Service analysis was explicitly approved and implemented.
+
+## M4a Deterministic Java Service Analysis
+
+Implemented in this milestone:
+
+- Analysis schema migration from `analysis.v5` to `analysis.v6`.
+- Java Service records integrated as `service_type=JAVA` services while preserving the FLOW Service
+  count separately.
+- Source-first generated Java source association from service namespace to `code/source`.
+- Matched service-method selection scoped to the generated service class.
+- Token-normalized comparison between complete source method bodies and sibling `java.frag` bodies.
+- Source consistency statuses:
+  `SOURCE_AND_FRAGMENT_MATCH`, `SOURCE_ONLY`, `FRAGMENT_ONLY`, `SOURCE_FRAGMENT_MISMATCH`,
+  `SOURCE_METHOD_NOT_FOUND`, `SOURCE_METHOD_AMBIGUOUS`, and `SOURCE_IDENTITY_MISMATCH`.
+- `java.frag` fallback for missing, mismatched, ambiguous, missing-method, or identity-mismatched
+  complete source.
+- Java import reconciliation from complete source and `node.idf` metadata with explicit mismatch
+  findings.
+- Referenced-type extraction from the matched method for explicitly imported types.
+- Method-scoped observed pipeline access extraction for `IDataUtil.get*`, `IDataUtil.put`, and
+  `IDataUtil.remove`, including literal keys, dynamic-key findings, and cursor scopes.
+- Narrow Java `Service.doInvoke` extraction for literal canonical targets, literal namespace/service
+  arguments, literal `NSName` construction, and local literal variables before reassignment.
+- Exact resolution of statically confirmed Java invocation targets against discovered FLOW and Java
+  services.
+- Java Service Markdown sections for source consistency, pipeline accesses, invocation sites,
+  imports, referenced types, findings, limitations, and source evidence.
+- Dependency DOT integration for statically confirmed Java invocation edges.
+- Tests for source statuses, fragment fallback, mismatch fallback, method ambiguity, method
+  isolation, comments/strings, helper isolation, dynamic keys, unknown cursor scope, remove,
+  static/dynamic/partially static Java invocation targets, FLOW and Java target resolution,
+  repeated-call aggregation, and stable deterministic output behavior.
+
+Verification baseline:
+
+- FLOW Services: 24.
+- Java Services: 11.
+- FLOW call occurrences: 108.
+- FLOW-derived unique service dependencies: 86.
+- Java static call occurrences: 0.
+- Java unique service dependencies: 0.
+- Flow maps: 265.
+- Mapping operations: 568.
+- Transformer bindings: 198.
+- Document Types: 7.
+- Document fields: 33.
+- Document reference occurrences: 12.
+- Unique document-to-document dependencies: 5.
+- Service-document dependencies: 7.
+- Java Service analyses: 11.
+- Source/fragment token matches: 11.
+- Java pipeline accesses: 73, split into 37 `READ`, 36 `WRITE`, and 0 `REMOVE`.
+- Java access scopes: 55 `ROOT_PIPELINE` and 18 `NESTED_IDATA`.
+- Java invocation occurrences in the current fixtures: 0.
+
+Corrected Java fixture decision:
+
+- `pgp.services.decrypt:decryptAndVerify` contains two multiline
+  `IDataUtil .get(pc, "...KeyRingCollection")` calls. `pc` is assigned from `pipeline.getCursor()`,
+  the complete source and `java.frag` agree token-wise, and the reads are not from a nested/local
+  `IData` object. They are therefore genuine observed root pipeline reads and are counted even
+  though declared signatures and observed Java accesses are separate evidence.
+
+Not implemented in M4a:
+
+- Broad Java external-effect classification.
+- Helper-body effect analysis.
+- Java compilation, execution, class loading, or runtime simulation.
+- Adapter parsers, trigger parsers, schedulers, process models, package dependency graphs, snapshot
+  diffing, Ollama integration, or M5 work.
+
+## Next Milestone Gate
+
+M4a acceptance remediation was explicitly approved after audit found method-signature authority and
+nested executable-body over-extraction issues.
+
+## M4a Acceptance Remediation
+
+Implemented in this remediation:
+
+- Complete-source Java Service authority now requires a direct generated-class method with the
+  exact service name, `static`, `void`, and exactly one `IData` parameter. The parameter may be
+  `IData` or `com.wm.data.IData`, with harmless annotations allowed.
+- Same-name methods with unsupported signatures emit
+  `JAVA_SOURCE_METHOD_SIGNATURE_UNSUPPORTED` and use `java.frag` fallback when available.
+- Multiple compatible same-name methods emit `JAVA_SOURCE_METHOD_AMBIGUOUS` and are not selected
+  arbitrarily.
+- Malformed or unbalanced complete-source class/method structure emits `JAVA_SOURCE_PARTIAL_PARSE`
+  and uses `java.frag` fallback when available.
+- Java API-looking sites inside lambda bodies, anonymous-class methods, and local-class bodies are
+  skipped as direct service evidence with bounded `JAVA_NESTED_EXECUTABLE_BODY_SKIPPED` findings.
+  Normal control-flow blocks remain analyzed.
+- CLI completion output now reports FLOW, Java, and total service counts; FLOW, Java static, Java
+  dynamic/partial, and total promoted call counts; and FLOW-derived, Java-derived, and total unique
+  dependency counts.
+- Fully qualified type usages without imports remain explicitly deferred in M4a; referenced-type
+  extraction covers imported types observed in the direct service method.
+
+Expected baseline remains unchanged:
+
+- FLOW Services: 24.
+- Java Services: 11.
+- FLOW call occurrences: 108.
+- FLOW-derived unique service dependencies: 86.
+- Java static call occurrences: 0.
+- Java unique service dependencies: 0.
+- Java Service analyses: 11.
+- Source/fragment token matches: 11.
+- Java pipeline accesses: 73, split into 37 `READ`, 36 `WRITE`, and 0 `REMOVE`.
+- Java access scopes: 34 root reads, 3 nested reads, 21 root writes, and 15 nested writes.
+
+Not implemented in M4a remediation:
+
+- Broad Java external-effect classification.
+- Helper-body effect analysis.
+- Fully qualified non-imported type-reference extraction.
+- Java compilation, execution, class loading, or runtime simulation.
+- Adapter parsers, trigger parsers, schedulers, process models, package dependency graphs, snapshot
+  diffing, Ollama integration, M4b, or M5 work.
+
+## Next Milestone Gate
+
+M4b or any later milestone requires explicit approval before implementation.

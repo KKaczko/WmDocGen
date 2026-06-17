@@ -60,7 +60,7 @@ def analyze(
         typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
     ] = None,
 ) -> None:
-    """Analyze supported FLOW Services and emit deterministic technical outputs."""
+    """Analyze supported services and emit deterministic technical outputs."""
     app_config = load_config(config)
     analysis = analyze_path(packages_path, app_config)
     output.mkdir(parents=True, exist_ok=True)
@@ -78,8 +78,23 @@ def analyze(
     )
     dot_path = write_dependency_dot(output, analysis)
     document_dot_path = write_document_dot(output, analysis)
+    flow_count = sum(1 for service in services if service.service_type.value == "FLOW")
+    java_count = sum(1 for service in services if service.service_type.value == "JAVA")
+    metrics = analysis.metrics
     typer.echo(
-        f"Analyzed {len(services)} FLOW service(s); wrote {output / 'analysis.json'}, "
-        f"{len(service_paths)} service markdown file(s), "
+        "Analyzed services:\n"
+        f"- FLOW: {flow_count}\n"
+        f"- Java: {java_count}\n"
+        f"- total: {len(services)}\n"
+        "Service call occurrences:\n"
+        f"- FLOW: {metrics.flow_call_occurrence_count}\n"
+        f"- Java static: {metrics.java_static_call_occurrence_count}\n"
+        f"- Java dynamic/partial: {metrics.java_dynamic_call_occurrence_count}\n"
+        f"- total promoted calls: {metrics.total_call_occurrence_count}\n"
+        "Unique service dependencies:\n"
+        f"- FLOW-derived: {metrics.flow_unique_dependency_count}\n"
+        f"- Java-derived: {metrics.java_unique_dependency_count}\n"
+        f"- total: {metrics.total_unique_dependency_count}\n"
+        f"Wrote {output / 'analysis.json'}, {len(service_paths)} service markdown file(s), "
         f"{len(document_paths)} document markdown file(s), {dot_path}, and {document_dot_path}."
     )

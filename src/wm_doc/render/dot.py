@@ -8,17 +8,17 @@ from wm_doc.ir import AnalysisResult, DocumentDependency
 
 def render_dependency_dot(analysis: AnalysisResult) -> str:
     analyzed = {
-        service.identity.full_name
+        service.identity.full_name: service.service_type.value.lower()
         for package in analysis.packages
         for service in package.services
     }
     targets = {dependency.target_service for dependency in analysis.unique_dependencies}
-    nodes = sorted(analyzed | targets, key=str.casefold)
+    nodes = sorted(set(analyzed) | targets, key=str.casefold)
     lines = ["digraph dependencies {", "  rankdir=LR;"]
     for node in nodes:
         attrs = [f'label="{_escape(node)}"']
         if node in analyzed:
-            attrs.append('kind="flow_service"')
+            attrs.append(f'kind="{analyzed[node]}_service"')
         else:
             attrs.append('kind="dependency_target"')
         lines.append(f"  {_node_id(node)} [{', '.join(attrs)}];")

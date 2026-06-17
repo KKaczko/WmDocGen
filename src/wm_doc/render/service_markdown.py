@@ -13,6 +13,11 @@ from wm_doc.ir import (
     DocumentReferenceOccurrence,
     FlowNode,
     FlowService,
+    JavaImport,
+    JavaInvocationOccurrence,
+    JavaPipelineAccess,
+    JavaServiceAnalysis,
+    JavaTypeReference,
     LiteralValue,
     MappingEndpoint,
     MappingOperation,
@@ -80,6 +85,42 @@ No description was declared in supported metadata.
 ### Unresolved Document References
 
 {{ render_document_references(unresolved_document_references) }}
+
+{% if service.java_analysis %}
+## Java Analysis
+
+### Source Consistency
+
+{{ render_java_source_consistency(service.java_analysis) }}
+
+### Observed Pipeline Reads
+
+{{ render_java_pipeline_accesses(java_reads) }}
+
+### Observed Pipeline Writes
+
+{{ render_java_pipeline_accesses(java_writes) }}
+
+### Observed Pipeline Removes
+
+{{ render_java_pipeline_accesses(java_removes) }}
+
+### Static Integration Server Calls
+
+{{ render_java_invocations(java_static_invocations) }}
+
+### Dynamic Invocation Sites
+
+{{ render_java_invocations(java_dynamic_invocations) }}
+
+### Declared Imports
+
+{{ render_java_imports(service.java_analysis.imports) }}
+
+### Referenced Java Types
+
+{{ render_java_types(service.java_analysis.referenced_types) }}
+{% endif %}
 
 ## FLOW Overview
 
@@ -168,10 +209,11 @@ No service-level findings.
 
 ## Analysis Limitations
 
-M2b extracts observed MAP copy, set, delete and transformer binding evidence with literal
-disclosure policies. It does not resolve mapped paths against document schemas, evaluate branch
-conditions, simulate loops or runtime state, resolve dynamic invocation targets, execute Java code,
-or connect to Integration Server.
+M4a extracts observed FLOW, mapping, document-reference, and Java Service source evidence with
+literal and free-text disclosure policies. It does not resolve mapped paths against document
+schemas, evaluate branch conditions, simulate loops or runtime state, infer dynamic Java invocation
+targets, promote nested Java executable bodies without a callback/control-flow model, execute Java
+code, compile Java source, or connect to Integration Server.
 """,
     trim_blocks=True,
     lstrip_blocks=True,
@@ -202,6 +244,11 @@ def render_service_markdown(service: FlowService) -> str:
     copy_operations = _operations_for_type(service, "COPY")
     set_operations = _operations_for_type(service, "SET")
     delete_operations = _operations_for_type(service, "DELETE")
+    java_reads = _java_accesses_for_kind(service.java_analysis, "READ")
+    java_writes = _java_accesses_for_kind(service.java_analysis, "WRITE")
+    java_removes = _java_accesses_for_kind(service.java_analysis, "REMOVE")
+    java_static_invocations = _java_invocations_for_static(service.java_analysis, True)
+    java_dynamic_invocations = _java_invocations_for_static(service.java_analysis, False)
     description_text = _text_display(service.description)
     return _TEMPLATE.render(
         service=service,
@@ -217,6 +264,11 @@ def render_service_markdown(service: FlowService) -> str:
         copy_operations=copy_operations,
         set_operations=set_operations,
         delete_operations=delete_operations,
+        java_reads=java_reads,
+        java_writes=java_writes,
+        java_removes=java_removes,
+        java_static_invocations=java_static_invocations,
+        java_dynamic_invocations=java_dynamic_invocations,
         flow_outline=_flow_outline(service.flow_tree),
         flow_count=lambda name: service.metrics.flow_node_counts.get(name, 0),
         mapping_count=lambda name: service.metrics.mapping_operation_type_counts.get(name, 0),
@@ -230,6 +282,11 @@ def render_service_markdown(service: FlowService) -> str:
         render_calls=_render_calls,
         render_mapping_operations=_render_mapping_operations,
         render_transformer_bindings=_render_transformer_bindings,
+        render_java_source_consistency=_render_java_source_consistency,
+        render_java_pipeline_accesses=_render_java_pipeline_accesses,
+        render_java_invocations=_render_java_invocations,
+        render_java_imports=_render_java_imports,
+        render_java_types=_render_java_types,
     )
 
 
@@ -265,6 +322,30 @@ def _operations_for_type(service: FlowService, operation_type: str) -> list[Mapp
         operation
         for operation in service.mapping_operations
         if operation.operation_type.value == operation_type
+    ]
+
+
+def _java_accesses_for_kind(
+    java_analysis: JavaServiceAnalysis | None, access_kind: str
+) -> list[JavaPipelineAccess]:
+    if java_analysis is None:
+        return []
+    return [
+        access
+        for access in java_analysis.pipeline_accesses
+        if access.access_kind.value == access_kind
+    ]
+
+
+def _java_invocations_for_static(
+    java_analysis: JavaServiceAnalysis | None, static: bool
+) -> list[JavaInvocationOccurrence]:
+    if java_analysis is None:
+        return []
+    return [
+        invocation
+        for invocation in java_analysis.invocation_occurrences
+        if (invocation.target_status.value == "STATIC_TARGET") == static
     ]
 
 
@@ -413,6 +494,116 @@ def _render_transformer_bindings(bindings: list[TransformerBinding]) -> str:
     if len(bindings) > MAX_MAPPING_ROWS:
         omitted = len(bindings) - MAX_MAPPING_ROWS
         lines.append(f"| ... | ... | ... | ... | {omitted} additional bindings omitted | ... |")
+    return "\n".join(lines) + "\n"
+
+
+def _render_java_source_consistency(java_analysis: JavaServiceAnalysis) -> str:
+    source_set = java_analysis.source_set
+    lines = [
+        "| Field | Value |",
+        "| --- | --- |",
+        f"| Status | `{source_set.status.value}` |",
+        f"| Parser mode | `{source_set.parser_mode.value}` |",
+        f"| Fragment kind | `{source_set.fragment_kind.value}` |",
+        f"| Complete source | `{source_set.complete_source_path or ''}` |",
+        f"| Fragment | `{source_set.fragment_path or ''}` |",
+        f"| Class | `{source_set.matched_class or ''}` |",
+        f"| Method | `{source_set.matched_method or ''}` |",
+        f"| Token match | `{source_set.token_match}` |",
+    ]
+    if source_set.method_range is not None:
+        method_range = source_set.method_range
+        lines.append(
+            "| Method range | "
+            f"`{method_range.start_line}:{method_range.start_column}-"
+            f"{method_range.end_line}:{method_range.end_column}` |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _render_java_pipeline_accesses(accesses: list[JavaPipelineAccess]) -> str:
+    if not accesses:
+        return "No Java pipeline accesses were extracted for this section.\n"
+    lines = [
+        "| Access | API | Key | Scope | Type | Evidence |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for access in accesses[:MAX_MAPPING_ROWS]:
+        lines.append(
+            "| "
+            f"`{access.id}` | "
+            f"`{access.api_form}` | "
+            f"`{_escape_table(access.field_key or '<dynamic>')}` | "
+            f"`{access.cursor_scope.value}` | "
+            f"`{access.evidenced_java_type or ''}` | "
+            f"`{_source_display(access.source.primary)}` |"
+        )
+    if len(accesses) > MAX_MAPPING_ROWS:
+        omitted = len(accesses) - MAX_MAPPING_ROWS
+        lines.append(f"| ... | ... | ... | ... | ... | {omitted} omitted |")
+    return "\n".join(lines) + "\n"
+
+
+def _render_java_invocations(invocations: list[JavaInvocationOccurrence]) -> str:
+    if not invocations:
+        return "No Java Integration Server invocation sites were extracted for this section.\n"
+    lines = [
+        "| Invocation | API | Status | Target | Resolved | Evidence |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for invocation in invocations[:MAX_MAPPING_ROWS]:
+        lines.append(
+            "| "
+            f"`{invocation.id}` | "
+            f"`{invocation.api_form}` | "
+            f"`{invocation.target_status.value}` | "
+            f"`{invocation.canonical_target or invocation.declared_target or ''}` | "
+            f"{invocation.resolved} | "
+            f"`{_source_display(invocation.source.primary)}` |"
+        )
+    if len(invocations) > MAX_MAPPING_ROWS:
+        omitted = len(invocations) - MAX_MAPPING_ROWS
+        lines.append(f"| ... | ... | ... | ... | ... | {omitted} omitted |")
+    return "\n".join(lines) + "\n"
+
+
+def _render_java_imports(imports: list[JavaImport]) -> str:
+    if not imports:
+        return "No Java imports were extracted.\n"
+    lines = [
+        "| Import | Provenance | Category | Evidence |",
+        "| --- | --- | --- | --- |",
+    ]
+    for java_import in imports[:MAX_MAPPING_ROWS]:
+        lines.append(
+            "| "
+            f"`{java_import.declaration}` | "
+            f"`{java_import.provenance.value}` | "
+            f"`{java_import.category.value}` | "
+            f"`{_source_display(java_import.source)}` |"
+        )
+    if len(imports) > MAX_MAPPING_ROWS:
+        lines.append(f"| ... | ... | ... | {len(imports) - MAX_MAPPING_ROWS} omitted |")
+    return "\n".join(lines) + "\n"
+
+
+def _render_java_types(references: list[JavaTypeReference]) -> str:
+    if not references:
+        return "No Java type references were extracted from the matched service method.\n"
+    lines = [
+        "| Type | Resolved Import | Category | Evidence |",
+        "| --- | --- | --- | --- |",
+    ]
+    for reference in references[:MAX_MAPPING_ROWS]:
+        lines.append(
+            "| "
+            f"`{reference.type_name}` | "
+            f"`{reference.resolved_import or ''}` | "
+            f"`{reference.category.value}` | "
+            f"`{_source_display(reference.source.primary)}` |"
+        )
+    if len(references) > MAX_MAPPING_ROWS:
+        lines.append(f"| ... | ... | ... | {len(references) - MAX_MAPPING_ROWS} omitted |")
     return "\n".join(lines) + "\n"
 
 
