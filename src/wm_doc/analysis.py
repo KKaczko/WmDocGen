@@ -55,6 +55,8 @@ from wm_doc.ir import (
     MapSchemaMetadata,
     PackageInventory,
     PipelinePath,
+    ServiceAnalysisStatus,
+    ServiceDescriptionStatus,
     ServiceDocumentDependency,
     ServiceDocumentUsageRole,
     ServiceIdentity,
@@ -75,7 +77,12 @@ from wm_doc.values import parse_values_file, scalar_value
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
 
 ANALYZABLE_FLOW_ARTIFACTS = {"flow_service", "flow_service_metadata_without_flow"}
-SERVICE_INDEX_ARTIFACTS = {"flow_service", "java_service"}
+SERVICE_INDEX_ARTIFACTS = {
+    "flow_service",
+    "flow_service_metadata_without_flow",
+    "java_service",
+    "opaque_service",
+}
 DOCUMENT_ARTIFACTS = {"document_type"}
 CALL_TAGS = {"INVOKE": CallType.INVOKE, "MAPINVOKE": CallType.MAPINVOKE}
 FLOW_NODE_TAGS = {
@@ -285,6 +292,18 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
                     all_findings.extend(service.java_analysis.findings)
                 service_classifications[service.identity.full_name] = service.classification
                 continue
+            if artifact.probable_type == "opaque_service":
+                service = _parse_opaque_service(
+                    scan_root,
+                    package.name,
+                    artifact,
+                    config,
+                    extraction_policy,
+                )
+                services.append(service)
+                pending_services.append(service)
+                service_classifications[service.identity.full_name] = service.classification
+                continue
             if artifact.probable_type not in ANALYZABLE_FLOW_ARTIFACTS:
                 continue
             service = _parse_flow_service(
@@ -483,9 +502,7 @@ def _build_service_index(packages: Iterable[PackageInventory]) -> dict[str, Serv
                 continue
             if artifact.identity is None or artifact.identity.full_name is None:
                 continue
-            service_type = (
-                ServiceType.FLOW if artifact.probable_type == "flow_service" else ServiceType.JAVA
-            )
+            service_type = _service_type_for_artifact(artifact.probable_type)
             identity = ServiceIdentity(
                 package=package.name,
                 namespace=artifact.identity.namespace or "",
@@ -495,9 +512,31 @@ def _build_service_index(packages: Iterable[PackageInventory]) -> dict[str, Serv
                 source=artifact.source,
             )
             index[identity.full_name] = ServiceSummary(
-                identity=identity, service_type=service_type, source=artifact.source
+                identity=identity,
+                service_type=service_type,
+                source_service_type=artifact.source_service_type,
+                analysis_status=(
+                    ServiceAnalysisStatus.OPAQUE
+                    if service_type == ServiceType.OPAQUE
+                    else (
+                        ServiceAnalysisStatus.PARTIAL
+                        if artifact.status != FindingStatus.SUPPORTED
+                        else ServiceAnalysisStatus.FULL
+                    )
+                ),
+                source=artifact.source,
             )
     return dict(sorted(index.items(), key=lambda item: item[0].casefold()))
+
+
+def _service_type_for_artifact(probable_type: str) -> ServiceType:
+    if probable_type in ANALYZABLE_FLOW_ARTIFACTS:
+        return ServiceType.FLOW
+    if probable_type == "java_service":
+        return ServiceType.JAVA
+    if probable_type == "opaque_service":
+        return ServiceType.OPAQUE
+    return ServiceType.UNKNOWN
 
 
 def _parse_document_type(
@@ -960,19 +999,18 @@ def _parse_flow_service(
         )
     )
     description: TextValue | None = None
+    description_status = ServiceDescriptionStatus.NO_DESCRIPTION
+    source_service_type = artifact.source_service_type
 
     try:
         values = parse_values_file(node_path)
-        description = _apply_free_text_policy(
-            _blank_to_none(scalar_value(values, "node_comment")),
-            "service_description",
-            SourceReference(
-                path=stable_relative_path(node_path, scan_root), artifact_type="node_comment"
-            ),
-            config,
-            "node_comment",
-        )
+        source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
         node_root = parse_xml_file(node_path)
+        description, description_status, description_findings = _service_description(
+            values, node_root, node_path, scan_root, config
+        )
+        findings.extend(description_findings)
+        findings.extend(_service_signature_metadata_findings(node_root, node_path, scan_root))
         signature = _parse_signature(node_root, node_path, scan_root)
     except (XmlParseError, XmlSecurityError) as exc:
         findings.append(_xml_finding(exc, node_path, scan_root, "node_ndf"))
@@ -1012,6 +1050,9 @@ def _parse_flow_service(
     classification = classify_service(identity.full_name, identity.name, config)
     return FlowService(
         identity=identity,
+        source_service_type=source_service_type,
+        analysis_status=_service_analysis_status(ServiceType.FLOW, findings),
+        description_status=description_status,
         description=description,
         signature=signature,
         classification=classification,
@@ -1047,19 +1088,18 @@ def _parse_java_service(
         )
     )
     description: TextValue | None = None
+    description_status = ServiceDescriptionStatus.NO_DESCRIPTION
+    source_service_type = artifact.source_service_type
 
     try:
         values = parse_values_file(node_path)
-        description = _apply_free_text_policy(
-            _blank_to_none(scalar_value(values, "node_comment")),
-            "service_description",
-            SourceReference(
-                path=stable_relative_path(node_path, scan_root), artifact_type="node_comment"
-            ),
-            config,
-            "node_comment",
-        )
+        source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
         node_root = parse_xml_file(node_path)
+        description, description_status, description_findings = _service_description(
+            values, node_root, node_path, scan_root, config
+        )
+        findings.extend(description_findings)
+        findings.extend(_service_signature_metadata_findings(node_root, node_path, scan_root))
         signature = _parse_signature(node_root, node_path, scan_root)
     except (XmlParseError, XmlSecurityError) as exc:
         findings.append(_xml_finding(exc, node_path, scan_root, "node_ndf"))
@@ -1077,12 +1117,77 @@ def _parse_java_service(
     return FlowService(
         identity=identity,
         service_type=ServiceType.JAVA,
+        source_service_type=source_service_type,
+        analysis_status=_service_analysis_status(ServiceType.JAVA, findings),
+        description_status=description_status,
         description=description,
         signature=signature,
         classification=classification,
         metrics=_metrics(java_calls, [], None, [], [], [], java_analysis),
         call_occurrences=java_calls,
         java_analysis=java_analysis,
+        extraction_policy=extraction_policy,
+        findings=findings,
+        source=artifact.source,
+    )
+
+
+def _parse_opaque_service(
+    scan_root: Path,
+    package_name: str,
+    artifact: ArtifactCandidate,
+    config: AppConfig,
+    extraction_policy: ExtractionPolicySnapshot,
+) -> FlowService:
+    identity = _service_identity(package_name, artifact)
+    service_dir = scan_root / artifact.relative_path
+    node_path = service_dir / "node.ndf"
+    findings: list[AnalysisFinding] = []
+    signature = ServiceSignature(
+        source=SourceReference(
+            path=stable_relative_path(node_path, scan_root), artifact_type="node_ndf"
+        )
+    )
+    description: TextValue | None = None
+    description_status = ServiceDescriptionStatus.NO_DESCRIPTION
+    source_service_type = artifact.source_service_type
+
+    try:
+        values = parse_values_file(node_path)
+        source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
+        node_root = parse_xml_file(node_path)
+        description, description_status, description_findings = _service_description(
+            values, node_root, node_path, scan_root, config
+        )
+        findings.extend(description_findings)
+        findings.extend(_service_signature_metadata_findings(node_root, node_path, scan_root))
+        signature = _parse_signature(node_root, node_path, scan_root)
+    except (XmlParseError, XmlSecurityError) as exc:
+        findings.append(_xml_finding(exc, node_path, scan_root, "node_ndf"))
+
+    findings.append(
+        AnalysisFinding(
+            status=FindingStatus.PARTIALLY_SUPPORTED,
+            code="OPAQUE_SERVICE_IMPLEMENTATION_NOT_ANALYZED",
+            message=(
+                "Service identity and common metadata were retained, but source service type "
+                f"{source_service_type or '<unknown>'!r} has no implementation-specific parser."
+            ),
+            source=_node_value_source(node_path, scan_root, "service_type", "svc_type"),
+            severity=FindingSeverity.INFO,
+        )
+    )
+    classification = classify_service(identity.full_name, identity.name, config)
+    return FlowService(
+        identity=identity,
+        service_type=ServiceType.OPAQUE,
+        source_service_type=source_service_type,
+        analysis_status=ServiceAnalysisStatus.OPAQUE,
+        description_status=description_status,
+        description=description,
+        signature=signature,
+        classification=classification,
+        metrics=AnalysisMetrics(),
         extraction_policy=extraction_policy,
         findings=findings,
         source=artifact.source,
@@ -1109,12 +1214,178 @@ def _service_identity(package_name: str, artifact: ArtifactCandidate) -> Service
     )
 
 
+def _normalized_scalar_value(values: dict[str, object], name: str) -> str | None:
+    value = scalar_value(values, name)
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _service_description(
+    values: dict[str, object],
+    node_root: etree._Element,
+    node_path: Path,
+    scan_root: Path,
+    config: AppConfig,
+) -> tuple[TextValue | None, ServiceDescriptionStatus, list[AnalysisFinding]]:
+    if "node_comment" not in values:
+        return None, ServiceDescriptionStatus.NO_DESCRIPTION, []
+    raw_value = values["node_comment"]
+    source = _node_named_child_source(
+        node_path, scan_root, "node_comment", "node_comment", node_root
+    )
+    if not isinstance(raw_value, str):
+        return (
+            None,
+            ServiceDescriptionStatus.DESCRIPTION_MALFORMED,
+            [
+                AnalysisFinding(
+                    status=FindingStatus.MALFORMED,
+                    code="SERVICE_DESCRIPTION_MALFORMED",
+                    message="Service node_comment metadata is not a scalar text value.",
+                    source=source,
+                    severity=FindingSeverity.WARNING,
+                )
+            ],
+        )
+    text = _blank_to_none(raw_value)
+    if text is None:
+        return None, ServiceDescriptionStatus.NO_DESCRIPTION, []
+    description = _apply_free_text_policy(
+        text,
+        "service_description",
+        source,
+        config,
+        "node_comment",
+    )
+    if description is None:
+        return None, ServiceDescriptionStatus.NO_DESCRIPTION, []
+    return description, _description_status(description), []
+
+
+def _description_status(description: TextValue) -> ServiceDescriptionStatus:
+    if description.disclosure == TextDisclosure.REDACTED:
+        return ServiceDescriptionStatus.DESCRIPTION_REDACTED
+    if description.disclosure == TextDisclosure.OMITTED:
+        return ServiceDescriptionStatus.DESCRIPTION_OMITTED
+    if description.disclosure == TextDisclosure.BLOCKED_SECRET:
+        return ServiceDescriptionStatus.DESCRIPTION_BLOCKED_SECRET
+    return ServiceDescriptionStatus.SOURCE_DESCRIPTION
+
+
+def _service_analysis_status(
+    service_type: ServiceType, findings: list[AnalysisFinding]
+) -> ServiceAnalysisStatus:
+    if service_type == ServiceType.OPAQUE:
+        return ServiceAnalysisStatus.OPAQUE
+    if any(
+        finding.status in {FindingStatus.MALFORMED, FindingStatus.UNRESOLVED}
+        or (
+            finding.status == FindingStatus.PARTIALLY_SUPPORTED
+            and finding.severity != FindingSeverity.INFO
+        )
+        for finding in findings
+    ):
+        return ServiceAnalysisStatus.PARTIAL
+    return ServiceAnalysisStatus.FULL
+
+
+def _service_signature_metadata_findings(
+    node_root: etree._Element, node_path: Path, scan_root: Path
+) -> list[AnalysisFinding]:
+    svc_sig = _first_named_child(node_root, "svc_sig")
+    if svc_sig is None:
+        return []
+    if svc_sig.tag != "record":
+        return [
+            _service_signature_partial_finding(
+                node_path,
+                scan_root,
+                svc_sig,
+                "Service signature metadata is not a record.",
+            )
+        ]
+    findings: list[AnalysisFinding] = []
+    for direction in ("sig_in", "sig_out"):
+        direction_record = _first_named_child(svc_sig, direction)
+        if direction_record is None:
+            continue
+        if direction_record.tag != "record":
+            findings.append(
+                _service_signature_partial_finding(
+                    node_path,
+                    scan_root,
+                    direction_record,
+                    f"Service signature {direction} metadata is not a record.",
+                )
+            )
+            continue
+        findings.extend(
+            _signature_record_metadata_findings(
+                direction_record, node_path, scan_root, f"svc_sig/{direction}"
+            )
+        )
+    return findings
+
+
+def _signature_record_metadata_findings(
+    record: etree._Element, node_path: Path, scan_root: Path, path_label: str
+) -> list[AnalysisFinding]:
+    rec_fields = _first_named_child(record, "rec_fields")
+    if rec_fields is None:
+        return []
+    if rec_fields.tag != "array":
+        return [
+            _service_signature_partial_finding(
+                node_path,
+                scan_root,
+                rec_fields,
+                f"Service signature {path_label}/rec_fields metadata is not an array.",
+            )
+        ]
+    findings: list[AnalysisFinding] = []
+    for index, child in enumerate([item for item in rec_fields if isinstance(item.tag, str)]):
+        if child.tag != "record":
+            findings.append(
+                _service_signature_partial_finding(
+                    node_path,
+                    scan_root,
+                    child,
+                    f"Service signature {path_label}/rec_fields[{index + 1}] is not a record.",
+                )
+            )
+            continue
+        findings.extend(
+            _signature_record_metadata_findings(
+                child, node_path, scan_root, f"{path_label}/rec_fields[{index + 1}]"
+            )
+        )
+    return findings
+
+
+def _service_signature_partial_finding(
+    node_path: Path, scan_root: Path, element: etree._Element, message: str
+) -> AnalysisFinding:
+    return AnalysisFinding(
+        status=FindingStatus.PARTIALLY_SUPPORTED,
+        code="SERVICE_SIGNATURE_METADATA_PARTIAL",
+        message=message,
+        source=_element_source(node_path, scan_root, element, "service_signature"),
+        severity=FindingSeverity.WARNING,
+    )
+
+
 def _parse_signature(
     node_root: etree._Element, node_path: Path, scan_root: Path
 ) -> ServiceSignature:
-    svc_sig = _record_child(node_root, "svc_sig")
-    source = _element_source(node_path, scan_root, svc_sig, "service_signature")
-    source = source.model_copy(update={"source_node": "/Values/record[@name='svc_sig']"})
+    svc_sig_node = _first_named_child(node_root, "svc_sig")
+    source = _element_source(node_path, scan_root, svc_sig_node, "service_signature")
+    if svc_sig_node is not None:
+        source = source.model_copy(
+            update={"source_node": _named_source_node(svc_sig_node, "svc_sig")}
+        )
+    svc_sig = svc_sig_node if svc_sig_node is not None and svc_sig_node.tag == "record" else None
     sig_in = _record_child(svc_sig, "sig_in")
     sig_out = _record_child(svc_sig, "sig_out")
     return ServiceSignature(
@@ -2358,6 +2629,9 @@ def _resolve_service_dependencies(
                 update={
                     "resolved": target_summary is not None,
                     "target_type": target_summary.service_type if target_summary else None,
+                    "target_analysis_status": (
+                        target_summary.analysis_status if target_summary else None
+                    ),
                     "target_classification": target_classification,
                 }
             )
@@ -2412,6 +2686,7 @@ def _aggregate_unique_dependencies(calls: list[CallOccurrence]) -> list[UniqueDe
                 dependency_kind=kind,
                 resolved=any(call.resolved for call in ordered),
                 target_type=first.target_type,
+                target_analysis_status=first.target_analysis_status,
                 target_classification=first.target_classification,
                 occurrence_count=len(ordered),
                 occurrence_ids=[call.id for call in ordered],
@@ -2432,6 +2707,14 @@ def _metrics(
 ) -> AnalysisMetrics:
     call_type_counts = Counter(call.call_type.value for call in calls)
     unique_kind_counts = Counter(dep.dependency_kind.value for dep in unique_dependencies)
+    resolved_call_target_type_counts = Counter(
+        call.target_type.value for call in calls if call.resolved and call.target_type is not None
+    )
+    resolved_dependency_target_type_counts = Counter(
+        dependency.target_type.value
+        for dependency in unique_dependencies
+        if dependency.resolved and dependency.target_type is not None
+    )
     mapping_type_counts = Counter(
         operation.operation_type.value for operation in mapping_operations
     )
@@ -2467,6 +2750,12 @@ def _metrics(
         java_dynamic_call_occurrence_count=java_metrics.java_dynamic_call_occurrence_count,
         total_call_occurrence_count=len(calls),
         unique_dependency_count=len(unique_dependencies),
+        resolved_call_occurrence_target_type_counts=dict(
+            sorted(resolved_call_target_type_counts.items())
+        ),
+        resolved_unique_dependency_target_type_counts=dict(
+            sorted(resolved_dependency_target_type_counts.items())
+        ),
         flow_unique_dependency_count=len(flow_dependencies),
         java_unique_dependency_count=len(java_dependencies),
         total_unique_dependency_count=len(unique_dependencies),
@@ -2529,6 +2818,15 @@ def _top_level_metrics(
     )
     flow_node_counts = Counter[str]()
     document_types = [document for package in packages for document in package.document_types]
+    services = [service for package in packages for service in package.services]
+    service_type_counts = Counter(service.service_type.value for service in services)
+    service_status_counts = Counter(service.analysis_status.value for service in services)
+    description_status_counts = Counter(
+        service.description_status.value for service in services
+    )
+    opaque_services = [
+        service for service in services if service.service_type == ServiceType.OPAQUE
+    ]
     java_status_counts = Counter(analysis.source_set.status.value for analysis in java_analyses)
     java_access_counts = Counter(access.access_kind.value for access in java_pipeline_accesses)
     java_scope_counts = Counter(access.cursor_scope.value for access in java_pipeline_accesses)
@@ -2553,6 +2851,18 @@ def _top_level_metrics(
     return metrics.model_copy(
         update={
             "flow_node_counts": dict(sorted(flow_node_counts.items())),
+            "service_type_counts": dict(sorted(service_type_counts.items())),
+            "service_analysis_status_counts": dict(sorted(service_status_counts.items())),
+            "service_description_status_counts": dict(
+                sorted(description_status_counts.items())
+            ),
+            "opaque_service_count": len(opaque_services),
+            "opaque_service_with_description_count": sum(
+                1 for service in opaque_services if service.description is not None
+            ),
+            "opaque_service_without_description_count": sum(
+                1 for service in opaque_services if service.description is None
+            ),
             "document_type_count": len(document_types),
             "document_field_count": sum(
                 _count_document_fields(document.fields) for document in document_types
@@ -2662,6 +2972,40 @@ def _value_child(element: etree._Element | None, name: str) -> str | None:
     return child.text
 
 
+def _node_value_source(
+    node_path: Path, scan_root: Path, artifact_type: str, value_name: str
+) -> SourceReference:
+    return SourceReference(
+        path=stable_relative_path(node_path, scan_root),
+        artifact_type=artifact_type,
+        source_node=f"/Values/value[@name='{value_name}']",
+    )
+
+
+def _node_named_child_source(
+    node_path: Path,
+    scan_root: Path,
+    artifact_type: str,
+    name: str,
+    node_root: etree._Element,
+) -> SourceReference:
+    child = _first_named_child(node_root, name)
+    if child is None:
+        return SourceReference(
+            path=stable_relative_path(node_path, scan_root),
+            artifact_type=artifact_type,
+        )
+    return SourceReference(
+        path=stable_relative_path(node_path, scan_root),
+        artifact_type=artifact_type,
+        source_node=_named_source_node(child, name),
+    )
+
+
+def _named_source_node(element: etree._Element, name: str) -> str:
+    return f"/Values/{element.tag}[@name='{name}']"
+
+
 def _record_child(element: etree._Element | None, name: str) -> etree._Element | None:
     return _direct_named_child(element, "record", name)
 
@@ -2677,6 +3021,15 @@ def _direct_named_child(
         return None
     for child in element:
         if isinstance(child.tag, str) and child.tag == tag and child.get("name") == name:
+            return child
+    return None
+
+
+def _first_named_child(element: etree._Element | None, name: str) -> etree._Element | None:
+    if element is None:
+        return None
+    for child in element:
+        if isinstance(child.tag, str) and child.get("name") == name:
             return child
     return None
 

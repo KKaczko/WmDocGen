@@ -486,4 +486,55 @@ Not implemented in M4a remediation:
 
 ## Next Milestone Gate
 
-M4b or any later milestone requires explicit approval before implementation.
+M5-lite opaque service inventory was explicitly approved after representative JDBC Adapter Service
+fixtures were found to be unavailable.
+
+## M5-lite Opaque Service Inventory
+
+Implemented in this milestone:
+
+- Analysis schema migration from `analysis.v6` to `analysis.v7`.
+- Generic discovery of parseable service-like `node.ndf` artifacts with an explicit top-level
+  unsupported `svc_type` as `service_type=OPAQUE` after surrounding whitespace is trimmed. Missing,
+  empty, whitespace-only, malformed, or non-scalar service-type metadata remains inventory-only.
+- Common metadata extraction for opaque services: namespace-path identity, trimmed source service
+  type, top-level `node_comment` under the existing free-text policy, `svc_sig` signatures, source
+  evidence, and bounded findings.
+- Service support statuses: `FULL`, `PARTIAL`, and `OPAQUE`.
+- Exact dependency resolution to opaque services when FLOW or Java call evidence names the opaque
+  service by canonical full name.
+- Service-only dependency DOT behavior retained; opaque services appear as service nodes, while no
+  database, messaging, scheduler, trigger, process, or external-resource nodes are introduced.
+- CLI, JSON, and Markdown output for service kind counts, support status, description status,
+  opaque services, and resolved opaque targets.
+- Deterministic service Markdown `Called By` sections derived from resolved static dependency
+  evidence.
+- Disclosure-safe malformed XML findings: parser diagnostics are sanitized before serialization,
+  relative `SourceReference.path` remains authoritative, and malformed XML findings omit
+  `source_node` when no XML structure is available.
+- Malformed common service descriptions report the actual `node_comment` Values child shape.
+- Synthetic tests for opaque service discovery, exact dependency resolution, disclosure policies,
+  malformed common metadata, secret safety, whitespace-only false positives, Java-to-opaque calls,
+  CLI metrics, incoming-call Markdown, and deterministic IDs.
+
+Verification baseline:
+
+- Current real fixtures contain 24 FLOW Services, 11 Java Services, and 0 opaque services.
+- All current fixture services are fully analyzed by supported FLOW or Java parsers.
+- Existing M4a FLOW, Java, mapping, document, dependency, Markdown, DOT, and fixture checksum
+  behavior remains stable apart from the schema and new zero-valued opaque metrics.
+
+Not implemented in M5-lite:
+
+- Detailed JDBC Adapter Service parsing.
+- SQL, table, view, stored-procedure, connection-alias, or database-resource extraction.
+- UM/JMS destination extraction, trigger semantics, scheduler cadence, process models, M4b Java
+  external-effect analysis, runtime execution, Integration Server connectivity, database
+  connectivity, Ollama, snapshot diffing, SVG/PNG rendering, or M6 work.
+
+## Next Milestone Gate
+
+M5-lite should receive a final acceptance re-audit after this remediation before any broader
+milestone planning.
+
+M4b, detailed JDBC/M5, M6, or any later milestone requires explicit approval before implementation.

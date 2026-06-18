@@ -1,6 +1,6 @@
 # Unsupported Constructs
 
-Unsupported or only partially supported in M4a:
+Unsupported or only partially supported in M5-lite:
 
 - Full FLOW execution semantics
 - Full MAP operation semantics beyond observed evidence extraction
@@ -21,7 +21,9 @@ Unsupported or only partially supported in M4a:
 - Broad Java external-effect classification
 - Java helper method/body effect analysis
 - Java execution, compilation, class loading, reflection modeling, or full semantic analysis
-- JDBC Adapter Services
+- Detailed JDBC Adapter Service parsing
+- JDBC SQL, table, view, procedure, connection-alias, or database-resource extraction
+- Adapter service family semantics beyond opaque service identity
 - Universal Messaging triggers
 - JMS triggers
 - Schedulers
@@ -29,9 +31,20 @@ Unsupported or only partially supported in M4a:
 - Runtime-only Integration Server configuration
 - Ollama documentation generation
 
+M5-lite keeps parseable service artifacts with explicit unsupported `svc_type` values, after
+surrounding whitespace is trimmed, as `OPAQUE` services. Missing, empty, whitespace-only,
+malformed, or non-scalar service-type metadata is not promoted to a service. Opaque services can
+resolve exact incoming calls and appear in the service dependency graph, but their
+implementation-specific body is not interpreted. The analyzer does not infer database, messaging,
+scheduler, trigger, process, file, network, or other external behavior from an opaque service.
+
 M3 extracts static `INVOKE` and `MAPINVOKE` targets when a literal `SERVICE` attribute is present.
 Targets that are not present in the analyzed snapshot are retained as unresolved call occurrences
 and unresolved unique dependencies with source evidence.
+
+Service dependency resolution is keyed by canonical `namespace:service` identity within the current
+analysis result. Duplicate canonical service names across packages are an existing limitation and
+are not redesigned in M5-lite; package-scoped resolution requires a separate milestone.
 
 M4a extracts a narrow, deterministic Java Service static-analysis slice. It associates Java Service
 metadata with generated source, checks the matched method against `java.frag` with normalized tokens,
@@ -91,6 +104,11 @@ serialization to supported free-text fields such as service descriptions, FLOW l
 labels, and mapping operation names. Raw attribute collections are filtered and are not an escape
 hatch for free-text values.
 
+Malformed XML parser messages are sanitized before canonical serialization. Findings keep the
+relative `SourceReference.path` and safe parser reason, but do not print absolute workspace paths,
+temporary directories, user names embedded in paths, file URLs, raw XML, or invented `source_node`
+values when the XML structure could not be parsed.
+
 Technical values remain visible when they are needed for static analysis. These include service
 targets, pipeline paths, branch switches, loop arrays, exit attributes, validation flags, and
 mapping endpoint attributes. Unknown attributes preserve name/source/presence and policy metadata,
@@ -101,10 +119,12 @@ secret-guard enabled state, and secret-guard strategy. This does not add support
 default/fixed-value extraction; those values remain deferred and are treated as unsupported metadata
 if encountered.
 
-Java Markdown pages render source consistency, declared signatures, observed pipeline accesses,
-Java invocation sites, imports, referenced types, findings, and source evidence. They do not print
-complete Java bodies, decoded `java.frag` bodies, raw token streams, arbitrary Java literals, or
-absolute local paths.
+Service Markdown pages render analysis support status and a bounded incoming `Called By` section
+from resolved static dependency evidence. Opaque service pages state that the service was identified
+but implementation-specific analysis was not performed. Java Markdown pages render source
+consistency, declared signatures, observed pipeline accesses, Java invocation sites, imports,
+referenced types, findings, and source evidence. They do not print complete Java bodies, decoded
+`java.frag` bodies, raw token streams, arbitrary Java literals, or absolute local paths.
 
 Known disclosure limitations:
 

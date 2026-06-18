@@ -146,7 +146,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v6"
+    assert analysis.schema_version == "analysis.v7"
     assert analysis.metrics.call_occurrence_count == 108
     assert analysis.metrics.flow_call_occurrence_count == 108
     assert analysis.metrics.java_static_call_occurrence_count == 0
@@ -162,6 +162,16 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert analysis.metrics.unique_dependency_kind_counts == {
         "INVOKES": 61,
         "USES_TRANSFORMER": 25,
+    }
+    assert analysis.metrics.service_type_counts == {"FLOW": 24, "JAVA": 11}
+    assert analysis.metrics.opaque_service_count == 0
+    assert analysis.metrics.opaque_service_with_description_count == 0
+    assert analysis.metrics.opaque_service_without_description_count == 0
+    assert analysis.metrics.service_analysis_status_counts == {"FULL": 35}
+    assert analysis.metrics.resolved_call_occurrence_target_type_counts == {"FLOW": 25, "JAVA": 24}
+    assert analysis.metrics.resolved_unique_dependency_target_type_counts == {
+        "FLOW": 25,
+        "JAVA": 20,
     }
     assert analysis.metrics.resolved_unique_dependency_count == 45
     assert analysis.metrics.unresolved_unique_dependency_count == 41
@@ -617,7 +627,7 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     assert "## Transformer Call Occurrences" in markdown
     assert "<redacted:literal>" in markdown
     assert "`OK`" not in markdown
-    assert "M4a extracts observed FLOW, mapping, document-reference, and Java Service" in markdown
+    assert "M5-lite extracts observed FLOW, mapping, document-reference, Java Service" in markdown
 
 
 def test_deterministic_analysis_json_markdown_and_dot() -> None:
@@ -663,7 +673,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v6" in payload
+    assert "analysis.v7" in payload
     assert "## Disclosure Policies" in document_markdown
     assert "- Free text mode: include" in document_markdown
     assert "- Literal mode: redact" in document_markdown

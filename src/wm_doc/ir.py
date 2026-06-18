@@ -36,8 +36,24 @@ class Confidence(StrEnum):
 class ServiceType(StrEnum):
     FLOW = "FLOW"
     JAVA = "JAVA"
+    OPAQUE = "OPAQUE"
     SPECIFICATION = "SPECIFICATION"
     UNKNOWN = "UNKNOWN"
+
+
+class ServiceAnalysisStatus(StrEnum):
+    FULL = "FULL"
+    PARTIAL = "PARTIAL"
+    OPAQUE = "OPAQUE"
+
+
+class ServiceDescriptionStatus(StrEnum):
+    SOURCE_DESCRIPTION = "SOURCE_DESCRIPTION"
+    NO_DESCRIPTION = "NO_DESCRIPTION"
+    DESCRIPTION_REDACTED = "DESCRIPTION_REDACTED"
+    DESCRIPTION_OMITTED = "DESCRIPTION_OMITTED"
+    DESCRIPTION_BLOCKED_SECRET = "DESCRIPTION_BLOCKED_SECRET"
+    DESCRIPTION_MALFORMED = "DESCRIPTION_MALFORMED"
 
 
 class CallType(StrEnum):
@@ -681,6 +697,7 @@ class CallOccurrence(BaseModel):
     structural_path: str
     resolved: bool
     target_type: ServiceType | None = None
+    target_analysis_status: ServiceAnalysisStatus | None = None
     target_classification: ClassificationResult
     source: SourceReference
 
@@ -694,6 +711,7 @@ class UniqueDependency(BaseModel):
     dependency_kind: DependencyKind
     resolved: bool
     target_type: ServiceType | None = None
+    target_analysis_status: ServiceAnalysisStatus | None = None
     target_classification: ClassificationResult
     occurrence_count: int
     occurrence_ids: list[str] = Field(default_factory=list)
@@ -709,6 +727,14 @@ class AnalysisMetrics(BaseModel):
     java_dynamic_call_occurrence_count: int = 0
     total_call_occurrence_count: int = 0
     unique_dependency_count: int = 0
+    service_type_counts: dict[str, int] = Field(default_factory=dict)
+    service_analysis_status_counts: dict[str, int] = Field(default_factory=dict)
+    service_description_status_counts: dict[str, int] = Field(default_factory=dict)
+    opaque_service_count: int = 0
+    opaque_service_with_description_count: int = 0
+    opaque_service_without_description_count: int = 0
+    resolved_call_occurrence_target_type_counts: dict[str, int] = Field(default_factory=dict)
+    resolved_unique_dependency_target_type_counts: dict[str, int] = Field(default_factory=dict)
     flow_unique_dependency_count: int = 0
     java_unique_dependency_count: int = 0
     total_unique_dependency_count: int = 0
@@ -752,6 +778,8 @@ class ServiceSummary(BaseModel):
 
     identity: ServiceIdentity
     service_type: ServiceType
+    source_service_type: str | None = None
+    analysis_status: ServiceAnalysisStatus = ServiceAnalysisStatus.FULL
     source: SourceReference
 
 
@@ -760,6 +788,9 @@ class FlowService(BaseModel):
 
     identity: ServiceIdentity
     service_type: ServiceType = ServiceType.FLOW
+    source_service_type: str | None = None
+    analysis_status: ServiceAnalysisStatus = ServiceAnalysisStatus.FULL
+    description_status: ServiceDescriptionStatus = ServiceDescriptionStatus.NO_DESCRIPTION
     description: TextValue | None = None
     signature: ServiceSignature
     classification: ClassificationResult
@@ -793,7 +824,7 @@ class AnalyzedPackage(BaseModel):
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "analysis.v6"
+    schema_version: str = "analysis.v7"
     tool_version: str
     packages: list[AnalyzedPackage] = Field(default_factory=list)
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
@@ -838,6 +869,7 @@ class ArtifactCandidate(BaseModel):
 
     relative_path: str
     probable_type: str
+    source_service_type: str | None = None
     files: list[ArtifactFile] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     confidence: Confidence

@@ -267,7 +267,7 @@ def _namespace_artifact(
     if node_path.exists():
         try:
             values = parse_values_file(node_path)
-            svc_type = scalar_value(values, "svc_type")
+            svc_type = _normalized_svc_type(values)
             if svc_type is not None:
                 evidence.append(f"node.ndf svc_type={svc_type}.")
             node_pkg = _find_node_package(values)
@@ -298,7 +298,7 @@ def _namespace_artifact(
             probable_type = "java_frag_without_node"
             parser_responsibility = "JavaMetadataReporter"
 
-    svc_type = scalar_value(values, "svc_type") if values else None
+    svc_type = _normalized_svc_type(values) if values else None
     if svc_type == "flow" and not flow_path.exists():
         status = FindingStatus.PARTIALLY_SUPPORTED
         probable_type = "flow_service_metadata_without_flow"
@@ -328,6 +328,7 @@ def _namespace_artifact(
         ArtifactCandidate(
             relative_path=stable_relative_path(artifact_dir, scan_root),
             probable_type=probable_type,
+            source_service_type=svc_type,
             files=sorted(
                 [_artifact_file(file, scan_root, active=True) for file in files],
                 key=lambda item: (FILE_ROLE_ORDER.get(Path(item.path).name, 99), item.path),
@@ -350,7 +351,7 @@ def _namespace_artifact(
 def _classify_from_values(
     values: dict[str, object], has_flow: bool, has_java: bool
 ) -> tuple[str, str, Confidence]:
-    svc_type = scalar_value(values, "svc_type")
+    svc_type = _normalized_svc_type(values)
     if svc_type == "flow":
         return (
             "flow_service",
@@ -365,10 +366,20 @@ def _classify_from_values(
         )
     if svc_type == "spec":
         return ("specification", "SpecificationMetadataParser", Confidence.HIGH)
+    if svc_type:
+        return ("opaque_service", "OpaqueServiceMetadataParser", Confidence.MEDIUM)
     record = record_value(values, "record")
     if record is not None and scalar_value(record, "node_type") == "record":
         return ("document_type", "DocumentTypeMetadataParser", Confidence.MEDIUM)
     return ("unknown_namespace_artifact", "UnknownArtifactReporter", Confidence.LOW)
+
+
+def _normalized_svc_type(values: dict[str, object]) -> str | None:
+    svc_type = scalar_value(values, "svc_type")
+    if svc_type is None:
+        return None
+    normalized = svc_type.strip()
+    return normalized or None
 
 
 def _backup_artifact(backup: Path, package_root: Path, scan_root: Path) -> ArtifactCandidate:

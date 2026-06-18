@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
+from typer.testing import CliRunner
+
 from wm_doc.analysis import analyze_path
+from wm_doc.cli import app
 from wm_doc.config import (
     DEFAULT_CONFIG,
     AppConfig,
@@ -15,7 +19,7 @@ from wm_doc.discovery import scan_path
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.document_markdown import render_document_markdown
 from wm_doc.render.dot import render_dependency_dot, render_document_dot
-from wm_doc.render.service_markdown import render_service_markdown
+from wm_doc.render.service_markdown import render_service_markdown, write_service_markdown
 
 
 def test_unknown_flow_element_finding(tmp_path) -> None:
@@ -78,6 +82,611 @@ def test_unresolved_invocation_target_is_retained(tmp_path) -> None:
     assert service.call_occurrences[0].resolved is False
     assert service.unique_dependencies[0].target_service == "external.pkg:missing"
     assert service.unique_dependencies[0].resolved is False
+
+
+def test_opaque_service_common_metadata_is_preserved_without_body_analysis(tmp_path) -> None:
+    service_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="selectCustomer")
+    _write_opaque_node(
+        service_dir / "node.ndf",
+        svc_type="customAdapter",
+        comment="Adapter service description",
+        signature_fields="""\
+      <record>
+        <value name="field_name">customerId</value>
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+      </record>""",
+    )
+
+    service = analyze_path(tmp_path, DEFAULT_CONFIG).packages[0].services[0]
+
+    assert service.identity.full_name == "pkg.adapter:selectCustomer"
+    assert service.service_type == "OPAQUE"
+    assert service.source_service_type == "customAdapter"
+    assert service.analysis_status == "OPAQUE"
+    assert service.description_status == "SOURCE_DESCRIPTION"
+    assert service.description is not None
+    assert service.description.value == "Adapter service description"
+    assert [field.name for field in service.signature.inputs] == ["customerId"]
+    assert service.flow_tree is None
+    assert service.java_analysis is None
+    assert service.call_occurrences == []
+    assert service.unique_dependencies == []
+    assert any(
+        finding.code == "OPAQUE_SERVICE_IMPLEMENTATION_NOT_ANALYZED"
+        and finding.severity == "INFO"
+        for finding in service.findings
+    )
+
+
+def test_opaque_service_resolves_as_exact_call_target(tmp_path) -> None:
+    caller_dir = _service_dir(tmp_path, namespace="pkg.flow", name="caller")
+    _write_node(caller_dir / "node.ndf")
+    (caller_dir / "flow.xml").write_text(
+        """<FLOW VERSION="3.0" CLEANUP="true">
+<INVOKE SERVICE="pkg.adapter:sharedName" />
+<INVOKE SERVICE="pkg.other:sharedName" />
+</FLOW>""",
+        encoding="utf-8",
+    )
+    opaque_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="sharedName")
+    _write_opaque_node(opaque_dir / "node.ndf", svc_type="customAdapter")
+    other_dir = _service_dir(tmp_path, namespace="pkg.other", name="sharedName")
+    _write_node(other_dir / "node.ndf")
+    (other_dir / "flow.xml").write_text(
+        """<FLOW VERSION="3.0" CLEANUP="true"></FLOW>""", encoding="utf-8"
+    )
+
+    caller = next(
+        service
+        for service in analyze_path(tmp_path, DEFAULT_CONFIG).packages[0].services
+        if service.identity.full_name == "pkg.flow:caller"
+    )
+    by_target = {call.target: call for call in caller.call_occurrences}
+
+    assert by_target["pkg.adapter:sharedName"].resolved is True
+    assert by_target["pkg.adapter:sharedName"].target_type == "OPAQUE"
+    assert by_target["pkg.adapter:sharedName"].target_analysis_status == "OPAQUE"
+    assert by_target["pkg.other:sharedName"].resolved is True
+    assert by_target["pkg.other:sharedName"].target_type == "FLOW"
+    assert {
+        dependency.target_service: dependency.target_analysis_status
+        for dependency in caller.unique_dependencies
+    } == {
+        "pkg.adapter:sharedName": "OPAQUE",
+        "pkg.other:sharedName": "FULL",
+    }
+    dot = render_dependency_dot(analyze_path(tmp_path, DEFAULT_CONFIG))
+    assert 'kind="opaque_service"' in dot
+    assert "pkg.adapter:sharedName" in dot
+
+
+def test_opaque_service_disclosure_and_secret_guard(tmp_path) -> None:
+    marker = "jdbc:wm://host.example:5555 password=hunter2"
+    service_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="secretish")
+    _write_opaque_node(
+        service_dir / "node.ndf",
+        svc_type="customAdapter",
+        comment=marker,
+        extra_values=f"<value name=\"connectionConfig\">{marker}</value>",
+    )
+
+    include_analysis = analyze_path(
+        tmp_path,
+        _config(free_text_mode=ExtractionMode.INCLUDE),
+    )
+    include_service = include_analysis.packages[0].services[0]
+    assert include_service.description_status == "DESCRIPTION_BLOCKED_SECRET"
+    assert marker not in render_analysis_json(include_analysis)
+    assert marker not in render_service_markdown(include_service)
+    assert marker not in render_dependency_dot(include_analysis)
+
+    runner = CliRunner()
+    output_dir = tmp_path / "out"
+    result = runner.invoke(app, ["analyze", str(tmp_path), "--output", str(output_dir)])
+    assert result.exit_code == 0
+    assert marker not in result.output
+
+    redacted = analyze_path(
+        tmp_path,
+        _config(free_text_mode=ExtractionMode.REDACT),
+    ).packages[0].services[0]
+    omitted = analyze_path(
+        tmp_path,
+        _config(free_text_mode=ExtractionMode.OMIT),
+    ).packages[0].services[0]
+    assert redacted.description_status == "DESCRIPTION_BLOCKED_SECRET"
+    assert omitted.description_status == "DESCRIPTION_OMITTED"
+
+
+def test_opaque_service_malformed_common_metadata_findings(tmp_path) -> None:
+    service_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="broken")
+    _write_opaque_node(
+        service_dir / "node.ndf",
+        svc_type="customAdapter",
+        comment_xml="<record name=\"node_comment\" />",
+        signature_fields="<value name=\"rec_fields\">not-array</value>",
+    )
+
+    service = analyze_path(tmp_path, DEFAULT_CONFIG).packages[0].services[0]
+    codes = {finding.code for finding in service.findings}
+
+    assert service.description is None
+    assert service.description_status == "DESCRIPTION_MALFORMED"
+    assert "SERVICE_DESCRIPTION_MALFORMED" in codes
+    assert "SERVICE_SIGNATURE_METADATA_PARTIAL" in codes
+
+
+def test_opaque_dependency_ids_are_stable_with_unrelated_service_insertion(
+    tmp_path,
+) -> None:
+    caller_dir = _service_dir(tmp_path, namespace="pkg.flow", name="caller")
+    _write_node(caller_dir / "node.ndf")
+    (caller_dir / "flow.xml").write_text(
+        """<FLOW VERSION="3.0" CLEANUP="true">
+<INVOKE SERVICE="pkg.adapter:target" />
+</FLOW>""",
+        encoding="utf-8",
+    )
+    target_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="target")
+    _write_opaque_node(target_dir / "node.ndf", svc_type="customAdapter")
+
+    original = analyze_path(tmp_path, DEFAULT_CONFIG)
+    original_dependency = next(
+        dependency
+        for dependency in original.unique_dependencies
+        if dependency.target_service == "pkg.adapter:target"
+    )
+
+    unrelated_dir = _service_dir(tmp_path, namespace="pkg.unrelated", name="inserted")
+    _write_opaque_node(unrelated_dir / "node.ndf", svc_type="customAdapter")
+    updated = analyze_path(tmp_path, DEFAULT_CONFIG)
+    updated_dependency = next(
+        dependency
+        for dependency in updated.unique_dependencies
+        if dependency.target_service == "pkg.adapter:target"
+    )
+
+    assert updated_dependency.id == original_dependency.id
+    assert updated_dependency.occurrence_ids == original_dependency.occurrence_ids
+
+
+def test_svc_type_normalization_and_false_positive_matrix(tmp_path) -> None:
+    flow_dir = _service_dir(tmp_path, namespace="pkg.flow", name="flowService")
+    _write_raw_node(
+        flow_dir / "node.ndf",
+        """<Values version="2.0">
+  <value name="svc_type"> flow </value>
+  <record name="svc_sig">
+    <record name="sig_in"><array name="rec_fields" type="record" depth="1" /></record>
+    <record name="sig_out"><array name="rec_fields" type="record" depth="1" /></record>
+  </record>
+</Values>""",
+    )
+    (flow_dir / "flow.xml").write_text(
+        """<FLOW VERSION="3.0" CLEANUP="true"></FLOW>""",
+        encoding="utf-8",
+    )
+    _write_java_service(
+        tmp_path,
+        class_name="JavaType",
+        service_name="javaService",
+        body="IDataCursor pc = pipeline.getCursor(); pc.destroy();",
+        svc_type=" java ",
+    )
+    opaque_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="opaqueService")
+    _write_opaque_node(opaque_dir / "node.ndf", svc_type=" customAdapter ")
+
+    for namespace, name, body in (
+        ("pkg.false", "empty", ""),
+        ("pkg.false", "blank", "<value name=\"svc_type\"></value>"),
+        ("pkg.false", "spaces", "<value name=\"svc_type\">   </value>"),
+        ("pkg.false", "tabs", "<value name=\"svc_type\">\t\n  </value>"),
+        ("pkg.false", "commentOnly", "<value name=\"node_comment\">note</value>"),
+        ("pkg.false", "arbitrary", "<value name=\"unknownConfig\">secretish</value>"),
+        ("pkg.false", "folderNode", "<value name=\"node_type\">folder</value>"),
+        ("pkg.false", "recordSvcType", "<record name=\"svc_type\" />"),
+        ("pkg.spec", "iface", "<value name=\"svc_type\"> spec </value>"),
+    ):
+        artifact_dir = _service_dir(tmp_path, namespace=namespace, name=name)
+        _write_raw_node(artifact_dir / "node.ndf", f"<Values version=\"2.0\">{body}</Values>")
+    malformed_dir = _service_dir(tmp_path, namespace="pkg.false", name="malformed")
+    (malformed_dir / "node.ndf").write_text(
+        """<Values version="2.0"><value name="svc_type">customAdapter""",
+        encoding="utf-8",
+    )
+    document_dir = _document_dir(tmp_path, "pkg.docs", "Customer")
+    _write_document_node(
+        document_dir / "node.ndf",
+        "pkg.docs:Customer",
+        """
+      <record javaclass="com.wm.util.Values">
+        <value name="field_name">id</value>
+        <value name="field_type">string</value>
+        <value name="field_dim">0</value>
+      </record>""",
+    )
+
+    analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
+    services = {
+        service.identity.full_name: service
+        for package in analysis.packages
+        for service in package.services
+    }
+
+    assert set(services) == {
+        "pkg.adapter:opaqueService",
+        "pkg.flow:flowService",
+        "pkg.services.JavaType:javaService",
+    }
+    assert services["pkg.flow:flowService"].service_type == "FLOW"
+    assert services["pkg.flow:flowService"].source_service_type == "flow"
+    assert services["pkg.services.JavaType:javaService"].service_type == "JAVA"
+    assert services["pkg.services.JavaType:javaService"].source_service_type == "java"
+    assert services["pkg.adapter:opaqueService"].service_type == "OPAQUE"
+    assert services["pkg.adapter:opaqueService"].source_service_type == "customAdapter"
+    assert analysis.metrics.service_type_counts == {"FLOW": 1, "JAVA": 1, "OPAQUE": 1}
+    assert analysis.metrics.opaque_service_count == 1
+    assert any(
+        finding.code == "XML_MALFORMED"
+        for package in analysis.packages
+        for finding in package.findings
+    )
+
+    dot = render_dependency_dot(analysis)
+    markdown_paths = write_service_markdown(tmp_path / "markdown", list(services.values()))
+    combined_markdown_names = "\n".join(path.name for path in markdown_paths)
+    for false_positive in (
+        "empty",
+        "blank",
+        "spaces",
+        "tabs",
+        "commentOnly",
+        "arbitrary",
+        "folderNode",
+        "recordSvcType",
+        "malformed",
+    ):
+        assert false_positive not in dot
+        assert false_positive not in combined_markdown_names
+
+
+def test_service_signature_source_points_to_actual_metadata_shape(tmp_path) -> None:
+    record_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="recordSig")
+    _write_opaque_node(record_dir / "node.ndf", svc_type="customAdapter")
+    scalar_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="scalarSig")
+    _write_raw_node(
+        scalar_dir / "node.ndf",
+        """<Values version="2.0">
+  <value name="svc_type">customAdapter</value>
+  <value name="svc_sig">not-a-record</value>
+</Values>""",
+    )
+    array_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="arraySig")
+    _write_raw_node(
+        array_dir / "node.ndf",
+        """<Values version="2.0">
+  <value name="svc_type">customAdapter</value>
+  <array name="svc_sig" type="record" depth="1"><record /></array>
+</Values>""",
+    )
+    missing_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="missingSig")
+    _write_raw_node(
+        missing_dir / "node.ndf",
+        """<Values version="2.0">
+  <value name="svc_type">customAdapter</value>
+</Values>""",
+    )
+    malformed_child_dir = _service_dir(
+        tmp_path, namespace="pkg.adapter", name="malformedChildSig"
+    )
+    _write_raw_node(
+        malformed_child_dir / "node.ndf",
+        """<Values version="2.0">
+  <value name="svc_type">customAdapter</value>
+  <record name="svc_sig">
+    <record name="sig_in"><value name="rec_fields">not-array</value></record>
+  </record>
+</Values>""",
+    )
+
+    services = {
+        service.identity.name: service
+        for package in analyze_path(tmp_path, DEFAULT_CONFIG).packages
+        for service in package.services
+    }
+
+    assert services["recordSig"].signature.source.source_node == (
+        "/Values/record[@name='svc_sig']"
+    )
+    assert services["scalarSig"].signature.source.source_node == (
+        "/Values/value[@name='svc_sig']"
+    )
+    assert services["arraySig"].signature.source.source_node == (
+        "/Values/array[@name='svc_sig']"
+    )
+    assert services["missingSig"].signature.source.source_node is None
+    for name in ("scalarSig", "arraySig"):
+        assert any(
+            finding.code == "SERVICE_SIGNATURE_METADATA_PARTIAL"
+            for finding in services[name].findings
+        )
+    malformed_finding = next(
+        finding
+        for finding in services["malformedChildSig"].findings
+        if finding.code == "SERVICE_SIGNATURE_METADATA_PARTIAL"
+    )
+    assert services["malformedChildSig"].signature.source.source_node == (
+        "/Values/record[@name='svc_sig']"
+    )
+    assert malformed_finding.source.xml_path is not None
+    assert "value" in malformed_finding.source.xml_path
+
+
+def test_flow_and_java_calls_to_opaque_resolve_cli_metrics_and_called_by(
+    tmp_path,
+) -> None:
+    secret_marker = "password=opaque-do-not-render"
+    target_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="target")
+    _write_opaque_node(
+        target_dir / "node.ndf",
+        svc_type="customAdapter",
+        comment="Opaque target summary",
+        extra_values=f"<value name=\"connectionConfig\">{secret_marker}</value>",
+    )
+    orphan_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="orphan")
+    _write_opaque_node(orphan_dir / "node.ndf", svc_type="customAdapter")
+    flow_dir = _service_dir(tmp_path, namespace="pkg.flow", name="caller")
+    _write_node(flow_dir / "node.ndf")
+    (flow_dir / "flow.xml").write_text(
+        """<FLOW VERSION="3.0" CLEANUP="true">
+<INVOKE SERVICE="pkg.adapter:target" />
+<INVOKE SERVICE="pkg.adapter:target" />
+</FLOW>""",
+        encoding="utf-8",
+    )
+    _write_java_service(
+        tmp_path,
+        class_name="JavaCaller",
+        service_name="javaCaller",
+        body='Service.doInvoke("pkg.adapter", "target", pipeline);',
+    )
+
+    analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
+    services = {
+        service.identity.full_name: service
+        for package in analysis.packages
+        for service in package.services
+    }
+    flow_caller = services["pkg.flow:caller"]
+    java_caller = services["pkg.services.JavaCaller:javaCaller"]
+
+    assert flow_caller.unique_dependencies[0].target_analysis_status == "OPAQUE"
+    assert flow_caller.unique_dependencies[0].occurrence_count == 2
+    java_call = java_caller.call_occurrences[0]
+    assert java_call.target == "pkg.adapter:target"
+    assert java_call.target_type == "OPAQUE"
+    assert java_call.target_analysis_status == "OPAQUE"
+    assert analysis.metrics.service_type_counts == {"FLOW": 1, "JAVA": 1, "OPAQUE": 2}
+    assert analysis.metrics.service_analysis_status_counts == {"FULL": 2, "OPAQUE": 2}
+    assert analysis.metrics.opaque_service_with_description_count == 1
+    assert analysis.metrics.opaque_service_without_description_count == 1
+    assert analysis.metrics.resolved_call_occurrence_target_type_counts["OPAQUE"] == 3
+    assert analysis.metrics.resolved_unique_dependency_target_type_counts["OPAQUE"] == 2
+
+    output_dir = tmp_path / "cli-out"
+    result = CliRunner().invoke(app, ["analyze", str(tmp_path), "--output", str(output_dir)])
+    assert result.exit_code == 0
+    for expected_line in (
+        "- FLOW: 1",
+        "- Java: 1",
+        "- Opaque: 2",
+        "- full: 2",
+        "- opaque: 2",
+        "- with source descriptions: 1",
+        "- without source descriptions: 1",
+    ):
+        assert expected_line in result.output
+    assert secret_marker not in result.output
+    assert secret_marker not in render_analysis_json(analysis)
+    assert secret_marker not in render_dependency_dot(analysis)
+
+    markdown_paths = write_service_markdown(tmp_path / "service-md", list(services.values()))
+    rendered_markdown = {path.name: path.read_text(encoding="utf-8") for path in markdown_paths}
+    target_markdown = rendered_markdown["pkg.adapter_target.md"]
+    orphan_markdown = rendered_markdown["pkg.adapter_orphan.md"]
+    assert "## Called By" in target_markdown
+    assert "pkg.flow:caller" in target_markdown
+    assert "pkg.services.JavaCaller:javaCaller" in target_markdown
+    assert "| 2 | True | `OPAQUE` | `pkg.flow:caller` |" in target_markdown
+    assert "| 1 | True | `OPAQUE` | `pkg.services.JavaCaller:javaCaller` |" in target_markdown
+    assert "No incoming static service calls target this service." in orphan_markdown
+    assert secret_marker not in target_markdown
+
+
+def test_malformed_xml_findings_are_disclosure_safe_across_outputs(tmp_path) -> None:
+    marker_root = tmp_path / "SecretUserName-private-workspace" / "sensitive-temp-root"
+    flow_dir = _service_dir(marker_root, namespace="pkg.flow", name="badFlowXml")
+    _write_node(flow_dir / "node.ndf")
+    (flow_dir / "flow.xml").write_text("<FLOW>", encoding="utf-8")
+
+    for namespace, name, xml in (
+        (
+            "pkg.flow",
+            "badNode",
+            """<Values version="2.0"><value name="svc_type">flow""",
+        ),
+        (
+            "pkg.adapter",
+            "badOpaque",
+            """<Values version="2.0"><value name="svc_type">customAdapter""",
+        ),
+        (
+            "pkg.docs",
+            "BadDocument",
+            """<Values version="2.0"><record name="record">""",
+        ),
+    ):
+        artifact_dir = _service_dir(marker_root, namespace=namespace, name=name)
+        (artifact_dir / "node.ndf").write_text(xml, encoding="utf-8")
+
+    manifest = marker_root / "Pkg" / "manifest.v3"
+    manifest.write_text("""<Values version="2.0"><value name="enabled">true""", encoding="utf-8")
+
+    analysis = analyze_path(marker_root, DEFAULT_CONFIG)
+    services = [service for package in analysis.packages for service in package.services]
+    service_markdown = "".join(render_service_markdown(service) for service in services)
+    result = CliRunner().invoke(
+        app,
+        ["analyze", str(marker_root), "--output", str(tmp_path / "safe-cli-out")],
+    )
+
+    assert result.exit_code == 0
+    combined = (
+        render_analysis_json(analysis)
+        + service_markdown
+        + render_dependency_dot(analysis)
+        + render_document_dot(analysis)
+        + result.output
+    )
+    for forbidden in (
+        "SecretUserName",
+        "private-workspace",
+        "sensitive-temp-root",
+        str(marker_root),
+        "<Values",
+        "<record",
+    ):
+        assert forbidden not in combined
+
+    xml_findings = [
+        finding
+        for package in analysis.packages
+        for finding in [
+            *package.findings,
+            *(
+                service_finding
+                for service in package.services
+                for service_finding in service.findings
+            ),
+        ]
+        if finding.code == "XML_MALFORMED"
+    ]
+    assert len(xml_findings) >= 4
+    assert any(
+        "line" in finding.message and "column" in finding.message
+        for finding in xml_findings
+    )
+    for finding in xml_findings:
+        assert finding.message.startswith("Malformed XML:")
+        assert "SecretUserName" not in finding.message
+        assert "private-workspace" not in finding.message
+        assert "sensitive-temp-root" not in finding.message
+        assert not Path(finding.source.path).is_absolute()
+        assert "\\" not in finding.source.path
+        assert finding.source.source_node is None
+
+
+def test_service_description_source_uses_actual_node_comment_shape(tmp_path) -> None:
+    scalar_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="scalarComment")
+    _write_opaque_node(
+        scalar_dir / "node.ndf",
+        svc_type="customAdapter",
+        comment="operator note",
+    )
+    empty_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="emptyComment")
+    _write_opaque_node(empty_dir / "node.ndf", svc_type="customAdapter", comment="")
+    missing_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="missingComment")
+    _write_raw_node(
+        missing_dir / "node.ndf",
+        """<Values version="2.0">
+  <value name="svc_type">customAdapter</value>
+  <record name="svc_sig">
+    <record name="sig_in"><array name="rec_fields" type="record" depth="1" /></record>
+  </record>
+</Values>""",
+    )
+
+    malformed_cases = {
+        "recordComment": (
+            """<record name="node_comment"><value name="note">record-secret</value></record>""",
+            "/Values/record[@name='node_comment']",
+            "record-secret",
+        ),
+        "arrayComment": (
+            """<array name="node_comment" type="value" depth="1">"""
+            """<value>array-secret</value></array>""",
+            "/Values/array[@name='node_comment']",
+            "array-secret",
+        ),
+        "recordArrayComment": (
+            """<array name="node_comment" type="record" depth="1"><record /></array>""",
+            "/Values/array[@name='node_comment']",
+            "recordArray-secret",
+        ),
+        "duplicateComment": (
+            """<value name="node_comment">first-secret</value>
+  <value name="node_comment">second-secret</value>""",
+            "/Values/value[@name='node_comment']",
+            "first-secret",
+        ),
+    }
+    for name, (comment_xml, _source_node, _secret) in malformed_cases.items():
+        service_dir = _service_dir(tmp_path, namespace="pkg.adapter", name=name)
+        _write_opaque_node(
+            service_dir / "node.ndf",
+            svc_type="customAdapter",
+            comment_xml=comment_xml,
+        )
+
+    analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
+    services = {
+        service.identity.name: service
+        for package in analysis.packages
+        for service in package.services
+    }
+
+    scalar = services["scalarComment"]
+    assert scalar.description is not None
+    assert scalar.description.value == "operator note"
+    assert scalar.description.source is not None
+    assert scalar.description.source.source_node == "/Values/value[@name='node_comment']"
+    assert services["emptyComment"].description is None
+    assert services["emptyComment"].description_status == "NO_DESCRIPTION"
+    assert services["missingComment"].description is None
+    assert services["missingComment"].description_status == "NO_DESCRIPTION"
+
+    payload = render_analysis_json(analysis) + "".join(
+        render_service_markdown(service) for service in services.values()
+    )
+    for name, (_comment_xml, source_node, secret) in malformed_cases.items():
+        service = services[name]
+        finding = next(
+            finding
+            for finding in service.findings
+            if finding.code == "SERVICE_DESCRIPTION_MALFORMED"
+        )
+        assert service.description is None
+        assert service.description_status == "DESCRIPTION_MALFORMED"
+        assert finding.source.source_node == source_node
+        assert secret not in payload
+
+    redacted = analyze_path(
+        tmp_path, _config(free_text_mode=ExtractionMode.REDACT)
+    ).packages[0].services
+    omitted = analyze_path(
+        tmp_path, _config(free_text_mode=ExtractionMode.OMIT)
+    ).packages[0].services
+    redacted_scalar = next(
+        service for service in redacted if service.identity.name == "scalarComment"
+    )
+    omitted_scalar = next(
+        service for service in omitted if service.identity.name == "scalarComment"
+    )
+    assert redacted_scalar.description is not None
+    assert redacted_scalar.description.marker == "<redacted:free-text>"
+    assert omitted_scalar.description is not None
+    assert omitted_scalar.description.disclosure == "OMITTED"
 
 
 def test_literal_redact_include_omit_and_secret_guard(tmp_path) -> None:
@@ -255,7 +864,7 @@ def test_policy_snapshot_records_secret_guard(tmp_path) -> None:
     analysis = analyze_path(tmp_path, DEFAULT_CONFIG)
     payload = render_analysis_json(analysis)
 
-    assert analysis.schema_version == "analysis.v6"
+    assert analysis.schema_version == "analysis.v7"
     assert analysis.extraction_policy.literal_mode == "redact"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
@@ -615,8 +1224,11 @@ def test_unsupported_document_metadata_findings_are_policy_safe(tmp_path) -> Non
         assert "x_doc_extra" in combined
 
 
-def _service_dir(tmp_path: Path) -> Path:
-    service_dir = tmp_path / "Pkg" / "ns" / "foo" / "bar"
+def _service_dir(tmp_path: Path, namespace: str = "foo", name: str = "bar") -> Path:
+    service_dir = tmp_path / "Pkg" / "ns"
+    for part in namespace.split("."):
+        service_dir /= part
+    service_dir /= name
     service_dir.mkdir(parents=True)
     return service_dir
 
@@ -637,6 +1249,93 @@ def _write_node(path: Path, comment: str = "") -> None:
     <record name="sig_out"><array name="rec_fields" type="record" depth="1" /></record>
   </record>
 </Values>""",
+        encoding="utf-8",
+    )
+
+
+def _write_raw_node(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+
+
+def _write_opaque_node(
+    path: Path,
+    *,
+    svc_type: str,
+    comment: str = "",
+    comment_xml: str | None = None,
+    signature_fields: str = "",
+    extra_values: str = "",
+) -> None:
+    comment_fragment = (
+        comment_xml
+        if comment_xml is not None
+        else f"<value name=\"node_comment\">{comment}</value>"
+    )
+    path.write_text(
+        f"""<Values version="2.0">
+  <value name="svc_type">{svc_type}</value>
+  {comment_fragment}
+  {extra_values}
+  <record name="svc_sig">
+    <record name="sig_in">
+      <array name="rec_fields" type="record" depth="1">
+{signature_fields}
+      </array>
+    </record>
+    <record name="sig_out"><array name="rec_fields" type="record" depth="1" /></record>
+  </record>
+</Values>""",
+        encoding="utf-8",
+    )
+
+
+def _write_java_service(
+    root: Path,
+    *,
+    class_name: str,
+    service_name: str,
+    body: str,
+    svc_type: str = "java",
+) -> None:
+    service_dir = root / "Pkg" / "ns" / "pkg" / "services" / class_name / service_name
+    service_dir.mkdir(parents=True, exist_ok=True)
+    (service_dir / "node.ndf").write_text(
+        f"""<Values version="2.0">
+  <value name="svc_type">{svc_type}</value>
+  <record name="svc_sig">
+    <record name="sig_in"><array name="rec_fields" type="record" depth="1" /></record>
+    <record name="sig_out"><array name="rec_fields" type="record" depth="1" /></record>
+  </record>
+</Values>""",
+        encoding="utf-8",
+    )
+    encoded_body = base64.b64encode(body.encode("utf-8")).decode("ascii")
+    (service_dir / "java.frag").write_text(
+        f"""<Values version="2.0">
+  <value name="name">{service_name}</value>
+  <value name="body">{encoded_body}</value>
+</Values>""",
+        encoding="utf-8",
+    )
+    source_path = (
+        root
+        / "Pkg"
+        / "code"
+        / "source"
+        / "pkg"
+        / "services"
+        / f"{class_name}.java"
+    )
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        f"""package pkg.services;
+public final class {class_name} {{
+public static final void {service_name} (IData pipeline) throws ServiceException
+{{
+{body}
+}}
+}}
+""",
         encoding="utf-8",
     )
 
