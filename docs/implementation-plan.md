@@ -534,7 +534,65 @@ Not implemented in M5-lite:
 
 ## Next Milestone Gate
 
-M5-lite should receive a final acceptance re-audit after this remediation before any broader
-milestone planning.
+M6 user-maintained process catalog and deterministic process documentation was explicitly approved
+and implemented.
 
-M4b, detailed JDBC/M5, M6, or any later milestone requires explicit approval before implementation.
+## M6 User-Maintained Process Catalog And Deterministic Process Documentation
+
+Implemented in this milestone:
+
+- Analysis schema migration from `analysis.v7` to `analysis.v8`.
+- Optional `processes.yml` version 1 parsing through a strict PyYAML safe loader.
+- YAML safety guards for duplicate keys, aliases/anchors, custom tags, multiple documents,
+  oversized files, unsafe process IDs, over-limit catalogs, malformed descriptions, malformed
+  entrypoints, duplicate process IDs, and unsupported keys.
+- Top-level process IR for definitions, entrypoint validation records, service memberships,
+  process dependency edges, unresolved process calls, process document relationships, and technical
+  entrypoint candidates.
+- Exact canonical service full-name entrypoint validation with `RESOLVED`, `NOT_FOUND`,
+  `DUPLICATE`, and `AMBIGUOUS` statuses.
+- Deterministic BFS traversal over resolved local `INVOKES` and `USES_TRANSFORMER` unique service
+  dependencies, including cycle-safe membership, minimum depth, entrypoint flags, reached-from
+  entrypoint IDs, and representative shortest dependency-ID paths.
+- Retention of unresolved dependencies from process member services as process unresolved call
+  facts without inventing service identities or external systems.
+- Process document relationships derived from existing service/document and document/document
+  dependency evidence. Process Markdown links only resolved relationships whose generated document
+  page exists; unresolved document targets stay visible as unlinked `UNRESOLVED` technical
+  identifiers.
+- Technical entrypoint candidate records for analyzed services with zero incoming resolved local
+  unique dependencies. Candidates are explicitly not confirmed business process entrypoints.
+- CLI `wm-doc analyze --processes-file <path>` plus default `<scan-root>/processes.yml`
+  auto-detection where absence is normal. CLI output labels the process-level finding metric as
+  `Processes with findings`.
+- Top-level `index.md`, `entrypoints.md`, process catalog Markdown, per-process Markdown,
+  service/document process cross-links, and per-process DOT graphs under `graphs/processes/`.
+- Tests for real fixture process catalogs, catalog validation/disclosure, unsafe YAML rejection,
+  cycle traversal, opaque process members, unresolved process calls, process DOT, process Markdown,
+  candidate Markdown, generated Markdown link integrity, resolved/unresolved process-document
+  rendering, entrypoint validation rendering, CLI wording, and schema/metric stability.
+
+Verification baseline:
+
+- Default checked-in fixtures still contain 24 FLOW Services, 11 Java Services, 0 opaque services,
+  8 Specifications, and 7 Document Types.
+- Default fixture analysis has 0 declared process definitions, 0 process memberships, 0 process
+  edges, 0 process unresolved calls, 0 process document relationships, and 15 technical entrypoint
+  candidates.
+- Existing M5-lite FLOW, Java, mapping, document, dependency, Markdown, DOT, and fixture checksum
+  behavior remains stable apart from schema v8 and additive process/candidate outputs.
+
+Not implemented in M6:
+
+- Native webMethods BPM/process-model parsing.
+- Automatic business process discovery or inferred descriptions.
+- JDBC/SQL/database-resource parsing, UM/JMS, triggers, schedulers, adapter-specific semantics,
+  external-system inference, M4b Java external effects, runtime execution, Integration Server
+  connectivity, database connectivity, snapshot diffing, Ollama, or SVG/PNG rendering.
+
+## Next Milestone Gate
+
+M6 should receive a final acceptance re-audit before any broader milestone planning.
+
+M4b, detailed JDBC/M5, native BPM process parsing, M7, or any later milestone requires explicit
+approval before implementation.

@@ -56,6 +56,35 @@ class ServiceDescriptionStatus(StrEnum):
     DESCRIPTION_MALFORMED = "DESCRIPTION_MALFORMED"
 
 
+class ProcessDescriptionStatus(StrEnum):
+    SOURCE_DESCRIPTION = "SOURCE_DESCRIPTION"
+    NO_DESCRIPTION = "NO_DESCRIPTION"
+    DESCRIPTION_REDACTED = "DESCRIPTION_REDACTED"
+    DESCRIPTION_OMITTED = "DESCRIPTION_OMITTED"
+    DESCRIPTION_BLOCKED_SECRET = "DESCRIPTION_BLOCKED_SECRET"
+    DESCRIPTION_MALFORMED = "DESCRIPTION_MALFORMED"
+
+
+class ProcessEntrypointStatus(StrEnum):
+    RESOLVED = "RESOLVED"
+    NOT_FOUND = "NOT_FOUND"
+    DUPLICATE = "DUPLICATE"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+class ProcessDocumentRelationshipRole(StrEnum):
+    ENTRYPOINT_INPUT = "ENTRYPOINT_INPUT"
+    ENTRYPOINT_OUTPUT = "ENTRYPOINT_OUTPUT"
+    SERVICE_INPUT = "SERVICE_INPUT"
+    SERVICE_OUTPUT = "SERVICE_OUTPUT"
+    SERVICE_INPUT_OUTPUT = "SERVICE_INPUT_OUTPUT"
+    DOCUMENT_DEPENDENCY = "DOCUMENT_DEPENDENCY"
+
+
+class TechnicalEntrypointCandidateKind(StrEnum):
+    TECHNICAL_ENTRYPOINT_CANDIDATE = "TECHNICAL_ENTRYPOINT_CANDIDATE"
+
+
 class CallType(StrEnum):
     INVOKE = "INVOKE"
     MAPINVOKE = "MAPINVOKE"
@@ -585,6 +614,108 @@ class ServiceDocumentDependency(BaseModel):
     source_samples: list[SourceReference] = Field(default_factory=list)
 
 
+class ProcessDefinition(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    process_id: str
+    name: str
+    description_status: ProcessDescriptionStatus = ProcessDescriptionStatus.NO_DESCRIPTION
+    description: TextValue | None = None
+    entrypoint_ids: list[str] = Field(default_factory=list)
+    source: SourceReference
+    id_source: SourceReference
+    name_source: SourceReference
+    description_source: SourceReference | None = None
+    findings: list[AnalysisFinding] = Field(default_factory=list)
+
+
+class ProcessEntrypoint(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    process_id: str
+    declared_target: str
+    status: ProcessEntrypointStatus
+    resolved_service: str | None = None
+    source: SourceReference
+
+
+class ProcessServiceMembership(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    process_id: str
+    service: str
+    service_type: ServiceType
+    service_analysis_status: ServiceAnalysisStatus
+    entrypoint: bool
+    minimum_depth: int
+    directly_called_from_entrypoint: bool
+    reached_from_entrypoint_ids: list[str] = Field(default_factory=list)
+    representative_path_dependency_ids: list[str] = Field(default_factory=list)
+
+
+class ProcessDependencyEdge(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    process_id: str
+    dependency_id: str
+    source_service: str
+    target_service: str
+    source_membership_id: str
+    target_membership_id: str
+    dependency_kind: DependencyKind
+    occurrence_count: int
+
+
+class ProcessUnresolvedCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    process_id: str
+    source_service: str
+    target_service: str
+    dependency_kind: DependencyKind
+    occurrence_count: int
+    occurrence_ids: list[str] = Field(default_factory=list)
+    source_samples: list[SourceReference] = Field(default_factory=list)
+
+
+class ProcessDocumentRelationship(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    process_id: str
+    role: ProcessDocumentRelationshipRole
+    target_document: str
+    resolved: bool
+    occurrence_count: int
+    service: str | None = None
+    source_document: str | None = None
+    dependency_id: str | None = None
+    relationship_kind: DocumentDependencyKind = DocumentDependencyKind.USES_DOCUMENT
+
+
+class TechnicalEntrypointCandidate(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    service: str
+    service_type: ServiceType
+    service_analysis_status: ServiceAnalysisStatus
+    candidate_kind: TechnicalEntrypointCandidateKind = (
+        TechnicalEntrypointCandidateKind.TECHNICAL_ENTRYPOINT_CANDIDATE
+    )
+    incoming_resolved_dependency_count: int = 0
+    outgoing_dependency_count: int = 0
+    importance: Importance
+    layer: str
+    reason: str
+    source: SourceReference
+
+
 class MapSchemaMetadata(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -758,6 +889,21 @@ class AnalysisMetrics(BaseModel):
     unresolved_document_reference_count: int = 0
     unique_document_dependency_count: int = 0
     service_document_dependency_count: int = 0
+    process_definition_count: int = 0
+    process_with_description_count: int = 0
+    process_without_description_count: int = 0
+    declared_entrypoint_count: int = 0
+    resolved_entrypoint_count: int = 0
+    unresolved_entrypoint_count: int = 0
+    technical_entrypoint_candidate_count: int = 0
+    process_service_membership_count: int = 0
+    process_entrypoint_membership_count: int = 0
+    process_dependency_edge_count: int = 0
+    process_unresolved_call_count: int = 0
+    process_document_relationship_count: int = 0
+    processes_with_findings_count: int = 0
+    services_in_multiple_processes_count: int = 0
+    services_in_no_declared_process_count: int = 0
     java_service_analysis_count: int = 0
     java_source_match_count: int = 0
     java_source_only_count: int = 0
@@ -824,7 +970,7 @@ class AnalyzedPackage(BaseModel):
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "analysis.v7"
+    schema_version: str = "analysis.v8"
     tool_version: str
     packages: list[AnalyzedPackage] = Field(default_factory=list)
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
@@ -843,6 +989,15 @@ class AnalysisResult(BaseModel):
     java_type_references: list[JavaTypeReference] = Field(default_factory=list)
     java_pipeline_accesses: list[JavaPipelineAccess] = Field(default_factory=list)
     java_invocation_occurrences: list[JavaInvocationOccurrence] = Field(default_factory=list)
+    processes: list[ProcessDefinition] = Field(default_factory=list)
+    process_entrypoints: list[ProcessEntrypoint] = Field(default_factory=list)
+    process_service_memberships: list[ProcessServiceMembership] = Field(default_factory=list)
+    process_dependency_edges: list[ProcessDependencyEdge] = Field(default_factory=list)
+    process_unresolved_calls: list[ProcessUnresolvedCall] = Field(default_factory=list)
+    process_document_relationships: list[ProcessDocumentRelationship] = Field(default_factory=list)
+    technical_entrypoint_candidates: list[TechnicalEntrypointCandidate] = Field(
+        default_factory=list
+    )
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
 

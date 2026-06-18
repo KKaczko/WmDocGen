@@ -17,6 +17,33 @@ Observed from current fixtures:
 - A missing, empty, or whitespace-only top-level `svc_type` is not enough to promote an arbitrary
   `node.ndf` directory to a service. Such artifacts remain inventory-only unknowns unless another
   fixture-proven rule applies.
+- M6 process catalogs are user-maintained YAML files named `processes.yml` by default or supplied
+  with `--processes-file`. The supported shape is `version: 1` plus a `processes` list containing
+  stable safe IDs, scalar names, optional scalar descriptions, and exact canonical service full-name
+  entrypoints.
+- Process descriptions are user-authored free text and are filtered by the same free-text policy and
+  secret guard as service/document descriptions. Process IDs and names are structural catalog
+  metadata and remain visible.
+- Process catalog parsing rejects duplicate YAML keys, aliases/anchors, custom tags, multiple
+  documents, oversized files, unsafe IDs, malformed names, malformed descriptions, malformed
+  entrypoints, duplicate process IDs, and over-limit catalogs with explicit findings. Raw YAML and
+  unknown YAML property values are not serialized.
+- Declared process entrypoints are exact only. The analyzer records `RESOLVED`, `NOT_FOUND`,
+  `DUPLICATE`, or `AMBIGUOUS`; it does not do short-name matching, namespace guessing, fuzzy
+  matching, or similarly named fallback. Per-process Markdown keeps declared catalog values and
+  entrypoint validation in separate sections so user-authored declarations are not confused with
+  analyzer-confirmed resolution.
+- Process traversal uses resolved local unique service dependencies with `INVOKES` and
+  `USES_TRANSFORMER` kinds. Opaque services can be members but are terminal unless future canonical
+  outgoing dependency evidence exists.
+- Process document relationship Markdown links only resolved canonical documents whose generated
+  document pages exist. Unresolved document targets remain visible as code-form technical
+  identifiers marked `UNRESOLVED`; inconsistent resolved-but-missing targets are also rendered
+  without links rather than producing broken output.
+- Technical entrypoint candidates are services with zero incoming resolved local unique service
+  dependencies. They are reported as technical root candidates, not confirmed business entrypoints.
+- Generated Markdown link integrity is regression-tested for no-catalog, fixture-catalog,
+  synthetic unresolved-document, and free-text include/redact/omit outputs.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
 - Observed active Document Types in current fixtures all come from PGP. OAAdapter contains service
@@ -150,5 +177,7 @@ Observed from current fixtures:
   root pipeline reads even though they are not local `svc_sig` fields.
 - Current PGP Java Services contain no observed `Service.doInvoke` sites, so M4a adds no Java
   service-call edges to `graphs/dependencies.dot` for the fixture baseline.
+- Current checked-in fixtures do not contain a default `processes.yml`, so the default fixture
+  analysis has zero process definitions and 15 technical entrypoint candidates.
 
 This document records observed behavior only; it is not a compatibility claim.

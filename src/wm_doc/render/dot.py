@@ -3,7 +3,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from wm_doc.ir import AnalysisResult, DocumentDependency
+from wm_doc.ir import (
+    AnalysisResult,
+    DocumentDependency,
+    ProcessDefinition,
+    ProcessUnresolvedCall,
+)
 
 
 def render_dependency_dot(analysis: AnalysisResult) -> str:
@@ -88,6 +93,94 @@ def write_document_dot(output_dir: Path, analysis: AnalysisResult) -> Path:
     return path
 
 
+def render_process_dot(analysis: AnalysisResult, process: ProcessDefinition) -> str:
+    services = {
+        service.identity.full_name: service
+        for package in analysis.packages
+        for service in package.services
+    }
+    memberships = [
+        membership
+        for membership in analysis.process_service_memberships
+        if membership.process_id == process.process_id
+    ]
+    member_names = {membership.service for membership in memberships}
+    entrypoints = {membership.service for membership in memberships if membership.entrypoint}
+    unresolved_calls = [
+        call
+        for call in analysis.process_unresolved_calls
+        if call.process_id == process.process_id
+    ]
+    lines = ["digraph process {", "  rankdir=LR;"]
+    for service_name in sorted(member_names, key=str.casefold):
+        service = services.get(service_name)
+        kind = (
+            f"{service.service_type.value.lower()}_service"
+            if service is not None
+            else "service"
+        )
+        attrs = [f'label="{_escape(service_name)}"', f'kind="{kind}"']
+        if service_name in entrypoints:
+            attrs.append('entrypoint="true"')
+            attrs.append('shape="box"')
+        if service is not None and service.analysis_status.value == "OPAQUE":
+            attrs.append('style="dashed"')
+        lines.append(f"  {_node_id(service_name)} [{', '.join(attrs)}];")
+    for call in unresolved_calls:
+        unresolved_id = _process_unresolved_node_key(call)
+        attrs = [f'label="{_escape(call.target_service)}"', 'kind="unresolved_target"']
+        lines.append(f"  {_node_id(unresolved_id)} [{', '.join(attrs)}];")
+    for edge in sorted(
+        [
+            edge
+            for edge in analysis.process_dependency_edges
+            if edge.process_id == process.process_id
+        ],
+        key=lambda item: (
+            item.source_service.casefold(),
+            item.target_service.casefold(),
+            item.dependency_kind.value,
+            item.id,
+        ),
+    ):
+        attrs = [
+            f'label="{edge.dependency_kind.value}"',
+            f'kind="{edge.dependency_kind.value}"',
+            f'occurrences="{edge.occurrence_count}"',
+        ]
+        lines.append(
+            f"  {_node_id(edge.source_service)} -> {_node_id(edge.target_service)} "
+            f"[{', '.join(attrs)}];"
+        )
+    for call in unresolved_calls:
+        unresolved_id = _process_unresolved_node_key(call)
+        attrs = [
+            f'label="{call.dependency_kind.value}"',
+            f'kind="{call.dependency_kind.value}"',
+            f'occurrences="{call.occurrence_count}"',
+            'resolved="false"',
+        ]
+        lines.append(
+            f"  {_node_id(call.source_service)} -> {_node_id(unresolved_id)} "
+            f"[{', '.join(attrs)}];"
+        )
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def write_process_dots(output_dir: Path, analysis: AnalysisResult) -> list[Path]:
+    if not analysis.processes:
+        return []
+    graph_dir = output_dir / "graphs" / "processes"
+    graph_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for process in sorted(analysis.processes, key=lambda item: item.process_id.casefold()):
+        path = graph_dir / f"{process.process_id}.dot"
+        path.write_text(render_process_dot(analysis, process), encoding="utf-8")
+        paths.append(path)
+    return paths
+
+
 def _document_dependency_key(dependency: DocumentDependency) -> tuple[str, str, str]:
     return (
         dependency.source_document.casefold(),
@@ -99,6 +192,12 @@ def _document_dependency_key(dependency: DocumentDependency) -> tuple[str, str, 
 def _node_id(value: str) -> str:
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
     return f"n_{digest}"
+
+
+def _process_unresolved_node_key(call: ProcessUnresolvedCall) -> str:
+    return "\0".join(
+        [call.process_id, call.source_service, call.target_service, call.id]
+    )
 
 
 def _escape(value: str) -> str:

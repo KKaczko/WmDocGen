@@ -21,8 +21,14 @@ from wm_doc.ir import (
     SourceReference,
 )
 from wm_doc.render.analysis_json import render_analysis_json
-from wm_doc.render.document_markdown import render_document_markdown
-from wm_doc.render.dot import render_dependency_dot, render_document_dot
+from wm_doc.render.document_markdown import document_markdown_filename, render_document_markdown
+from wm_doc.render.dot import render_dependency_dot, render_document_dot, render_process_dot
+from wm_doc.render.index_markdown import render_documentation_index
+from wm_doc.render.process_markdown import (
+    render_entrypoint_candidates_markdown,
+    render_process_catalog_markdown,
+    render_process_markdown,
+)
 from wm_doc.render.service_markdown import render_service_markdown, write_service_markdown
 
 OA_FULL_NAME = "oa.adapter.geographicAddressManagement:createGeographicAddressValidation"
@@ -146,7 +152,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v7"
+    assert analysis.schema_version == "analysis.v8"
     assert analysis.metrics.call_occurrence_count == 108
     assert analysis.metrics.flow_call_occurrence_count == 108
     assert analysis.metrics.java_static_call_occurrence_count == 0
@@ -175,6 +181,20 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     }
     assert analysis.metrics.resolved_unique_dependency_count == 45
     assert analysis.metrics.unresolved_unique_dependency_count == 41
+    assert analysis.metrics.process_definition_count == 0
+    assert analysis.metrics.process_service_membership_count == 0
+    assert analysis.metrics.process_dependency_edge_count == 0
+    assert analysis.metrics.process_unresolved_call_count == 0
+    assert analysis.metrics.technical_entrypoint_candidate_count == 15
+    assert analysis.processes == []
+    assert len(analysis.technical_entrypoint_candidates) == 15
+    assert {
+        candidate.service for candidate in analysis.technical_entrypoint_candidates
+    } >= {
+        "oa.adapter.geographicAddressManagement:createGeographicAddressValidation",
+        "pgp.test.encrypt:testEncryptFile",
+        "pgp.test.keys:testReadPublicKeys",
+    }
     assert analysis.extraction_policy.literal_mode == "redact"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
@@ -190,6 +210,88 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert any(
         dependency.occurrence_count > 1 for dependency in analysis.unique_dependencies
     )
+
+
+def test_real_fixture_process_catalog_generates_process_ir_and_docs(tmp_path) -> None:
+    processes_file = tmp_path / "processes.yml"
+    processes_file.write_text(
+        f"""version: 1
+processes:
+  - id: geographic-address-validation
+    name: Geographic address validation
+    description: Validates and prepares geographic address information.
+    entrypoints:
+      - {OA_FULL_NAME}
+  - id: pgp-key-lookup
+    name: PGP key lookup
+    entrypoints:
+      - pgp.services.registry:getPubKey
+      - pgp.services.registry:getSecKey
+""",
+        encoding="utf-8",
+    )
+
+    analysis = analyze_path(_samples(), DEFAULT_CONFIG, processes_file)
+    processes = {process.process_id: process for process in analysis.processes}
+
+    assert analysis.schema_version == "analysis.v8"
+    assert set(processes) == {"geographic-address-validation", "pgp-key-lookup"}
+    assert analysis.metrics.process_definition_count == 2
+    assert analysis.metrics.declared_entrypoint_count == 3
+    assert analysis.metrics.resolved_entrypoint_count == 3
+    assert analysis.metrics.unresolved_entrypoint_count == 0
+    assert analysis.metrics.process_service_membership_count == 8
+    assert analysis.metrics.process_dependency_edge_count == 7
+    assert analysis.metrics.process_unresolved_call_count == 29
+    assert analysis.metrics.process_document_relationship_count == 12
+    assert analysis.metrics.services_in_multiple_processes_count == 0
+
+    oa_memberships = [
+        membership
+        for membership in analysis.process_service_memberships
+        if membership.process_id == "geographic-address-validation"
+    ]
+    assert [membership.service for membership in oa_memberships] == [OA_FULL_NAME]
+    pgp_members = {
+        membership.service
+        for membership in analysis.process_service_memberships
+        if membership.process_id == "pgp-key-lookup"
+    }
+    assert "pgp.services.common:readConfig" in pgp_members
+    assert "pgp.services.keys:readPublicKeys" in pgp_members
+    assert "pgp.services.keys:readPrivateKeys" in pgp_members
+
+    process_markdown = render_process_markdown(analysis, processes["pgp-key-lookup"])
+    oa_process_markdown = render_process_markdown(
+        analysis, processes["geographic-address-validation"]
+    )
+    catalog_markdown = render_process_catalog_markdown(analysis)
+    index_markdown = render_documentation_index(analysis)
+    candidate_markdown = render_entrypoint_candidates_markdown(analysis)
+    dot = render_process_dot(analysis, processes["pgp-key-lookup"])
+
+    assert "## Services In Process" in process_markdown
+    assert "Business Description" in process_markdown
+    assert "## Entrypoint Validation" in process_markdown
+    assert (
+        f"[`pgp.documents:PublicKeyData`](../documents/"
+        f"{document_markdown_filename('pgp.documents:PublicKeyData')})"
+    ) in process_markdown
+    assert "## Entrypoint Validation" in oa_process_markdown
+    assert (
+        "`oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
+        "docCreateGeographicAddressValidationInput` | `UNRESOLVED`"
+    ) in oa_process_markdown
+    assert (
+        "../documents/oa.adapter.doc.geographicAddressManagement."
+        "geographicAddressValidation_docCreateGeographicAddressValidationInput.md"
+        not in oa_process_markdown
+    )
+    assert "Process Catalog" in catalog_markdown
+    assert "Process catalog](processes/index.md)" in index_markdown
+    assert "Technical root candidate; not confirmed" in candidate_markdown
+    assert 'entrypoint="true"' in dot
+    assert 'kind="java_service"' in dot
 
 
 def test_java_services_are_analyzed_source_first() -> None:
@@ -627,7 +729,7 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     assert "## Transformer Call Occurrences" in markdown
     assert "<redacted:literal>" in markdown
     assert "`OK`" not in markdown
-    assert "M5-lite extracts observed FLOW, mapping, document-reference, Java Service" in markdown
+    assert "M6 extracts observed FLOW, mapping, document-reference, Java Service" in markdown
 
 
 def test_deterministic_analysis_json_markdown_and_dot() -> None:
@@ -673,7 +775,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v7" in payload
+    assert "analysis.v8" in payload
     assert "## Disclosure Policies" in document_markdown
     assert "- Free text mode: include" in document_markdown
     assert "- Literal mode: redact" in document_markdown
@@ -715,11 +817,16 @@ def test_analyze_cli_writes_expected_outputs(tmp_path) -> None:
     assert "- FLOW-derived: 86" in result.output
     assert "- Java-derived: 0" in result.output
     assert "- total: 86" in result.output
+    assert "- Processes with findings: 0" in result.output
     assert (output / "analysis.json").exists()
+    assert (output / "index.md").exists()
+    assert (output / "entrypoints.md").exists()
     assert (output / "graphs" / "dependencies.dot").exists()
     assert (output / "graphs" / "documents.dot").exists()
     assert len(list((output / "services").glob("*.md"))) == 35
     assert len(list((output / "documents").glob("*.md"))) == 7
+    assert not (output / "processes").exists()
+    assert sum(1 for path in output.rglob("*") if path.is_file()) == 47
 
 
 def test_pgp_and_oaadapter_fixture_formats_differ() -> None:
