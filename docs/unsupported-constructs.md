@@ -1,6 +1,6 @@
 # Unsupported Constructs
 
-Unsupported or only partially supported in M5-lite:
+Unsupported or only partially supported in M6:
 
 - Full FLOW execution semantics
 - Full MAP operation semantics beyond observed evidence extraction
@@ -27,7 +27,11 @@ Unsupported or only partially supported in M5-lite:
 - Universal Messaging triggers
 - JMS triggers
 - Schedulers
-- Process models
+- Native webMethods BPM/process-model parsing
+- Automatic business process discovery from technical graph shape
+- Process include/exclude, stop-at, tag, owner, system, and maximum-depth catalog options
+- Process-to-process dependency semantics
+- DOT-to-SVG/PNG rendering
 - Runtime-only Integration Server configuration
 - Ollama documentation generation
 
@@ -37,6 +41,12 @@ malformed, or non-scalar service-type metadata is not promoted to a service. Opa
 resolve exact incoming calls and appear in the service dependency graph, but their
 implementation-specific body is not interpreted. The analyzer does not infer database, messaging,
 scheduler, trigger, process, file, network, or other external behavior from an opaque service.
+
+M6 supports only user-maintained `processes.yml` catalog declarations. Declared entrypoints must be
+exact canonical service full names, and traversal follows only resolved local service dependencies.
+Technical entrypoint candidates are labeled as technical roots and never promoted to business
+processes. M6 does not parse native BPM/process-model artifacts, infer process descriptions, create
+external-system nodes, or assign primary process ownership to services.
 
 M3 extracts static `INVOKE` and `MAPINVOKE` targets when a literal `SERVICE` attribute is present.
 Targets that are not present in the analyzed snapshot are retained as unresolved call occurrences
@@ -125,6 +135,13 @@ but implementation-specific analysis was not performed. Java Markdown pages rend
 consistency, declared signatures, observed pipeline accesses, Java invocation sites, imports,
 referenced types, findings, and source evidence. They do not print complete Java bodies, decoded
 `java.frag` bodies, raw token streams, arbitrary Java literals, or absolute local paths.
+
+M6 process Markdown renders user-authored process names/descriptions, generated reachability
+summaries, service membership, process dependency edges, unresolved process calls, document
+relationships, and limitations. It links to existing service and document pages instead of copying
+their full details. Unresolved process-document targets remain visible as technical identifiers but
+are not linked to placeholder pages. Process DOT graphs contain member services, entrypoint styling,
+opaque styling, and optional unresolved terminal leaves only.
 
 Known disclosure limitations:
 

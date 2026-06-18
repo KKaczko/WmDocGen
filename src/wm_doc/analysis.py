@@ -55,6 +55,14 @@ from wm_doc.ir import (
     MapSchemaMetadata,
     PackageInventory,
     PipelinePath,
+    ProcessDefinition,
+    ProcessDependencyEdge,
+    ProcessDescriptionStatus,
+    ProcessDocumentRelationship,
+    ProcessEntrypoint,
+    ProcessEntrypointStatus,
+    ProcessServiceMembership,
+    ProcessUnresolvedCall,
     ServiceAnalysisStatus,
     ServiceDescriptionStatus,
     ServiceDocumentDependency,
@@ -65,6 +73,7 @@ from wm_doc.ir import (
     ServiceType,
     SignatureField,
     SourceReference,
+    TechnicalEntrypointCandidate,
     TextDisclosure,
     TextValue,
     TransformerBinding,
@@ -73,6 +82,8 @@ from wm_doc.ir import (
     stable_relative_path,
 )
 from wm_doc.java_analysis import analyze_java_service
+from wm_doc.process_analysis import build_process_analysis
+from wm_doc.process_catalog import ParsedProcessCatalog, load_process_catalog
 from wm_doc.values import parse_values_file, scalar_value
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
 
@@ -245,9 +256,21 @@ class StableIdFactory:
         return candidate
 
 
-def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
+def analyze_path(
+    path: Path,
+    config: AppConfig,
+    processes_file: Path | None = None,
+    *,
+    processes_file_explicit: bool = False,
+) -> AnalysisResult:
     scan_root = path.resolve()
     inventory = scan_path(scan_root)
+    process_catalog_path = processes_file or scan_root / "processes.yml"
+    process_catalog = load_process_catalog(
+        process_catalog_path,
+        scan_root,
+        explicit=processes_file_explicit or processes_file is not None,
+    )
     service_index = _build_service_index(inventory.packages)
     extraction_policy = _extraction_policy_snapshot(config)
     id_factory = StableIdFactory()
@@ -258,6 +281,7 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
     all_document_reference_occurrences: list[DocumentReferenceOccurrence] = []
     service_reference_inputs: list[tuple[str, ArtifactCandidate]] = []
     all_findings: list[AnalysisFinding] = list(inventory.findings)
+    all_findings.extend(process_catalog.findings)
 
     package_shells: list[AnalyzedPackage] = []
     for package in inventory.packages:
@@ -458,23 +482,49 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
         [item for analysis in all_java_analyses for item in analysis.invocation_occurrences],
         key=_java_invocation_key,
     )
+    all_services = [service for package in final_packages for service in package.services]
+    process_definitions, initial_process_entrypoints, process_definition_findings = (
+        _process_definitions_from_catalog(process_catalog, config)
+    )
+    all_findings.extend(process_definition_findings)
+    process_output = build_process_analysis(
+        processes=process_definitions,
+        process_entrypoints=initial_process_entrypoints,
+        services=all_services,
+        unique_dependencies=all_unique_dependencies,
+        service_document_dependencies=all_service_document_dependencies,
+        document_dependencies=all_document_dependencies,
+    )
+    all_findings.extend(process_output.findings)
+    top_level_metrics = _top_level_metrics(
+        all_calls,
+        all_unique_dependencies,
+        all_flow_maps,
+        all_mapping_operations,
+        all_transformer_bindings,
+        final_packages,
+        all_document_reference_occurrences,
+        all_document_dependencies,
+        all_service_document_dependencies,
+        all_java_analyses,
+        all_java_pipeline_accesses,
+        all_java_invocations,
+    )
+    top_level_metrics = _with_process_metrics(
+        top_level_metrics,
+        all_services,
+        process_output.processes,
+        process_output.process_entrypoints,
+        process_output.process_service_memberships,
+        process_output.process_dependency_edges,
+        process_output.process_unresolved_calls,
+        process_output.process_document_relationships,
+        process_output.technical_entrypoint_candidates,
+    )
     return AnalysisResult(
         tool_version=__version__,
         packages=sorted(final_packages, key=lambda item: item.name.casefold()),
-        metrics=_top_level_metrics(
-            all_calls,
-            all_unique_dependencies,
-            all_flow_maps,
-            all_mapping_operations,
-            all_transformer_bindings,
-            final_packages,
-            all_document_reference_occurrences,
-            all_document_dependencies,
-            all_service_document_dependencies,
-            all_java_analyses,
-            all_java_pipeline_accesses,
-            all_java_invocations,
-        ),
+        metrics=top_level_metrics,
         extraction_policy=extraction_policy,
         call_occurrences=all_calls,
         unique_dependencies=all_unique_dependencies,
@@ -490,6 +540,13 @@ def analyze_path(path: Path, config: AppConfig) -> AnalysisResult:
         java_type_references=all_java_type_references,
         java_pipeline_accesses=all_java_pipeline_accesses,
         java_invocation_occurrences=all_java_invocations,
+        processes=process_output.processes,
+        process_entrypoints=process_output.process_entrypoints,
+        process_service_memberships=process_output.process_service_memberships,
+        process_dependency_edges=process_output.process_dependency_edges,
+        process_unresolved_calls=process_output.process_unresolved_calls,
+        process_document_relationships=process_output.process_document_relationships,
+        technical_entrypoint_candidates=process_output.technical_entrypoint_candidates,
         findings=_aggregate_findings(all_findings),
     )
 
@@ -1192,6 +1249,96 @@ def _parse_opaque_service(
         findings=findings,
         source=artifact.source,
     )
+
+
+def _process_definitions_from_catalog(
+    catalog: ParsedProcessCatalog, config: AppConfig
+) -> tuple[list[ProcessDefinition], list[ProcessEntrypoint], list[AnalysisFinding]]:
+    definitions: list[ProcessDefinition] = []
+    entrypoints: list[ProcessEntrypoint] = []
+    for parsed in catalog.definitions:
+        description = None
+        description_status = ProcessDescriptionStatus.NO_DESCRIPTION
+        if parsed.description_malformed:
+            description_status = ProcessDescriptionStatus.DESCRIPTION_MALFORMED
+        elif parsed.description is not None and parsed.description_source is not None:
+            description = _apply_free_text_policy(
+                parsed.description,
+                "process_description",
+                parsed.description_source,
+                config,
+                "description",
+                parsed.process_id,
+            )
+            description_status = _process_description_status(description)
+        process_stable_id = _stable_process_id(parsed.process_id)
+        process_entrypoint_ids: list[str] = []
+        for entrypoint in parsed.entrypoints:
+            entrypoint_id = _stable_process_entrypoint_id(
+                parsed.process_id,
+                entrypoint.declared_target,
+                entrypoint.duplicate_index,
+            )
+            process_entrypoint_ids.append(entrypoint_id)
+            entrypoints.append(
+                ProcessEntrypoint(
+                    id=entrypoint_id,
+                    process_id=parsed.process_id,
+                    declared_target=entrypoint.declared_target,
+                    status=(
+                        ProcessEntrypointStatus.DUPLICATE
+                        if entrypoint.duplicate
+                        else ProcessEntrypointStatus.RESOLVED
+                    ),
+                    source=entrypoint.source,
+                )
+            )
+        definitions.append(
+            ProcessDefinition(
+                id=process_stable_id,
+                process_id=parsed.process_id,
+                name=parsed.name,
+                description_status=description_status,
+                description=description,
+                entrypoint_ids=process_entrypoint_ids,
+                source=parsed.source,
+                id_source=parsed.id_source,
+                name_source=parsed.name_source,
+                description_source=parsed.description_source,
+                findings=parsed.findings,
+            )
+        )
+    return (
+        sorted(definitions, key=lambda item: item.process_id.casefold()),
+        sorted(entrypoints, key=lambda item: (item.process_id.casefold(), item.id)),
+        [],
+    )
+
+
+def _process_description_status(description: TextValue | None) -> ProcessDescriptionStatus:
+    if description is None:
+        return ProcessDescriptionStatus.NO_DESCRIPTION
+    if description.disclosure == TextDisclosure.REDACTED:
+        return ProcessDescriptionStatus.DESCRIPTION_REDACTED
+    if description.disclosure == TextDisclosure.OMITTED:
+        return ProcessDescriptionStatus.DESCRIPTION_OMITTED
+    if description.disclosure == TextDisclosure.BLOCKED_SECRET:
+        return ProcessDescriptionStatus.DESCRIPTION_BLOCKED_SECRET
+    return ProcessDescriptionStatus.SOURCE_DESCRIPTION
+
+
+def _stable_process_id(process_id: str) -> str:
+    digest = hashlib.sha256(process_id.encode("utf-8")).hexdigest()[:12]
+    return f"process_{digest}"
+
+
+def _stable_process_entrypoint_id(
+    process_id: str, declared_target: str, duplicate_index: int
+) -> str:
+    digest = hashlib.sha256(
+        f"{process_id}\0{declared_target}\0{duplicate_index}".encode()
+    ).hexdigest()[:12]
+    return f"process_entrypoint_{digest}"
 
 
 def _service_identity(package_name: str, artifact: ArtifactCandidate) -> ServiceIdentity:
@@ -2910,6 +3057,61 @@ def _top_level_metrics(
             "java_pipeline_access_kind_counts": dict(sorted(java_access_counts.items())),
             "java_pipeline_cursor_scope_counts": dict(sorted(java_scope_counts.items())),
             "java_invocation_occurrence_count": len(java_invocations),
+        }
+    )
+
+
+def _with_process_metrics(
+    metrics: AnalysisMetrics,
+    services: list[FlowService],
+    processes: list[ProcessDefinition],
+    entrypoints: list[ProcessEntrypoint],
+    memberships: list[ProcessServiceMembership],
+    process_edges: list[ProcessDependencyEdge],
+    unresolved_calls: list[ProcessUnresolvedCall],
+    document_relationships: list[ProcessDocumentRelationship],
+    candidates: list[TechnicalEntrypointCandidate],
+) -> AnalysisMetrics:
+    service_process_counts = Counter(membership.service for membership in memberships)
+    service_names = {service.identity.full_name for service in services}
+    services_in_declared_processes = set(service_process_counts)
+    return metrics.model_copy(
+        update={
+            "process_definition_count": len(processes),
+            "process_with_description_count": sum(
+                1 for process in processes if process.description is not None
+            ),
+            "process_without_description_count": sum(
+                1 for process in processes if process.description is None
+            ),
+            "declared_entrypoint_count": len(entrypoints),
+            "resolved_entrypoint_count": sum(
+                1
+                for entrypoint in entrypoints
+                if entrypoint.status == ProcessEntrypointStatus.RESOLVED
+            ),
+            "unresolved_entrypoint_count": sum(
+                1
+                for entrypoint in entrypoints
+                if entrypoint.status != ProcessEntrypointStatus.RESOLVED
+            ),
+            "technical_entrypoint_candidate_count": len(candidates),
+            "process_service_membership_count": len(memberships),
+            "process_entrypoint_membership_count": sum(
+                1 for membership in memberships if membership.entrypoint
+            ),
+            "process_dependency_edge_count": len(process_edges),
+            "process_unresolved_call_count": len(unresolved_calls),
+            "process_document_relationship_count": len(document_relationships),
+            "processes_with_findings_count": sum(
+                1 for process in processes if process.findings
+            ),
+            "services_in_multiple_processes_count": sum(
+                1 for count in service_process_counts.values() if count > 1
+            ),
+            "services_in_no_declared_process_count": len(
+                service_names - services_in_declared_processes
+            ),
         }
     )
 

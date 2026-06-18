@@ -2,8 +2,8 @@
 
 This project builds an offline static-analysis tool for webMethods Integration Server packages.
 
-Current implementation milestone is M5-lite: opaque webMethods service inventory on top of the
-accepted M4a Java Service baseline. M4a associates Java Services with generated source under
+Current implementation milestone is M6: user-maintained process catalog and deterministic process
+documentation on top of the accepted M5-lite opaque service inventory. M4a associates Java Services with generated source under
 `code/source`, checks each matched method against `java.frag` with normalized Java tokens, extracts
 imports, referenced types, observed pipeline READ/WRITE/REMOVE accesses, and narrowly supported
 static or dynamic `Service.doInvoke` sites, and integrates only statically confirmed Java calls into
@@ -16,10 +16,16 @@ targets, and expose only common metadata such as identity, trimmed source `svc_t
 `node_comment`, and signatures. Do not infer database, adapter, trigger, scheduler, UM/JMS,
 process, or external-resource behavior from opaque artifacts.
 
-Do not add M4b, detailed JDBC/M5, M6, or later work without later explicit milestone approval. In
-particular, do not add broad Java external-effect classification, adapter parsers, trigger parsers,
-process parsers, runtime simulation, Ollama integration, snapshot diffing, Java execution, Java
-compilation, or Java class loading.
+M6 adds optional `processes.yml` parsing, exact declared entrypoint validation, deterministic
+process traversal over resolved service dependencies, technical entrypoint candidates, process
+Markdown, top-level documentation index, and per-process DOT graphs. It does not parse native
+webMethods BPM/process-model artifacts and does not infer business processes from technical root
+candidates.
+
+Do not add M4b, detailed JDBC/M5, native BPM process parsing, or later work without later explicit
+milestone approval. In particular, do not add broad Java external-effect classification, adapter
+parsers, trigger parsers, runtime simulation, Ollama integration, snapshot diffing, Java execution,
+Java compilation, or Java class loading.
 
 Important constraints:
 

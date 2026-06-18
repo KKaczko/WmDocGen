@@ -1,10 +1,10 @@
 # Architecture
 
-M5-lite implements package/artifact inventory plus FLOW Service, Document Type, Java Service, and
-opaque service static-analysis slices focused on traceable calls, unique dependencies, observed
-control-flow structure, observed mapping evidence, ordered document field trees, exact
-document-reference resolution, source-first Java Service evidence, opaque service identity, and
-policy-safe disclosure.
+M6 implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
+service, and user-maintained process static-analysis slices focused on traceable calls, unique
+dependencies, observed control-flow structure, observed mapping evidence, ordered document field
+trees, exact document-reference resolution, source-first Java Service evidence, opaque service
+identity, optional `processes.yml` catalogs, and policy-safe disclosure.
 
 Subsystems:
 
@@ -25,6 +25,11 @@ Subsystems:
   identity, source service type, safe `node_comment`, signatures, source evidence, and findings.
   Missing, empty, whitespace-only, malformed, or non-scalar service-type metadata is not promoted to
   an opaque service.
+- Process catalog analysis in `wm_doc.process_catalog` and `wm_doc.process_analysis` parses an
+  optional safe `processes.yml`, validates exact canonical entrypoints, traverses resolved local
+  service dependencies with deterministic BFS, retains unresolved calls from member services, derives
+  process/document relationships, and emits technical entrypoint candidates for services with zero
+  incoming resolved local dependencies.
 - Classification in `wm_doc.config` applies deterministic, case-insensitive glob rules. `neverImportant`
   rules take precedence over important service rules.
 - Dependency resolution is exact-name only. It resolves static `INVOKE`, `MAPINVOKE`, and
@@ -38,9 +43,12 @@ Subsystems:
   mapping operations, transformer bindings, document types, document-reference occurrences,
   document dependencies, service-document dependencies, Java source sets, Java imports, Java type
   references, Java pipeline accesses, Java invocation occurrences, service support statuses,
+  process definitions, process entrypoint validation, process memberships, process dependency edges,
+  process unresolved calls, process document relationships, technical entrypoint candidates,
   extraction policies, and typed findings.
 - Renderers produce deterministic inventory JSON/Markdown and deterministic analysis JSON,
-  per-service Markdown, per-document Markdown, and Graphviz DOT.
+  top-level index Markdown, entrypoint candidate Markdown, per-service Markdown, per-document
+  Markdown, process Markdown, and Graphviz DOT.
 - The CLI exposes `wm-doc scan` and `wm-doc analyze`.
 
 ## Analysis Schema
@@ -172,6 +180,40 @@ M5-lite migrates to `analysis.v7`:
 - M5-lite does not add JDBC, SQL, database-resource, connection-alias, UM/JMS, trigger, scheduler,
   process, or M4b Java effect models. Those remain fixture-gated future milestones.
 
+M6 migrates to `analysis.v8`:
+
+- `processes.yml` version 1 is optional. When omitted, `<scan-root>/processes.yml` is auto-detected;
+  default absence is normal and not a finding. An explicit missing path emits
+  `PROCESS_CONFIG_MISSING` but analysis continues.
+- Process catalog parsing uses PyYAML safe loading with duplicate-key, alias/anchor, custom-tag,
+  multi-document, size, process-count, and entrypoint-count guards. Raw YAML and unknown property
+  values are never serialized.
+- Process definitions are top-level records because a process can span packages. User IDs use the
+  safe regex `[a-z0-9][a-z0-9._-]{0,127}` and become `processes/<id>.md` and
+  `graphs/processes/<id>.dot` filenames without rewriting.
+- Declared entrypoints are exact canonical service full names. Statuses are `RESOLVED`, `NOT_FOUND`,
+  `DUPLICATE`, and `AMBIGUOUS`; no short-name, fuzzy, package-prefix, or similarly named fallback is
+  attempted. Process Markdown keeps the user-authored `Declared Entrypoints` table separate from
+  `Entrypoint Validation`, which shows the static resolution status and links only resolved service
+  pages.
+- Process membership is deterministic BFS over resolved `UniqueDependency` records with
+  `INVOKES` and `USES_TRANSFORMER` kinds. Memberships retain minimum depth, entrypoint flags,
+  reached-from entrypoint IDs, and shortest representative dependency-ID paths.
+- Process edges reference existing unique service dependencies. Unresolved dependencies from member
+  services become process unresolved call facts rather than inferred services or external systems.
+- Process document relationships are derived from existing service/document and document/document
+  dependency evidence using neutral roles such as `SERVICE_INPUT`, `ENTRYPOINT_OUTPUT`, and
+  `DOCUMENT_DEPENDENCY`. Process Markdown links a relationship only when it is resolved and the
+  canonical document page exists in the generated output; unresolved or inconsistent targets remain
+  visible as unlinked technical identifiers.
+- Technical entrypoint candidates are generated for analyzed services with zero incoming resolved
+  local unique service dependencies. They are labeled as technical candidates only and never create
+  business process definitions.
+- M6 adds a top-level documentation index, process catalog/page Markdown, service/document process
+  cross-links, `entrypoints.md`, and per-process DOT graphs. Generated Markdown link integrity is
+  covered by regression tests. It does not render SVG/PNG and does not add process-to-process
+  overview semantics.
+
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
 treating them as silently supported. Mapping paths preserve the raw declared webMethods path as
@@ -183,6 +225,6 @@ document schemas, recursively expand referenced documents, interpret field names
 semantics, or model Specification artifacts as Document Types.
 
 Later milestones may add broad Java external-effect classification, fuller FLOW semantics, detailed
-adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, process graphs,
-Service Specification IR, package dependency graphs, snapshot diffing, and Ollama input generation.
-Those are intentionally outside M5-lite and require a separate gate.
+adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, native BPM
+process-model parsing, Service Specification IR, package dependency graphs, snapshot diffing, and
+Ollama input generation. Those are intentionally outside M6 and require a separate gate.

@@ -21,10 +21,19 @@ Unknown or not claimed:
 M5-lite fixture note:
 
 - The current fixture set does not contain a real JDBC Adapter Service, trigger, scheduler, UM/JMS,
-  process, or other opaque service artifact with an unsupported `svc_type`.
+  native process-model, or other opaque service artifact with an unsupported `svc_type`.
 - Opaque service support is limited to common `node.ndf` metadata and exact dependency resolution.
   Synthetic tests validate that generic behavior, but they do not prove any adapter-specific
   serialization format.
+
+M6 fixture note:
+
+- The checked-in `samples/` tree does not contain a default `processes.yml`.
+- Process catalog tests use temporary user-authored YAML files outside the analyzed sample packages.
+  They validate catalog parsing, exact entrypoint validation, traversal, process documentation, and
+  per-process DOT output without modifying or adding evidence to the fixture packages.
+- M6 does not prove native webMethods BPM/process-model serialization because no such fixture is
+  present.
 
 ## PGP
 

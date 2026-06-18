@@ -21,6 +21,8 @@ from wm_doc.ir import (
     LiteralValue,
     MappingEndpoint,
     MappingOperation,
+    ProcessDefinition,
+    ProcessServiceMembership,
     ServiceDocumentDependency,
     SignatureField,
     SourceReference,
@@ -191,6 +193,10 @@ No description was declared in supported metadata.
 
 {{ render_incoming_dependencies(incoming_dependencies) }}
 
+## Processes
+
+{{ render_process_memberships(process_memberships, process_definitions) }}
+
 ## Call Occurrences
 
 {{ render_calls(service_calls, "INVOKE") }}
@@ -228,12 +234,13 @@ No service-level findings.
 
 ## Analysis Limitations
 
-M5-lite extracts observed FLOW, mapping, document-reference, Java Service source evidence, and
-opaque service common metadata with literal and free-text disclosure policies. It does not resolve
-mapped paths against document schemas, evaluate branch conditions, simulate loops or runtime state,
-infer dynamic Java invocation targets, promote nested Java executable bodies without a
-callback/control-flow model, execute Java code, compile Java source, connect to Integration Server,
-or parse JDBC, trigger, scheduler, messaging, process, or database-resource semantics.
+M6 extracts observed FLOW, mapping, document-reference, Java Service source evidence, opaque service
+common metadata, and user-declared process catalog evidence with literal and free-text disclosure
+policies. It does not resolve mapped paths against document schemas, evaluate branch conditions,
+simulate loops or runtime state, infer dynamic Java invocation targets, promote nested Java
+executable bodies without a callback/control-flow model, execute Java code, compile Java source,
+connect to Integration Server, or parse JDBC, trigger, scheduler, messaging, BPM process-model, or
+database-resource semantics.
 """,
     trim_blocks=True,
     lstrip_blocks=True,
@@ -241,9 +248,14 @@ or parse JDBC, trigger, scheduler, messaging, process, or database-resource sema
 
 
 def render_service_markdown(
-    service: FlowService, incoming_dependencies: list[UniqueDependency] | None = None
+    service: FlowService,
+    incoming_dependencies: list[UniqueDependency] | None = None,
+    process_memberships: list[ProcessServiceMembership] | None = None,
+    process_definitions: dict[str, ProcessDefinition] | None = None,
 ) -> str:
     incoming_dependencies = incoming_dependencies or []
+    process_memberships = process_memberships or []
+    process_definitions = process_definitions or {}
     normal_dependencies = _dependencies_for_kind(service, DependencyKind.INVOKES)
     transformer_dependencies = _dependencies_for_kind(service, DependencyKind.USES_TRANSFORMER)
     service_calls = _calls_for_type(service, "INVOKE")
@@ -280,6 +292,8 @@ def render_service_markdown(
         normal_dependencies=normal_dependencies,
         transformer_dependencies=transformer_dependencies,
         incoming_dependencies=incoming_dependencies,
+        process_memberships=process_memberships,
+        process_definitions=process_definitions,
         service_calls=service_calls,
         transformer_calls=transformer_calls,
         input_document_dependencies=input_document_dependencies,
@@ -303,6 +317,7 @@ def render_service_markdown(
         render_fields=_render_fields,
         render_dependencies=_render_dependencies,
         render_incoming_dependencies=_render_incoming_dependencies,
+        render_process_memberships=_render_process_memberships,
         render_document_usage=_render_document_usage,
         render_document_references=_render_document_references,
         render_calls=_render_calls,
@@ -414,6 +429,33 @@ def _render_incoming_dependencies(dependencies: list[UniqueDependency]) -> str:
             f"`{dependency.source_service}` | "
             f"`{dependency.dependency_kind}` | "
             f"`{sample_text}` |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _render_process_memberships(
+    memberships: list[ProcessServiceMembership],
+    process_definitions: dict[str, ProcessDefinition],
+) -> str:
+    if not memberships:
+        return "This service is not part of any declared process.\n"
+    lines = [
+        "| Process | Membership | Depth | Link |",
+        "| --- | --- | ---: | --- |",
+    ]
+    for membership in sorted(
+        memberships,
+        key=lambda item: (item.process_id.casefold(), item.minimum_depth, item.id),
+    ):
+        process = process_definitions.get(membership.process_id)
+        name = process.name if process is not None else membership.process_id
+        role = "entrypoint" if membership.entrypoint else "transitive"
+        lines.append(
+            "| "
+            f"`{name}` | "
+            f"`{role}` | "
+            f"{membership.minimum_depth} | "
+            f"[`{membership.process_id}`](../processes/{membership.process_id}.md) |"
         )
     return "\n".join(lines) + "\n"
 
@@ -775,11 +817,18 @@ def _text_display(text: TextValue | None) -> str | None:
     return None
 
 
-def write_service_markdown(output_dir: Path, services: list[FlowService]) -> list[Path]:
+def write_service_markdown(
+    output_dir: Path,
+    services: list[FlowService],
+    process_memberships: list[ProcessServiceMembership] | None = None,
+    processes: list[ProcessDefinition] | None = None,
+) -> list[Path]:
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     incoming_dependencies = _incoming_dependencies_by_target(services)
+    memberships_by_service = _process_memberships_by_service(process_memberships or [])
+    process_definitions = {process.process_id: process for process in processes or []}
     slug_counts = Counter(
         service_markdown_filename(service.identity.full_name) for service in services
     )
@@ -794,6 +843,8 @@ def write_service_markdown(output_dir: Path, services: list[FlowService]) -> lis
             render_service_markdown(
                 service,
                 incoming_dependencies.get(service.identity.full_name, []),
+                memberships_by_service.get(service.identity.full_name, []),
+                process_definitions,
             ),
             encoding="utf-8",
         )
@@ -814,4 +865,16 @@ def _incoming_dependencies_by_target(
     return {
         target: sorted(dependencies, key=_incoming_dependency_key)
         for target, dependencies in incoming.items()
+    }
+
+
+def _process_memberships_by_service(
+    memberships: list[ProcessServiceMembership],
+) -> dict[str, list[ProcessServiceMembership]]:
+    grouped: dict[str, list[ProcessServiceMembership]] = {}
+    for membership in memberships:
+        grouped.setdefault(membership.service, []).append(membership)
+    return {
+        service: sorted(items, key=lambda item: (item.process_id.casefold(), item.id))
+        for service, items in grouped.items()
     }

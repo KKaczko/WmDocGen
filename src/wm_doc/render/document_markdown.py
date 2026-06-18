@@ -11,6 +11,8 @@ from wm_doc.ir import (
     DocumentReferenceOccurrence,
     DocumentType,
     ExtractionPolicySnapshot,
+    ProcessDefinition,
+    ProcessDocumentRelationship,
     ServiceDocumentDependency,
     TextValue,
 )
@@ -24,7 +26,11 @@ def render_document_markdown(
     document_dependencies: list[DocumentDependency],
     service_dependencies: list[ServiceDocumentDependency],
     extraction_policy: ExtractionPolicySnapshot,
+    process_relationships: list[ProcessDocumentRelationship] | None = None,
+    process_definitions: dict[str, ProcessDefinition] | None = None,
 ) -> str:
+    process_relationships = process_relationships or []
+    process_definitions = process_definitions or {}
     outgoing = [
         dependency
         for dependency in document_dependencies
@@ -74,6 +80,17 @@ def render_document_markdown(
         "",
         _render_service_dependencies(referenced_by_services),
         "",
+        "## Referenced By Processes",
+        "",
+        _render_process_relationships(
+            [
+                relationship
+                for relationship in process_relationships
+                if relationship.target_document == document.identity.full_name
+            ],
+            process_definitions,
+        ),
+        "",
         "## Referenced By Documents",
         "",
         _render_document_dependencies(referenced_by_documents, reverse=True),
@@ -119,10 +136,13 @@ def write_document_markdown(
     document_dependencies: list[DocumentDependency],
     service_dependencies: list[ServiceDocumentDependency],
     extraction_policy: ExtractionPolicySnapshot,
+    process_relationships: list[ProcessDocumentRelationship] | None = None,
+    processes: list[ProcessDefinition] | None = None,
 ) -> list[Path]:
     document_dir = output_dir / "documents"
     document_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
+    process_definitions = {process.process_id: process for process in processes or []}
     slug_counts = Counter(
         document_markdown_filename(document.identity.full_name) for document in documents
     )
@@ -140,6 +160,8 @@ def write_document_markdown(
                 document_dependencies,
                 service_dependencies,
                 extraction_policy,
+                process_relationships,
+                process_definitions,
             ),
             encoding="utf-8",
         )
@@ -217,6 +239,35 @@ def _render_service_dependencies(dependencies: list[ServiceDocumentDependency]) 
             f"`{dependency.usage_role.value}` | "
             f"{dependency.resolved} | "
             f"{dependency.occurrence_count} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _render_process_relationships(
+    relationships: list[ProcessDocumentRelationship],
+    processes: dict[str, ProcessDefinition],
+) -> str:
+    if not relationships:
+        return "No process-document relationships were derived for this document.\n"
+    lines = ["| Process | Role | Source | Occurrences |", "| --- | --- | --- | ---: |"]
+    for relationship in sorted(
+        relationships,
+        key=lambda item: (
+            item.process_id.casefold(),
+            item.role.value,
+            item.service or item.source_document or "",
+            item.id,
+        ),
+    ):
+        process = processes.get(relationship.process_id)
+        process_name = process.name if process is not None else relationship.process_id
+        source = relationship.service or relationship.source_document or ""
+        lines.append(
+            "| "
+            f"[`{process_name}`](../processes/{relationship.process_id}.md) | "
+            f"`{relationship.role.value}` | "
+            f"`{source}` | "
+            f"{relationship.occurrence_count} |"
         )
     return "\n".join(lines) + "\n"
 
