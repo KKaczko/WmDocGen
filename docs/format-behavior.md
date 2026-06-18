@@ -10,6 +10,13 @@ Observed from current fixtures:
   as `pgp.services.decrypt:decryptAndVerify` mapping to
   `PGP/code/source/pgp/services/decrypt.java`.
 - Specifications use `node.ndf` with `svc_type=spec`.
+- M5-lite trims surrounding whitespace before interpreting top-level `svc_type`. A parseable
+  service-like `node.ndf` with a non-empty trimmed `svc_type` other than `flow`, `java`, or `spec`
+  becomes an opaque service. Identity comes from the namespace path, the trimmed source service type
+  is preserved, and only common metadata is parsed.
+- A missing, empty, or whitespace-only top-level `svc_type` is not enough to promote an arbitrary
+  `node.ndf` directory to a service. Such artifacts remain inventory-only unknowns unless another
+  fixture-proven rule applies.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
 - Observed active Document Types in current fixtures all come from PGP. OAAdapter contains service
@@ -43,6 +50,20 @@ Observed from current fixtures:
 - Observed FLOW Services carry signatures in `node.ndf` under `svc_sig/sig_in/sig_out`.
 - Observed signature fields can carry `field_name`, `field_type`, `field_dim`, `field_opt`,
   `wrapper_type`, nested `rec_fields`, and document references in `rec_ref`.
+- Opaque services reuse the same common `svc_sig` structure when present. Malformed common
+  signature shapes are reported as `SERVICE_SIGNATURE_METADATA_PARTIAL`; no adapter-specific
+  signature, SQL, connection, table, trigger, or scheduler metadata is interpreted.
+- Signature source evidence points to the actual observed `svc_sig` metadata shape. A malformed
+  scalar or array `svc_sig` is reported against `/Values/value[@name='svc_sig']` or
+  `/Values/array[@name='svc_sig']`, not rewritten as if a record had been present.
+- Top-level `node_comment` is the only common service description field currently extracted for
+  FLOW, Java, and opaque services. It is filtered by the free-text disclosure policy before
+  serialization. Non-scalar `node_comment` values emit `SERVICE_DESCRIPTION_MALFORMED`.
+  Malformed-description findings point to the actual observed Values child shape, such as
+  `/Values/record[@name='node_comment']` or `/Values/array[@name='node_comment']`, instead of
+  inventing a scalar value path.
+- Malformed XML findings preserve a safe parser reason and use relative `SourceReference.path` for
+  file location. When XML structure is unavailable, `source_node` is omitted.
 - Observed Java Service `node.ndf` files may omit local `svc_sig` records while naming a
   Specification with `svc_spec`. M4a keeps declared signatures and observed Java pipeline accesses
   separate and does not require a Java access key to appear in the declared signature.

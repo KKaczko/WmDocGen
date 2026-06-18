@@ -31,6 +31,7 @@ Current analysis observations:
 
 - OAAdapter primary service:
   `oa.adapter.geographicAddressManagement:createGeographicAddressValidation`
+- OAAdapter remains a normal FLOW service fixture: its `node.ndf` declares `svc_type=flow`.
 - OAAdapter signature contains one `input` document reference and one `output` document reference.
 - OAAdapter observed FLOW tags include `FLOW`, `SEQUENCE`, `BRANCH`, `LOOP`, `INVOKE`, `MAPINVOKE`,
   `MAP`, `MAPCOPY`, `MAPSET`, `MAPDELETE`, `MAPSOURCE`, `MAPTARGET`, `DATA`, and `EXIT`.
@@ -44,6 +45,10 @@ Current analysis observations:
   executing, compiling, or loading Java code.
 - PGP includes 7 active Document Type artifacts. OAAdapter includes service signature references to
   two OA document types, but those document artifacts are not present in the local snapshot.
+- Current samples contain no real opaque/non-FLOW/non-Java service fixture. M5-lite production
+  behavior for opaque services is therefore validated with synthetic common-`node.ndf` tests only.
+  Detailed JDBC Adapter Service, SQL, connection-alias, UM/JMS, trigger, scheduler, and process
+  formats remain unproven by fixtures.
 
 M2b observed active mapping tag counts:
 
@@ -109,6 +114,13 @@ M4a canonical Java Service counts:
 - Java pipeline access scopes: 55 `ROOT_PIPELINE` and 18 `NESTED_IDATA`.
 - Java invocation occurrences: 0.
 - Java-derived unique service dependencies: 0.
+
+M5-lite opaque service counts:
+
+- Opaque services in current fixtures: 0.
+- All current fixture services are fully analyzed by their supported FLOW or Java parser.
+- `graphs/dependencies.dot` remains a service dependency graph and contains no database, messaging,
+  scheduler, trigger, process, or external-resource nodes.
 
 Important Java fixture note:
 

@@ -80,21 +80,34 @@ def analyze(
     document_dot_path = write_document_dot(output, analysis)
     flow_count = sum(1 for service in services if service.service_type.value == "FLOW")
     java_count = sum(1 for service in services if service.service_type.value == "JAVA")
+    opaque_count = sum(1 for service in services if service.service_type.value == "OPAQUE")
     metrics = analysis.metrics
     typer.echo(
         "Analyzed services:\n"
         f"- FLOW: {flow_count}\n"
         f"- Java: {java_count}\n"
+        f"- Opaque: {opaque_count}\n"
         f"- total: {len(services)}\n"
+        "Analysis support status:\n"
+        f"- full: {metrics.service_analysis_status_counts.get('FULL', 0)}\n"
+        f"- partial: {metrics.service_analysis_status_counts.get('PARTIAL', 0)}\n"
+        f"- opaque: {metrics.service_analysis_status_counts.get('OPAQUE', 0)}\n"
+        "Opaque service descriptions:\n"
+        f"- with source descriptions: {metrics.opaque_service_with_description_count}\n"
+        f"- without source descriptions: {metrics.opaque_service_without_description_count}\n"
         "Service call occurrences:\n"
         f"- FLOW: {metrics.flow_call_occurrence_count}\n"
         f"- Java static: {metrics.java_static_call_occurrence_count}\n"
         f"- Java dynamic/partial: {metrics.java_dynamic_call_occurrence_count}\n"
         f"- total promoted calls: {metrics.total_call_occurrence_count}\n"
+        "Resolved call targets by type:\n"
+        f"- Opaque: {metrics.resolved_call_occurrence_target_type_counts.get('OPAQUE', 0)}\n"
         "Unique service dependencies:\n"
         f"- FLOW-derived: {metrics.flow_unique_dependency_count}\n"
         f"- Java-derived: {metrics.java_unique_dependency_count}\n"
         f"- total: {metrics.total_unique_dependency_count}\n"
+        "Resolved unique dependency targets by type:\n"
+        f"- Opaque: {metrics.resolved_unique_dependency_target_type_counts.get('OPAQUE', 0)}\n"
         f"Wrote {output / 'analysis.json'}, {len(service_paths)} service markdown file(s), "
         f"{len(document_paths)} document markdown file(s), {dot_path}, and {document_dot_path}."
     )

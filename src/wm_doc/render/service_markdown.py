@@ -46,9 +46,24 @@ _TEMPLATE = Template(
 | Namespace | `{{ service.identity.namespace }}` |
 | Service | `{{ service.identity.name }}` |
 | Type | `{{ service.service_type }}` |
+| Source service type | `{{ source_service_type }}` |
+| Analysis support | `{{ service.analysis_status }}` |
+| Description status | `{{ service.description_status }}` |
 | Importance | `{{ service.classification.importance }}` |
 | Layer | `{{ service.classification.layer }}` |
 | Identity basis | `{{ service.identity.basis }}` |
+
+## Analysis Support
+
+{% if service.analysis_status.value == "OPAQUE" -%}
+The artifact was identified as a service, but its implementation-specific format was not analyzed.
+Only common service metadata is represented.
+{% elif service.analysis_status.value == "PARTIAL" -%}
+The artifact was identified as a service and supported metadata was extracted, but one or more
+service-level findings describe unavailable or malformed evidence.
+{% else -%}
+The artifact was analyzed by the supported parser for its service type.
+{% endif %}
 
 ## Description
 
@@ -172,6 +187,10 @@ No description was declared in supported metadata.
 
 {{ render_dependencies(transformer_dependencies) }}
 
+## Called By
+
+{{ render_incoming_dependencies(incoming_dependencies) }}
+
 ## Call Occurrences
 
 {{ render_calls(service_calls, "INVOKE") }}
@@ -209,18 +228,22 @@ No service-level findings.
 
 ## Analysis Limitations
 
-M4a extracts observed FLOW, mapping, document-reference, and Java Service source evidence with
-literal and free-text disclosure policies. It does not resolve mapped paths against document
-schemas, evaluate branch conditions, simulate loops or runtime state, infer dynamic Java invocation
-targets, promote nested Java executable bodies without a callback/control-flow model, execute Java
-code, compile Java source, or connect to Integration Server.
+M5-lite extracts observed FLOW, mapping, document-reference, Java Service source evidence, and
+opaque service common metadata with literal and free-text disclosure policies. It does not resolve
+mapped paths against document schemas, evaluate branch conditions, simulate loops or runtime state,
+infer dynamic Java invocation targets, promote nested Java executable bodies without a
+callback/control-flow model, execute Java code, compile Java source, connect to Integration Server,
+or parse JDBC, trigger, scheduler, messaging, process, or database-resource semantics.
 """,
     trim_blocks=True,
     lstrip_blocks=True,
 )
 
 
-def render_service_markdown(service: FlowService) -> str:
+def render_service_markdown(
+    service: FlowService, incoming_dependencies: list[UniqueDependency] | None = None
+) -> str:
+    incoming_dependencies = incoming_dependencies or []
     normal_dependencies = _dependencies_for_kind(service, DependencyKind.INVOKES)
     transformer_dependencies = _dependencies_for_kind(service, DependencyKind.USES_TRANSFORMER)
     service_calls = _calls_for_type(service, "INVOKE")
@@ -253,8 +276,10 @@ def render_service_markdown(service: FlowService) -> str:
     return _TEMPLATE.render(
         service=service,
         description_text=description_text,
+        source_service_type=service.source_service_type or "<not declared>",
         normal_dependencies=normal_dependencies,
         transformer_dependencies=transformer_dependencies,
+        incoming_dependencies=incoming_dependencies,
         service_calls=service_calls,
         transformer_calls=transformer_calls,
         input_document_dependencies=input_document_dependencies,
@@ -277,6 +302,7 @@ def render_service_markdown(service: FlowService) -> str:
         ),
         render_fields=_render_fields,
         render_dependencies=_render_dependencies,
+        render_incoming_dependencies=_render_incoming_dependencies,
         render_document_usage=_render_document_usage,
         render_document_references=_render_document_references,
         render_calls=_render_calls,
@@ -353,17 +379,51 @@ def _render_dependencies(dependencies: list[UniqueDependency]) -> str:
     if not dependencies:
         return "No static targets were extracted for this dependency kind.\n"
     lines = [
-        "| Occurrences | Resolved | Target |",
-        "| ---: | --- | --- |",
+        "| Occurrences | Resolved | Target Type | Target Support | Target |",
+        "| ---: | --- | --- | --- | --- |",
     ]
     for dependency in dependencies:
         lines.append(
             "| "
             f"{dependency.occurrence_count} | "
             f"{dependency.resolved} | "
+            f"`{dependency.target_type or 'UNKNOWN'}` | "
+            f"`{dependency.target_analysis_status or 'UNKNOWN'}` | "
             f"`{dependency.target_service}` |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _render_incoming_dependencies(dependencies: list[UniqueDependency]) -> str:
+    if not dependencies:
+        return "No incoming static service calls target this service.\n"
+    lines = [
+        "| Occurrences | Resolved | Target Support | Source | Kind | Source sample |",
+        "| ---: | --- | --- | --- | --- | --- |",
+    ]
+    for dependency in sorted(dependencies, key=_incoming_dependency_key):
+        sample = dependency.source_samples[0] if dependency.source_samples else None
+        sample_text = (
+            sample.path + (f":{sample.line}" if sample.line else "") if sample else ""
+        )
+        lines.append(
+            "| "
+            f"{dependency.occurrence_count} | "
+            f"{dependency.resolved} | "
+            f"`{dependency.target_analysis_status or 'UNKNOWN'}` | "
+            f"`{dependency.source_service}` | "
+            f"`{dependency.dependency_kind}` | "
+            f"`{sample_text}` |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _incoming_dependency_key(dependency: UniqueDependency) -> tuple[str, str, str]:
+    return (
+        dependency.source_service.casefold(),
+        dependency.dependency_kind.value,
+        dependency.id,
+    )
 
 
 def _render_document_usage(dependencies: list[ServiceDocumentDependency]) -> str:
@@ -433,8 +493,8 @@ def _render_calls(calls: list[CallOccurrence], label: str) -> str:
     if not calls:
         return f"No static {label} call occurrences were extracted.\n"
     lines = [
-        "| Call | Resolved | Target | Source |",
-        "| --- | --- | --- | --- |",
+        "| Call | Resolved | Target Type | Target Support | Target | Source |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for call in calls[:40]:
         line = f":{call.source.line}" if call.source.line else ""
@@ -442,11 +502,15 @@ def _render_calls(calls: list[CallOccurrence], label: str) -> str:
             "| "
             f"`{call.id}` | "
             f"{call.resolved} | "
+            f"`{call.target_type or 'UNKNOWN'}` | "
+            f"`{call.target_analysis_status or 'UNKNOWN'}` | "
             f"`{call.target}` | "
             f"`{call.source.path}{line}` |"
         )
     if len(calls) > 40:
-        lines.append(f"| ... | ... | {len(calls) - 40} additional calls omitted | ... |")
+        lines.append(
+            f"| ... | ... | ... | ... | {len(calls) - 40} additional calls omitted | ... |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -715,6 +779,7 @@ def write_service_markdown(output_dir: Path, services: list[FlowService]) -> lis
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
+    incoming_dependencies = _incoming_dependencies_by_target(services)
     slug_counts = Counter(
         service_markdown_filename(service.identity.full_name) for service in services
     )
@@ -725,6 +790,28 @@ def write_service_markdown(output_dir: Path, services: list[FlowService]) -> lis
             digest = hashlib.sha256(service.identity.full_name.encode("utf-8")).hexdigest()[:12]
             filename = f"{stem}__{digest}.md"
         path = service_dir / filename
-        path.write_text(render_service_markdown(service), encoding="utf-8")
+        path.write_text(
+            render_service_markdown(
+                service,
+                incoming_dependencies.get(service.identity.full_name, []),
+            ),
+            encoding="utf-8",
+        )
         written.append(path)
     return written
+
+
+def _incoming_dependencies_by_target(
+    services: list[FlowService],
+) -> dict[str, list[UniqueDependency]]:
+    incoming: dict[str, list[UniqueDependency]] = {
+        service.identity.full_name: [] for service in services
+    }
+    for service in services:
+        for dependency in service.unique_dependencies:
+            if dependency.target_service in incoming:
+                incoming[dependency.target_service].append(dependency)
+    return {
+        target: sorted(dependencies, key=_incoming_dependency_key)
+        for target, dependencies in incoming.items()
+    }

@@ -1,25 +1,35 @@
 # Architecture
 
-M4a implements package/artifact inventory plus FLOW Service, Document Type, and Java Service
-static-analysis slices focused on traceable calls, unique dependencies, observed control-flow
-structure, observed mapping evidence, ordered document field trees, exact document-reference
-resolution, source-first Java Service evidence, and policy-safe disclosure.
+M5-lite implements package/artifact inventory plus FLOW Service, Document Type, Java Service, and
+opaque service static-analysis slices focused on traceable calls, unique dependencies, observed
+control-flow structure, observed mapping evidence, ordered document field trees, exact
+document-reference resolution, source-first Java Service evidence, opaque service identity, and
+policy-safe disclosure.
 
 Subsystems:
 
 - Discovery locates package roots, namespace folders, and artifact file combinations.
 - Secure XML parsing lives in `wm_doc.xmlsafe` and rejects DTD/entity declarations.
+  XML parser diagnostics are sanitized at this boundary so canonical findings keep relative
+  `SourceReference.path` as the authoritative location without repeating absolute local paths in
+  messages.
 - `Values` parsing extracts safe metadata from `manifest.v3`, `node.idf`, and `node.ndf`.
 - Service analysis in `wm_doc.analysis` parses observed FLOW Service signatures, `flow.xml`
-  structures, and Java Service metadata without executing package code.
+  structures, Java Service metadata, and common opaque service metadata without executing package
+  code.
 - Java Service analysis in `wm_doc.java_analysis` associates services with generated source under
   `code/source`, selects only the matched service method, compares it with `java.frag` using
   normalized Java tokens, and extracts method-scoped Java evidence.
+- Opaque Service analysis retains parseable service-like `node.ndf` artifacts with explicit
+  unsupported trimmed `svc_type` values as service identities, but interprets only common metadata:
+  identity, source service type, safe `node_comment`, signatures, source evidence, and findings.
+  Missing, empty, whitespace-only, malformed, or non-scalar service-type metadata is not promoted to
+  an opaque service.
 - Classification in `wm_doc.config` applies deterministic, case-insensitive glob rules. `neverImportant`
   rules take precedence over important service rules.
 - Dependency resolution is exact-name only. It resolves static `INVOKE`, `MAPINVOKE`, and
-  statically confirmed Java invocation targets to discovered FLOW or Java Service metadata and keeps
-  unresolved targets explicit in the IR.
+  statically confirmed Java invocation targets to discovered FLOW, Java, or opaque Service metadata
+  and keeps unresolved targets explicit in the IR.
 - Document Type analysis parses observed `record/node_type=record` metadata into ordered field
   trees. It resolves `rec_ref` values only by exact local `namespace:name` match and keeps unresolved
   targets explicit.
@@ -27,8 +37,8 @@ Subsystems:
   classifications, call occurrences, unique dependencies, an ordered FLOW tree, flow maps, typed
   mapping operations, transformer bindings, document types, document-reference occurrences,
   document dependencies, service-document dependencies, Java source sets, Java imports, Java type
-  references, Java pipeline accesses, Java invocation occurrences, extraction policies, and typed
-  findings.
+  references, Java pipeline accesses, Java invocation occurrences, service support statuses,
+  extraction policies, and typed findings.
 - Renderers produce deterministic inventory JSON/Markdown and deterministic analysis JSON,
   per-service Markdown, per-document Markdown, and Graphviz DOT.
 - The CLI exposes `wm-doc scan` and `wm-doc analyze`.
@@ -145,6 +155,23 @@ M4a migrates to `analysis.v6`:
 - Java disclosure excludes complete Java bodies, decoded `java.frag` bodies, raw token streams,
   arbitrary Java literals, absolute local paths, and wrapper-only source coordinates.
 
+M5-lite migrates to `analysis.v7`:
+
+- Services carry `source_service_type`, `analysis_status`, and `description_status`.
+- `service_type=OPAQUE` represents parseable service artifacts whose top-level `svc_type` is
+  explicit after whitespace trimming but not a supported FLOW, Java, or Specification type.
+- Opaque services are normal services for exact incoming call resolution and
+  `graphs/dependencies.dot` nodes, but no implementation-derived outgoing calls or external
+  resources are inferred from them.
+- `ServiceSummary`, call occurrences, and unique dependencies preserve target analysis support
+  status so callers can distinguish fully analyzed, partial, and opaque targets.
+- Service Markdown renders an `Analysis Support` section for all services and a deterministic
+  `Called By` section from resolved static FLOW/Java dependency evidence.
+- Metrics include service kind counts, support-status counts, description-status counts, opaque
+  service counts, and resolved target-type counts.
+- M5-lite does not add JDBC, SQL, database-resource, connection-alias, UM/JMS, trigger, scheduler,
+  process, or M4b Java effect models. Those remain fixture-gated future milestones.
+
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
 treating them as silently supported. Mapping paths preserve the raw declared webMethods path as
@@ -155,7 +182,7 @@ M3 document parsing is also feature-based. It maps only observed field types (`s
 document schemas, recursively expand referenced documents, interpret field names as business
 semantics, or model Specification artifacts as Document Types.
 
-Later milestones may add broad Java external-effect classification, fuller FLOW semantics, adapter
-fixtures, trigger fixtures, process graphs, Service Specification IR, package dependency graphs,
-snapshot diffing, and Ollama input generation. Those are intentionally outside M4a and require a
-separate gate.
+Later milestones may add broad Java external-effect classification, fuller FLOW semantics, detailed
+adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, process graphs,
+Service Specification IR, package dependency graphs, snapshot diffing, and Ollama input generation.
+Those are intentionally outside M5-lite and require a separate gate.

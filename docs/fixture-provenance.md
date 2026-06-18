@@ -18,6 +18,14 @@ Unknown or not claimed:
 - Runtime Integration Server configuration is not available.
 - No claim is made that this fixture represents all 10.15 package formats.
 
+M5-lite fixture note:
+
+- The current fixture set does not contain a real JDBC Adapter Service, trigger, scheduler, UM/JMS,
+  process, or other opaque service artifact with an unsupported `svc_type`.
+- Opaque service support is limited to common `node.ndf` metadata and exact dependency resolution.
+  Synthetic tests validate that generic behavior, but they do not prove any adapter-specific
+  serialization format.
+
 ## PGP
 
 `samples/PGP` is a public compatibility and discovery corpus used as-is from the local repository
