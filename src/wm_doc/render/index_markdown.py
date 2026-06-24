@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from wm_doc.graph_publish import GraphAsset
 from wm_doc.ir import AnalysisResult
 
 
-def render_documentation_index(analysis: AnalysisResult) -> str:
+def render_documentation_index(
+    analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
+) -> str:
+    graph_assets = graph_assets or []
     lines = [
         "# wm-doc Technical Documentation",
         "",
@@ -28,8 +32,9 @@ def render_documentation_index(analysis: AnalysisResult) -> str:
         "## Links",
         "",
         "- [Analysis JSON](analysis.json)",
-        "- [Service dependency graph](graphs/dependencies.dot)",
-        "- [Document dependency graph](graphs/documents.dot)",
+        "- [Graph catalog](graphs/index.md)",
+        f"- Service dependency graph: {_graph_link(graph_assets, 'graphs/dependencies.dot')}",
+        f"- Document dependency graph: {_graph_link(graph_assets, 'graphs/documents.dot')}",
         "- [Technical entrypoint candidates](entrypoints.md)",
         "- [Services](services/)",
         "- [Document Types](documents/)",
@@ -64,7 +69,20 @@ def render_documentation_index(analysis: AnalysisResult) -> str:
     return "\n".join(lines)
 
 
-def write_documentation_index(output_dir: Path, analysis: AnalysisResult) -> Path:
+def write_documentation_index(
+    output_dir: Path, analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
+) -> Path:
     path = output_dir / "index.md"
-    path.write_text(render_documentation_index(analysis), encoding="utf-8")
+    path.write_text(render_documentation_index(analysis, graph_assets), encoding="utf-8")
     return path
+
+
+def _graph_link(graph_assets: list[GraphAsset], dot_path: str) -> str:
+    asset = next((item for item in graph_assets if item.dot_path == dot_path), None)
+    if asset is None:
+        return f"[DOT]({dot_path})"
+    if "svg" in asset.rendered_paths:
+        return f"[SVG]({asset.rendered_paths['svg']}) ([DOT]({asset.dot_path}))"
+    if "png" in asset.rendered_paths:
+        return f"[PNG]({asset.rendered_paths['png']}) ([DOT]({asset.dot_path}))"
+    return f"[DOT]({asset.dot_path})"

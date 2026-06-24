@@ -592,7 +592,72 @@ Not implemented in M6:
 
 ## Next Milestone Gate
 
-M6 should receive a final acceptance re-audit before any broader milestone planning.
+M7 Gitea-ready graph rendering and publishable docs was explicitly approved and implemented.
 
-M4b, detailed JDBC/M5, native BPM process parsing, M7, or any later milestone requires explicit
+## M7 Gitea-Ready Graph Rendering And Publishable Docs
+
+Implemented in this milestone:
+
+- Schema remains `analysis.v8`; no canonical IR or dependency semantics changed.
+- Optional CLI graph rendering through `wm-doc analyze --render-graphs none|svg|png|both`, default
+  `none`, plus optional `--graphviz-dot <path>`.
+- A graph publishing layer that discovers the actual DOT paths emitted by renderers:
+  `graphs/dependencies.dot`, `graphs/documents.dot`, and `graphs/processes/<process-id>.dot`.
+- Derived SVG/PNG rendering through Graphviz `dot` only when requested. Subprocess calls use
+  argument lists with `shell=False`, bounded probe/render timeouts, captured bounded diagnostics,
+  temp files, atomic replacement, empty-output rejection, and cleanup.
+- SVG safety parses and normalizes Graphviz XML output, strips the known SVG 1.1 external DTD
+  declaration and comments, and rejects malformed roots, entity declarations, scripts, JavaScript
+  URLs, `foreignObject`, event-handler attributes, `file://` links, absolute local paths, and
+  unexpected external hrefs. PNG output is accepted only after PNG signature/chunk, IHDR dimension,
+  IDAT, IEND, and CRC validation.
+- Graphviz executable, filesystem, timeout, and publish/replace errors are converted to bounded
+  render failures. Diagnostics are scrubbed of absolute paths and secret-like values before CLI
+  reporting.
+- Diagnostic redaction covers common secret-bearing key variants including `password`, `passwd`,
+  `token`, `access_token`, `api-key`, private-key keys, and bearer authorization values, while
+  preserving non-secret diagnostic context.
+- Temporary output cleanup failures are reported as graph-render failures or secondary failure
+  details rather than being suppressed.
+- `graphs/index.md` listing each graph with DOT plus only successfully rendered SVG/PNG links.
+- Top-level index graph links that prefer rendered SVG, then PNG, then DOT.
+- Process Markdown graph previews that always link DOT and embed SVG when present, otherwise PNG.
+- Managed generated-output cleanup for root generated files and generated directories before a new
+  analysis writes output, preventing stale graph images and stale process pages. Cleanup replaces
+  managed file/directory shape conflicts, preserves unrelated output-root files, and unlinks
+  symlinks at managed paths instead of following them.
+- CLI publishing counts for DOT graphs, rendered SVG graphs, rendered PNG graphs, graph-render
+  failures, and graph-index generation.
+- Markdown link-integrity coverage for generated image links, stale-output sequences, graph-render
+  modes, and failed rendering.
+- Unit tests for Graphviz runner behavior with fake subprocesses, including option modes, argument
+  lists, missing executable, failed probe, OS/filesystem errors, timeout, non-zero render, empty
+  output, malformed/unsafe SVG, malformed PNG, secret-redacted diagnostics, and temp cleanup.
+
+Verification baseline:
+
+- Default checked-in fixtures still use schema `analysis.v8` with 24 FLOW Services, 11 Java
+  Services, 0 opaque services, 8 Specifications, 7 Document Types, 0 process definitions, and 15
+  technical entrypoint candidates.
+- Default `--render-graphs none` output adds `graphs/index.md` compared with M6.
+- Fixture process-catalog output with `--render-graphs none` includes four DOT graphs: dependency,
+  document, and two process graphs.
+- `--render-graphs svg` adds one SVG per DOT graph, `png` adds one PNG per DOT graph, and `both`
+  adds both derived files per DOT graph.
+
+Not implemented in M7:
+
+- Graphviz installation or Python image dependencies.
+- Changes to `analysis.json` schema or DOT graph semantics.
+- Process-to-process overview graphs.
+- Mermaid, JavaScript graph viewers, static-site frameworks, ZIP generation, CI publishing
+  definitions, or Graphviz-rendered SVG/PNG as analysis inputs.
+- JDBC/SQL/database-resource parsing, UM/JMS, triggers, schedulers, native BPM/process-model
+  parsing, adapter-specific semantics, external-system inference, M4b Java external effects,
+  runtime execution, Integration Server connectivity, database connectivity, snapshot diffing, or
+  Ollama.
+
+## Next Milestone Gate
+
+M4b, detailed JDBC/M5, native BPM process parsing, M8, or any later milestone requires explicit
 approval before implementation.

@@ -1,0 +1,15 @@
+digraph documents {
+  rankdir=LR;
+  n_276d59d20abf3c1a [label="pgp.documents.config:KeyConfig", kind="document_type"];
+  n_495fbd0a95e3fdf8 [label="pgp.documents.config:PGPconfig", kind="document_type"];
+  n_5987def13b198b34 [label="pgp.documents:KeyRegData", kind="document_type"];
+  n_7f32bcbaceebecc3 [label="pgp.documents:PrivateKeyData", kind="document_type"];
+  n_33a766d1bd41a2f1 [label="pgp.documents:PubKeyRegEntry", kind="document_type"];
+  n_cf5175544ff5b286 [label="pgp.documents:PublicKeyData", kind="document_type"];
+  n_231684594e87d0de [label="pgp.documents:SecKeyRegEntry", kind="document_type"];
+  n_495fbd0a95e3fdf8 -> n_276d59d20abf3c1a [label="REFERENCES_DOCUMENT", kind="REFERENCES_DOCUMENT", occurrences="1", resolved="true"];
+  n_33a766d1bd41a2f1 -> n_5987def13b198b34 [label="REFERENCES_DOCUMENT", kind="REFERENCES_DOCUMENT", occurrences="1", resolved="true"];
+  n_33a766d1bd41a2f1 -> n_cf5175544ff5b286 [label="REFERENCES_DOCUMENT", kind="REFERENCES_DOCUMENT", occurrences="1", resolved="true"];
+  n_231684594e87d0de -> n_5987def13b198b34 [label="REFERENCES_DOCUMENT", kind="REFERENCES_DOCUMENT", occurrences="1", resolved="true"];
+  n_231684594e87d0de -> n_7f32bcbaceebecc3 [label="REFERENCES_DOCUMENT", kind="REFERENCES_DOCUMENT", occurrences="1", resolved="true"];
+}

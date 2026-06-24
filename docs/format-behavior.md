@@ -43,7 +43,29 @@ Observed from current fixtures:
 - Technical entrypoint candidates are services with zero incoming resolved local unique service
   dependencies. They are reported as technical root candidates, not confirmed business entrypoints.
 - Generated Markdown link integrity is regression-tested for no-catalog, fixture-catalog,
-  synthetic unresolved-document, and free-text include/redact/omit outputs.
+  synthetic unresolved-document, graph-image, stale-output, and free-text include/redact/omit
+  outputs.
+- M7 graph publishing always treats DOT as canonical. `graphs/index.md` is generated for every
+  analysis and lists each DOT graph plus SVG/PNG links only when those derived files exist.
+- `--render-graphs none` is the default. `svg`, `png`, and `both` request Graphviz rendering for
+  every current DOT graph, including per-process DOT files. Graphviz is resolved from `PATH` unless
+  `--graphviz-dot` is supplied.
+- Rendered SVG/PNG files are derived publishing artifacts. Failed rendering leaves analysis JSON,
+  Markdown, and DOT files available, omits failed image links, reports bounded safe diagnostics, and
+  returns a non-zero CLI status when rendering was explicitly requested.
+- Graphviz, temporary-file, and generated-output cleanup diagnostics are scrubbed before CLI
+  disclosure. Absolute paths are replaced, JDBC-like connection strings are redacted, and
+  secret-like key/value forms such as `password=`, `passwd=`, `access_token=`, `api-key:`, and
+  bearer authorization values do not expose their values. Raw renderer stderr/stdout is not written
+  to canonical JSON, Markdown, graph indexes, or process/service/document pages.
+- Generated-output cleanup is shape-tolerant only for managed generated paths:
+  `analysis.json`, `index.md`, `entrypoints.md`, `services`, `documents`, `processes`, and
+  `graphs`. Other output-root files are outside the managed cleanup contract.
+- SVG output is accepted only after XML parsing and normalization. The known Graphviz SVG 1.1
+  external DTD declaration and comments are removed; malformed XML, entity declarations, script,
+  JavaScript URLs, `foreignObject`, event handlers, `file://` links, absolute local paths, and
+  unexpected external hrefs are rejected. PNG output must be structurally valid PNG data with valid
+  chunk CRCs, non-zero IHDR dimensions, IDAT data, and a final IEND chunk.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
 - Observed active Document Types in current fixtures all come from PGP. OAAdapter contains service

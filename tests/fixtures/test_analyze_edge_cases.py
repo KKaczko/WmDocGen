@@ -3,10 +3,16 @@ from __future__ import annotations
 import base64
 import json
 import re
+import shutil
+import struct
+import subprocess
+import zlib
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+import wm_doc.cli as cli_module
 from wm_doc.analysis import analyze_path
 from wm_doc.cli import app
 from wm_doc.config import (
@@ -39,9 +45,10 @@ from wm_doc.render.service_markdown import (
     write_service_markdown,
 )
 
-MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]*\]\(([^)\n]+)\)")
+MARKDOWN_LINK_RE = re.compile(r"(!?)\[[^\]\n]*\]\(([^)\n]+)\)")
 URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 def test_unknown_flow_element_finding(tmp_path) -> None:
@@ -760,6 +767,7 @@ processes:
     assert "`docs:Missing` | `UNRESOLVED`" in process_markdown
     assert f"../documents/{document_markdown_filename('docs:Missing')}" not in process_markdown
     _assert_generated_markdown_links_valid(output)
+    assert (output / "graphs" / "index.md").exists()
 
 
 def test_cli_processes_with_findings_label_matches_json_for_global_config_cases(
@@ -809,7 +817,8 @@ def test_generated_markdown_links_are_valid_without_process_catalog(tmp_path) ->
 
     _run_cli_analyze(_samples(), output)
 
-    assert _generated_file_count(output) == 47
+    assert _generated_file_count(output) == 48
+    assert (output / "graphs" / "index.md").exists()
     assert not (output / "processes").exists()
     _assert_generated_markdown_links_valid(output)
 
@@ -827,7 +836,8 @@ def test_generated_markdown_links_are_valid_for_fixture_catalog_modes(tmp_path) 
             free_text_mode=mode,
         )
 
-        assert _generated_file_count(output) == 52
+        assert _generated_file_count(output) == 53
+        assert (output / "graphs" / "index.md").exists()
         assert len(list((output / "processes").glob("*.md"))) == 3
         assert len(list((output / "graphs" / "processes").glob("*.dot"))) == 2
         _assert_generated_markdown_links_valid(output)
@@ -848,6 +858,400 @@ def test_generated_markdown_links_are_valid_for_fixture_catalog_modes(tmp_path) 
             "geographicAddressValidation_docCreateGeographicAddressValidationOutput.md"
             not in geographic_page
         )
+
+
+def test_graph_render_modes_publish_expected_files_and_links(tmp_path, monkeypatch) -> None:
+    fake_runner = FakeGraphvizRunner()
+    monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
+    processes_file = tmp_path / "processes.yml"
+    _write_fixture_process_catalog(processes_file)
+
+    cases = [
+        ("none", 53, 0, 0),
+        ("svg", 57, 4, 0),
+        ("png", 57, 0, 4),
+        ("both", 61, 4, 4),
+    ]
+    for mode, expected_count, expected_svg, expected_png in cases:
+        output = tmp_path / f"fixture-{mode}"
+        graphviz_dot = "dot" if mode != "none" else None
+
+        cli_output = _run_cli_analyze(
+            _samples(),
+            output,
+            processes_file=processes_file,
+            render_graphs=mode,
+            graphviz_dot=graphviz_dot,
+        )
+
+        assert "- DOT graphs generated: 4" in cli_output
+        assert f"- SVG graphs rendered: {expected_svg}" in cli_output
+        assert f"- PNG graphs rendered: {expected_png}" in cli_output
+        assert "- Graph render failures: 0" in cli_output
+        assert _generated_file_count(output) == expected_count
+        assert len(list(output.rglob("*.svg"))) == expected_svg
+        assert len(list(output.rglob("*.png"))) == expected_png
+        graph_index = (output / "graphs" / "index.md").read_text(encoding="utf-8")
+        assert "[DOT](dependencies.dot)" in graph_index
+        assert ("[SVG](dependencies.svg)" in graph_index) is (expected_svg > 0)
+        assert ("[PNG](dependencies.png)" in graph_index) is (expected_png > 0)
+        process_page = (
+            output / "processes" / "geographic-address-validation.md"
+        ).read_text(encoding="utf-8")
+        assert "../graphs/processes/geographic-address-validation.dot" in process_page
+        assert (
+            "![Process call graph](../graphs/processes/geographic-address-validation.svg)"
+            in process_page
+        ) is (expected_svg > 0)
+        assert (
+            "![Process call graph](../graphs/processes/geographic-address-validation.png)"
+            in process_page
+        ) is (expected_svg == 0 and expected_png > 0)
+        _assert_generated_markdown_links_valid(output)
+
+
+def test_graph_render_modes_without_process_catalog(tmp_path, monkeypatch) -> None:
+    fake_runner = FakeGraphvizRunner()
+    monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
+
+    cases = [
+        ("none", 48, 0, 0),
+        ("svg", 50, 2, 0),
+        ("png", 50, 0, 2),
+        ("both", 52, 2, 2),
+    ]
+    for mode, expected_count, expected_svg, expected_png in cases:
+        output = tmp_path / f"no-process-{mode}"
+
+        _run_cli_analyze(
+            _samples(),
+            output,
+            render_graphs=mode,
+            graphviz_dot="dot" if mode != "none" else None,
+        )
+
+        assert _generated_file_count(output) == expected_count
+        assert len(list(output.rglob("*.svg"))) == expected_svg
+        assert len(list(output.rglob("*.png"))) == expected_png
+        assert not (output / "processes").exists()
+        _assert_generated_markdown_links_valid(output)
+
+
+def test_graph_rendered_outputs_are_cleaned_when_later_disabled(
+    tmp_path, monkeypatch
+) -> None:
+    fake_runner = FakeGraphvizRunner()
+    monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
+    output = tmp_path / "analysis"
+    processes_file = tmp_path / "processes.yml"
+    _write_fixture_process_catalog(processes_file)
+
+    _run_cli_analyze(
+        _samples(),
+        output,
+        processes_file=processes_file,
+        render_graphs="both",
+        graphviz_dot="dot",
+    )
+    assert list(output.rglob("*.svg"))
+    assert list(output.rglob("*.png"))
+    assert (output / "processes" / "pgp-key-lookup.md").exists()
+
+    one_process_file = tmp_path / "one-process.yml"
+    one_process_file.write_text(
+        """version: 1
+processes:
+  - id: geographic-address-validation
+    name: Geographic address validation
+    entrypoints:
+      - oa.adapter.geographicAddressManagement:createGeographicAddressValidation
+""",
+        encoding="utf-8",
+    )
+    _run_cli_analyze(
+        _samples(),
+        output,
+        processes_file=one_process_file,
+        render_graphs="none",
+    )
+
+    assert not list(output.rglob("*.svg"))
+    assert not list(output.rglob("*.png"))
+    assert not (output / "processes" / "pgp-key-lookup.md").exists()
+    assert not (output / "graphs" / "processes" / "pgp-key-lookup.dot").exists()
+    assert (output / "graphs" / "processes" / "geographic-address-validation.dot").exists()
+    _assert_generated_markdown_links_valid(output)
+
+
+def test_graph_rendered_outputs_drop_stale_format_when_mode_changes(
+    tmp_path, monkeypatch
+) -> None:
+    fake_runner = FakeGraphvizRunner()
+    monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
+    output = tmp_path / "analysis"
+
+    _run_cli_analyze(
+        _samples(),
+        output,
+        render_graphs="both",
+        graphviz_dot="dot",
+    )
+    assert list(output.rglob("*.svg"))
+    assert list(output.rglob("*.png"))
+
+    _run_cli_analyze(
+        _samples(),
+        output,
+        render_graphs="svg",
+        graphviz_dot="dot",
+    )
+
+    assert list(output.rglob("*.svg"))
+    assert not list(output.rglob("*.png"))
+    graph_index = (output / "graphs" / "index.md").read_text(encoding="utf-8")
+    assert "[SVG]" in graph_index
+    assert "[PNG]" not in graph_index
+    _assert_generated_markdown_links_valid(output)
+
+
+def test_generated_output_cleanup_replaces_managed_path_shape_conflicts(
+    tmp_path,
+) -> None:
+    output = tmp_path / "nested output" / "analysis"
+    output.mkdir(parents=True)
+    unrelated = output / "user-note.txt"
+    unrelated.write_text("keep me", encoding="utf-8")
+    for filename in ("analysis.json", "index.md", "entrypoints.md"):
+        (output / filename).mkdir()
+    for directory in ("services", "documents", "processes", "graphs"):
+        (output / directory).write_text("stale generated path", encoding="utf-8")
+
+    cli_output = _run_cli_analyze(_samples(), output)
+
+    assert "Traceback" not in cli_output
+    assert unrelated.read_text(encoding="utf-8") == "keep me"
+    for filename in ("analysis.json", "index.md", "entrypoints.md"):
+        assert (output / filename).is_file()
+    for directory in ("services", "documents", "graphs"):
+        assert (output / directory).is_dir()
+    assert not (output / "processes").exists()
+    assert (output / "graphs" / "index.md").is_file()
+    assert not list(output.rglob("*.tmp"))
+    _assert_generated_markdown_links_valid(output)
+
+    (output / "graphs" / "processes").write_text("stale nested generated path", encoding="utf-8")
+    processes_file = tmp_path / "processes.yml"
+    _write_fixture_process_catalog(processes_file)
+
+    cli_output = _run_cli_analyze(_samples(), output, processes_file=processes_file)
+
+    assert "Traceback" not in cli_output
+    assert unrelated.read_text(encoding="utf-8") == "keep me"
+    assert (output / "graphs" / "processes").is_dir()
+    assert (
+        output / "graphs" / "processes" / "geographic-address-validation.dot"
+    ).is_file()
+    assert not list(output.rglob("*.tmp"))
+    _assert_generated_markdown_links_valid(output)
+
+
+def test_generated_output_cleanup_failure_is_controlled_and_redacted(
+    tmp_path, monkeypatch
+) -> None:
+    output = tmp_path / "cleanup-failure"
+    output.mkdir()
+    (output / "graphs").mkdir()
+    unrelated = output / "user-note.txt"
+    unrelated.write_text("keep me", encoding="utf-8")
+    original_rmtree = shutil.rmtree
+
+    def failing_rmtree(path: Path) -> None:
+        if Path(path) == output / "graphs":
+            raise PermissionError(
+                "denied password=cleanup-secret access_token=private-token "
+                "D:\\secret\\output"
+            )
+        original_rmtree(path)
+
+    monkeypatch.setattr(cli_module.shutil, "rmtree", failing_rmtree)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "analyze",
+            str(_samples()),
+            "--output",
+            str(output),
+            "--render-graphs",
+            "none",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "OUTPUT_CLEANUP_FAILED" in result.output
+    assert "cleanup-secret" not in result.output
+    assert "private-token" not in result.output
+    assert "D:\\secret" not in result.output
+    assert unrelated.read_text(encoding="utf-8") == "keep me"
+    assert not (output / "analysis.json").exists()
+
+
+def test_generated_output_cleanup_unlinks_managed_symlink_only(tmp_path) -> None:
+    output = tmp_path / "symlink-output"
+    output.mkdir()
+    external_file_target = tmp_path / "external-target.txt"
+    external_file_target.write_text("external content", encoding="utf-8")
+    external_dir_target = tmp_path / "external-dir-target"
+    external_dir_target.mkdir()
+    external_dir_file = external_dir_target / "outside.txt"
+    external_dir_file.write_text("external dir content", encoding="utf-8")
+    try:
+        (output / "graphs").symlink_to(external_file_target)
+        (output / "services").symlink_to(external_dir_target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    _run_cli_analyze(_samples(), output)
+
+    assert external_file_target.read_text(encoding="utf-8") == "external content"
+    assert external_dir_file.read_text(encoding="utf-8") == "external dir content"
+    assert (output / "services").is_dir()
+    assert not (output / "services").is_symlink()
+    assert (output / "graphs").is_dir()
+    assert not (output / "graphs").is_symlink()
+    assert (output / "graphs" / "index.md").is_file()
+    _assert_generated_markdown_links_valid(output)
+
+
+def test_generated_output_cleanup_does_not_follow_nested_symlink(tmp_path) -> None:
+    output = tmp_path / "nested-symlink-output"
+    stale_graphs = output / "graphs"
+    stale_graphs.mkdir(parents=True)
+    external_dir = tmp_path / "external-dir"
+    external_dir.mkdir()
+    external_file = external_dir / "outside.txt"
+    external_file.write_text("external content", encoding="utf-8")
+    try:
+        (stale_graphs / "escape").symlink_to(external_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink creation is unavailable: {exc}")
+
+    _run_cli_analyze(_samples(), output)
+
+    assert external_file.read_text(encoding="utf-8") == "external content"
+    assert (output / "graphs" / "index.md").is_file()
+    _assert_generated_markdown_links_valid(output)
+
+
+def test_requested_graph_render_failure_exits_nonzero_without_broken_links(
+    tmp_path, monkeypatch
+) -> None:
+    class FailingRunner(FakeGraphvizRunner):
+        def __call__(
+            self,
+            args: list[str],
+            *,
+            cwd: Path,
+            timeout: int,
+            capture_output: bool,
+            text: bool,
+            shell: bool,
+        ) -> subprocess.CompletedProcess[str]:
+            if args[1] == "-V":
+                return super().__call__(
+                    args,
+                    cwd=cwd,
+                    timeout=timeout,
+                    capture_output=capture_output,
+                    text=text,
+                    shell=shell,
+                )
+            return subprocess.CompletedProcess(
+                args,
+                1,
+                stdout="",
+                stderr=(
+                    "render failed passwd=AnotherSecret access_token=private-token "
+                    "Authorization: Bearer bearer-secret"
+                ),
+            )
+
+    monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", FailingRunner())
+    output = tmp_path / "failed-render"
+    result = CliRunner().invoke(
+        app,
+        [
+            "analyze",
+            str(_samples()),
+            "--output",
+            str(output),
+            "--render-graphs",
+            "svg",
+            "--graphviz-dot",
+            "dot",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Graph rendering failed:" in result.output
+    assert "- Graph render failures: 2" in result.output
+    for secret in ("AnotherSecret", "private-token", "bearer-secret"):
+        assert secret not in result.output
+    assert (output / "analysis.json").exists()
+    assert (output / "graphs" / "index.md").exists()
+    assert not list(output.rglob("*.svg"))
+    assert "[SVG]" not in (output / "graphs" / "index.md").read_text(encoding="utf-8")
+    generated_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in output.rglob("*")
+        if path.is_file() and path.suffix in {".json", ".md", ".dot"}
+    )
+    for secret in ("AnotherSecret", "private-token", "bearer-secret"):
+        assert secret not in generated_text
+    _assert_generated_markdown_links_valid(output)
+
+
+def test_graphviz_executable_os_error_exits_nonzero_without_traceback(
+    tmp_path, monkeypatch
+) -> None:
+    class BrokenRunner(FakeGraphvizRunner):
+        def __call__(
+            self,
+            args: list[str],
+            *,
+            cwd: Path,
+            timeout: int,
+            capture_output: bool,
+            text: bool,
+            shell: bool,
+        ) -> subprocess.CompletedProcess[str]:
+            raise PermissionError("denied password=hunter2")
+
+    monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", BrokenRunner())
+    output = tmp_path / "failed-executable"
+    result = CliRunner().invoke(
+        app,
+        [
+            "analyze",
+            str(_samples()),
+            "--output",
+            str(output),
+            "--render-graphs",
+            "svg",
+            "--graphviz-dot",
+            "dot",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "EXECUTABLE_NOT_RUNNABLE" in result.output
+    assert "hunter2" not in result.output
+    assert (output / "analysis.json").exists()
+    assert (output / "graphs" / "index.md").exists()
+    assert not list(output.rglob("*.svg"))
+    _assert_generated_markdown_links_valid(output)
 
 
 def test_process_traversal_handles_cycle_opaque_unresolved_and_docs(tmp_path) -> None:
@@ -1682,20 +2086,24 @@ def test_unsupported_document_metadata_findings_are_policy_safe(tmp_path) -> Non
 def _assert_generated_markdown_links_valid(output_root: Path) -> None:
     """Validate generated inline Markdown links without parsing arbitrary Markdown.
 
-    The extractor covers wm-doc generated inline links, skips fenced code blocks and image
-    links, ignores external schemes and pure fragments, and checks local targets remain under
-    the generated output root.
+    The extractor covers wm-doc generated inline links and local image links, skips fenced code
+    blocks, ignores external schemes for regular links and pure fragments, and checks local targets
+    remain under the generated output root.
     """
     root = output_root.resolve()
     for markdown_path in sorted(root.rglob("*.md")):
         text = markdown_path.read_text(encoding="utf-8")
-        for raw_target in _iter_generated_markdown_links(text):
+        for raw_target, is_image in _iter_generated_markdown_links(text):
             target = raw_target.strip()
             if not target:
                 continue
             if WINDOWS_ABSOLUTE_RE.match(target) or Path(target).is_absolute():
                 raise AssertionError(f"{markdown_path} contains absolute link {target!r}")
             if URL_SCHEME_RE.match(target):
+                if is_image:
+                    raise AssertionError(
+                        f"{markdown_path} contains external image link {target!r}"
+                    )
                 continue
             path_part = target.split("#", 1)[0]
             if not path_part:
@@ -1712,8 +2120,8 @@ def _assert_generated_markdown_links_valid(output_root: Path) -> None:
             assert resolved.exists(), f"{markdown_path} links to missing target {target!r}"
 
 
-def _iter_generated_markdown_links(text: str) -> list[str]:
-    links: list[str] = []
+def _iter_generated_markdown_links(text: str) -> list[tuple[str, bool]]:
+    links: list[tuple[str, bool]] = []
     in_fence = False
     for line in text.splitlines():
         stripped = line.lstrip()
@@ -1722,7 +2130,9 @@ def _iter_generated_markdown_links(text: str) -> list[str]:
             continue
         if in_fence:
             continue
-        links.extend(match.group(1) for match in MARKDOWN_LINK_RE.finditer(line))
+        links.extend(
+            (match.group(2), bool(match.group(1))) for match in MARKDOWN_LINK_RE.finditer(line)
+        )
     return links
 
 
@@ -1732,13 +2142,24 @@ def _run_cli_analyze(
     *,
     processes_file: Path | None = None,
     free_text_mode: ExtractionMode = ExtractionMode.INCLUDE,
+    render_graphs: str = "none",
+    graphviz_dot: str | None = None,
 ) -> str:
-    args = ["analyze", str(packages_path), "--output", str(output)]
+    args = [
+        "analyze",
+        str(packages_path),
+        "--output",
+        str(output),
+        "--render-graphs",
+        render_graphs,
+    ]
     config_path = output.parent / f"{output.name}-config.yml"
     _write_cli_config(config_path, free_text_mode)
     args.extend(["--config", str(config_path)])
     if processes_file is not None:
         args.extend(["--processes-file", str(processes_file)])
+    if graphviz_dot is not None:
+        args.extend(["--graphviz-dot", graphviz_dot])
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 0, result.output
     return result.output
@@ -1775,6 +2196,53 @@ processes:
 
 def _generated_file_count(output_root: Path) -> int:
     return sum(1 for path in output_root.rglob("*") if path.is_file())
+
+
+class FakeGraphvizRunner:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(
+        self,
+        args: list[str],
+        *,
+        cwd: Path,
+        timeout: int,
+        capture_output: bool,
+        text: bool,
+        shell: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert shell is False
+        assert capture_output is True
+        assert text is True
+        assert timeout == 30
+        self.calls.append(args)
+        if args[1] == "-V":
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="dot - graphviz")
+        output_path = cwd / args[args.index("-o") + 1]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if args[1] == "-Tsvg":
+            output_path.write_text("<svg><g /></svg>", encoding="utf-8")
+        else:
+            output_path.write_bytes(_minimal_png())
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+
+def _minimal_png(width: int = 1, height: int = 1) -> bytes:
+    scanline = b"\x00" + (b"\x00\x00\x00\xff" * max(width, 1))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        PNG_SIGNATURE
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(scanline))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+    crc = zlib.crc32(chunk_type)
+    crc = zlib.crc32(data, crc) & 0xFFFFFFFF
+    return len(data).to_bytes(4, "big") + chunk_type + data + crc.to_bytes(4, "big")
 
 
 def _samples() -> Path:

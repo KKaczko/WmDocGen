@@ -1,0 +1,84 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="761pt" height="218pt" viewBox="0.00 0.00 761.00 218.00">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 214)">
+<title>documents</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-214 757.07,-214 757.07,4 -4,4"/>
+
+<g id="node1" class="node">
+<title>n_276d59d20abf3c1a</title>
+<ellipse fill="none" stroke="black" cx="615.73" cy="-18" rx="137.34" ry="18"/>
+<text xml:space="preserve" text-anchor="middle" x="615.73" y="-12.95" font-family="Times New Roman,serif" font-size="14.00">pgp.documents.config:KeyConfig</text>
+</g>
+
+<g id="node2" class="node">
+<title>n_495fbd0a95e3fdf8</title>
+<ellipse fill="none" stroke="black" cx="136.82" cy="-18" rx="136.82" ry="18"/>
+<text xml:space="preserve" text-anchor="middle" x="136.82" y="-12.95" font-family="Times New Roman,serif" font-size="14.00">pgp.documents.config:PGPconfig</text>
+</g>
+
+<g id="edge1" class="edge">
+<title>n_495fbd0a95e3fdf8-&gt;n_276d59d20abf3c1a</title>
+<path fill="none" stroke="black" d="M273.85,-18C334.11,-18 405.14,-18 466.73,-18"/>
+<polygon fill="black" stroke="black" points="466.6,-21.5 476.6,-18 466.6,-14.5 466.6,-21.5"/>
+<text xml:space="preserve" text-anchor="middle" x="376.02" y="-21.2" font-family="Times New Roman,serif" font-size="14.00">REFERENCES_DOCUMENT</text>
+</g>
+
+<g id="node3" class="node">
+<title>n_5987def13b198b34</title>
+<ellipse fill="none" stroke="black" cx="615.73" cy="-132" rx="117.89" ry="18"/>
+<text xml:space="preserve" text-anchor="middle" x="615.73" y="-126.95" font-family="Times New Roman,serif" font-size="14.00">pgp.documents:KeyRegData</text>
+</g>
+
+<g id="node4" class="node">
+<title>n_7f32bcbaceebecc3</title>
+<ellipse fill="none" stroke="black" cx="615.73" cy="-72" rx="129.15" ry="18"/>
+<text xml:space="preserve" text-anchor="middle" x="615.73" y="-66.95" font-family="Times New Roman,serif" font-size="14.00">pgp.documents:PrivateKeyData</text>
+</g>
+
+<g id="node5" class="node">
+<title>n_33a766d1bd41a2f1</title>
+<ellipse fill="none" stroke="black" cx="136.82" cy="-165" rx="135.29" ry="18"/>
+<text xml:space="preserve" text-anchor="middle" x="136.82" y="-159.95" font-family="Times New Roman,serif" font-size="14.00">pgp.documents:PubKeyRegEntry</text>
+</g>
+
+<g id="edge2" class="edge">
+<title>n_33a766d1bd41a2f1-&gt;n_5987def13b198b34</title>
+<path fill="none" stroke="black" d="M255.39,-156.11C267.64,-155.22 279.89,-154.33 291.65,-153.5 358.95,-148.74 434.17,-143.72 495.08,-139.73"/>
+<polygon fill="black" stroke="black" points="495.02,-143.24 504.77,-139.09 494.57,-136.25 495.02,-143.24"/>
+<text xml:space="preserve" text-anchor="middle" x="376.02" y="-156.7" font-family="Times New Roman,serif" font-size="14.00">REFERENCES_DOCUMENT</text>
+</g>
+
+<g id="node6" class="node">
+<title>n_cf5175544ff5b286</title>
+<ellipse fill="none" stroke="black" cx="615.73" cy="-192" rx="126.59" ry="18"/>
+<text xml:space="preserve" text-anchor="middle" x="615.73" y="-186.95" font-family="Times New Roman,serif" font-size="14.00">pgp.documents:PublicKeyData</text>
+</g>
+
+<g id="edge3" class="edge">
+<title>n_33a766d1bd41a2f1-&gt;n_cf5175544ff5b286</title>
+<path fill="none" stroke="black" d="M262.19,-172.04C330.95,-175.93 416.26,-180.76 485.74,-184.7"/>
+<polygon fill="black" stroke="black" points="485.5,-188.19 495.68,-185.26 485.89,-181.2 485.5,-188.19"/>
+<text xml:space="preserve" text-anchor="middle" x="376.02" y="-185.7" font-family="Times New Roman,serif" font-size="14.00">REFERENCES_DOCUMENT</text>
+</g>
+
+<g id="node7" class="node">
+<title>n_231684594e87d0de</title>
+<ellipse fill="none" stroke="black" cx="136.82" cy="-98" rx="134.26" ry="18"/>
+<text xml:space="preserve" text-anchor="middle" x="136.82" y="-92.95" font-family="Times New Roman,serif" font-size="14.00">pgp.documents:SecKeyRegEntry</text>
+</g>
+
+<g id="edge4" class="edge">
+<title>n_231684594e87d0de-&gt;n_5987def13b198b34</title>
+<path fill="none" stroke="black" d="M256.63,-106.47C329.97,-111.7 423.7,-118.38 496.87,-123.6"/>
+<polygon fill="black" stroke="black" points="496.23,-127.06 506.46,-124.28 496.73,-120.08 496.23,-127.06"/>
+<text xml:space="preserve" text-anchor="middle" x="376.02" y="-123.23" font-family="Times New Roman,serif" font-size="14.00">REFERENCES_DOCUMENT</text>
+</g>
+
+<g id="edge5" class="edge">
+<title>n_231684594e87d0de-&gt;n_7f32bcbaceebecc3</title>
+<path fill="none" stroke="black" d="M216.19,-83.14C240.3,-79.21 266.98,-75.51 291.65,-73.5 352.58,-68.54 420.18,-67.53 477.74,-68"/>
+<polygon fill="black" stroke="black" points="477.56,-71.5 487.6,-68.1 477.63,-64.5 477.56,-71.5"/>
+<text xml:space="preserve" text-anchor="middle" x="376.02" y="-76.7" font-family="Times New Roman,serif" font-size="14.00">REFERENCES_DOCUMENT</text>
+</g>
+</g>
+</svg>

@@ -1,6 +1,6 @@
 # Unsupported Constructs
 
-Unsupported or only partially supported in M6:
+Unsupported or only partially supported in M7:
 
 - Full FLOW execution semantics
 - Full MAP operation semantics beyond observed evidence extraction
@@ -31,7 +31,9 @@ Unsupported or only partially supported in M6:
 - Automatic business process discovery from technical graph shape
 - Process include/exclude, stop-at, tag, owner, system, and maximum-depth catalog options
 - Process-to-process dependency semantics
-- DOT-to-SVG/PNG rendering
+- Process-to-process overview graphs
+- Interactive graph viewers, Mermaid output, JavaScript graph rendering, and static-site framework
+  generation
 - Runtime-only Integration Server configuration
 - Ollama documentation generation
 
@@ -47,6 +49,17 @@ exact canonical service full names, and traversal follows only resolved local se
 Technical entrypoint candidates are labeled as technical roots and never promoted to business
 processes. M6 does not parse native BPM/process-model artifacts, infer process descriptions, create
 external-system nodes, or assign primary process ownership to services.
+
+M7 supports optional Graphviz-derived SVG/PNG rendering only for DOT graphs already produced by the
+canonical renderers. DOT remains the graph contract. The tool does not install Graphviz, edit DOT
+for renderer compatibility, render Mermaid, create JavaScript viewers, generate ZIP/site bundles, or
+infer new graph semantics from rendered images. It validates only the Graphviz SVG/PNG outputs it
+publishes; arbitrary user-supplied image parsing and repair are out of scope. Rendering failures are
+publishing failures, not analysis findings.
+
+Generated-output cleanup is likewise publishing hygiene, not package analysis. It is limited to the
+known generated output files/directories and does not attempt to classify, migrate, or delete
+arbitrary user-managed output-root content.
 
 M3 extracts static `INVOKE` and `MAPINVOKE` targets when a literal `SERVICE` attribute is present.
 Targets that are not present in the analyzed snapshot are retained as unresolved call occurrences

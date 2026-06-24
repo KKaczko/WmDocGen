@@ -3,8 +3,8 @@
 `wm-doc` is an offline, deterministic static-analysis tool for Software AG / IBM webMethods
 Integration Server package snapshots.
 
-The current implemented milestone is **M6 for user-maintained process documentation** on top of
-the M5-lite opaque service inventory baseline. It discovers package and namespace artifacts, parses
+The current implemented milestone is **M7 for Gitea-ready graph publishing** on top of
+the M6 process documentation and M5-lite opaque service inventory baselines. It discovers package and namespace artifacts, parses
 observed FLOW Service signatures, extracts ordered FLOW and mapping evidence, extracts observed
 Document Types with ordered field trees, resolves local document references by exact full name,
 performs source-first Java Service analysis, and preserves parseable unsupported service artifacts
@@ -12,7 +12,8 @@ as opaque services. Opaque services keep identity, trimmed source `svc_type`, sa
 signatures, source evidence, and exact incoming dependency resolution without interpreting
 implementation details. M6 adds optional `processes.yml` business process declarations, exact
 entrypoint validation, deterministic reachability over resolved service dependencies, technical
-entrypoint candidates, process Markdown, and per-process DOT graphs.
+entrypoint candidates, process Markdown, and per-process DOT graphs. M7 keeps those DOT graphs
+canonical and can optionally render derived SVG/PNG graph views for publishable Markdown sites.
 
 This is not a claim of full webMethods 10.15 compatibility. `samples/OriginalSmall/OAAdapter` is the
 primary 10.15 fixture; `samples/PGP` is a compatibility and discovery corpus with unknown upstream
@@ -22,8 +23,9 @@ provenance.
 
 ```powershell
 wm-doc scan samples --output out\inventory
-wm-doc analyze samples --output out\m6-analysis
-wm-doc analyze samples --processes-file processes.yml --output out\m6-process-analysis
+wm-doc analyze samples --output out\m7-analysis
+wm-doc analyze samples --processes-file processes.yml --output out\m7-process-analysis
+wm-doc analyze samples --processes-file processes.yml --render-graphs both --output out\m7-published
 ```
 
 The scan command writes:
@@ -40,12 +42,15 @@ The analyze command writes:
 - `documents/*.md`
 - `graphs/dependencies.dot`
 - `graphs/documents.dot`
+- `graphs/index.md`
 - `processes/*.md` and `graphs/processes/*.dot` when process definitions are declared
+- optional `*.svg` and/or `*.png` graph images when `--render-graphs` requests them
 
 Its completion output reports analyzed service counts, support-status counts, opaque description
 counts, promoted call occurrence counts, unique service dependency counts, process counts,
 entrypoint validation counts, technical candidate counts, process memberships, process edges, and
-unresolved process calls. The `Processes with findings` metric is the number of declared process
+unresolved process calls. M7 also reports DOT graph count, SVG/PNG render counts, render failures,
+and graph-index generation. The `Processes with findings` metric is the number of declared process
 definitions carrying process-level findings, not the total number of global catalog findings.
 
 `analysis.json` uses schema `analysis.v8`. In this schema, call occurrences preserve each concrete
@@ -62,6 +67,23 @@ support statuses, opaque services, and resolved opaque targets. M6 adds top-leve
 `process_unresolved_calls`, `process_document_relationships`, and
 `technical_entrypoint_candidates`.
 
+Graph rendering is disabled by default: `--render-graphs none`. Use `svg`, `png`, or `both` to ask
+the CLI to render every generated DOT graph with Graphviz `dot`, resolved from `PATH` or
+`--graphviz-dot`. Graphviz is optional and is not installed by `wm-doc`. When rendering is requested
+and Graphviz is missing or rejects a graph, canonical analysis, Markdown, and DOT files are still
+written, successful graph assets remain linked, diagnostics are path-scrubbed and secret-redacted,
+and the CLI exits non-zero. Rendered SVG is parsed as XML, stripped of Graphviz's external DTD
+declaration and comments, and rejected when unsafe elements, event handlers, external links, or
+absolute local paths are present. Rendered PNG must be structurally valid PNG data with valid chunks,
+image dimensions, IDAT data, IEND, and CRCs.
+
+Before writing analysis output, `wm-doc analyze` cleans only its managed generated locations:
+`analysis.json`, `index.md`, `entrypoints.md`, `services`, `documents`, `processes`, and `graphs`.
+Shape conflicts at those paths are replaced, unrelated files under the output root are preserved,
+and symlinks at managed paths are unlinked rather than followed. Cleanup and Graphviz diagnostics
+are bounded and scrub secret-like keys such as `password`, `passwd`, `token`, `access_token`,
+`api-key`, and bearer authorization values before CLI output.
+
 If `--processes-file` is omitted, `wm-doc analyze` looks for `processes.yml` under the scan root.
 Default absence is normal and produces no finding. A process catalog must use `version: 1`, stable
 safe process IDs, user-authored names, optional policy-controlled descriptions, and exact canonical
@@ -76,6 +98,9 @@ are not linked.
 `graphs/dependencies.dot` remains the service-call dependency graph: one edge per unique static
 service dependency with occurrence counts, not pipeline mappings. `graphs/documents.dot` contains
 unique document-to-document `REFERENCES_DOCUMENT` edges and unresolved document nodes when observed.
+DOT files remain the canonical graph contract. `graphs/index.md` lists every DOT graph and links
+derived SVG/PNG assets only when those files were successfully rendered. Process pages always link
+their DOT graph and show an SVG preview when available, otherwise PNG when available.
 Each document Markdown page includes the active disclosure policy snapshot used for the run.
 Each Java Service Markdown page includes source consistency, declared signatures, observed pipeline
 accesses, Java invocation sites, imports, referenced types, findings, and source evidence without
@@ -133,11 +158,11 @@ limitation. The `java_type_references` count covers imported types referenced by
 method, not every possible fully qualified type expression.
 
 The tool works offline, treats analyzed packages as read-only, never connects to Integration Server,
-and never executes analyzed Java or FLOW code. M6 also does not compile Java source, load
+and never executes analyzed Java or FLOW code. M7 also does not compile Java source, load
 classes, perform broad Java external-effect classification, analyze helper method bodies as service
 behavior, or parse JDBC, SQL, database resources, connection aliases, UM/JMS, triggers, schedulers,
-or native BPM/process-model definitions. M6 remains pending a final acceptance re-audit after the
-link-rendering remediation.
+native BPM/process-model definitions, Mermaid diagrams, JavaScript graph viewers, static-site
+frameworks, ZIP archives, or CI publishing definitions.
 
 ## Development
 

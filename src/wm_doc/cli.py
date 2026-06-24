@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Annotated
 
@@ -8,9 +9,22 @@ import typer
 from wm_doc.analysis import analyze_path
 from wm_doc.config import load_config
 from wm_doc.discovery import scan_path
+from wm_doc.graph_publish import (
+    GRAPH_RENDER_TIMEOUT_SECONDS,
+    GraphRenderFormat,
+    GraphRenderMode,
+    GraphvizRunner,
+    _safe_diagnostic,
+    build_graph_assets,
+    graph_render_failures,
+    render_graphs,
+    rendered_count,
+    run_subprocess,
+)
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.document_markdown import write_document_markdown
 from wm_doc.render.dot import write_dependency_dot, write_document_dot, write_process_dots
+from wm_doc.render.graph_markdown import write_graph_index
 from wm_doc.render.index_markdown import write_documentation_index
 from wm_doc.render.json import render_inventory_json
 from wm_doc.render.markdown import render_inventory_markdown
@@ -23,6 +37,10 @@ from wm_doc.render.service_markdown import write_service_markdown
 app = typer.Typer(
     help="Offline deterministic static inventory for webMethods Integration Server packages."
 )
+
+GRAPHVIZ_RUNNER: GraphvizRunner = run_subprocess
+MANAGED_ROOT_FILES = ("analysis.json", "index.md", "entrypoints.md")
+MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
 
 
 @app.callback()
@@ -71,6 +89,20 @@ def analyze(
             help="Optional processes.yml catalog for user-authored process entrypoints.",
         ),
     ] = None,
+    render_graphs_mode: Annotated[
+        GraphRenderMode,
+        typer.Option(
+            "--render-graphs",
+            help="Render generated DOT graphs with Graphviz.",
+        ),
+    ] = GraphRenderMode.NONE,
+    graphviz_dot: Annotated[
+        Path | None,
+        typer.Option(
+            "--graphviz-dot",
+            help="Optional path to the Graphviz dot executable.",
+        ),
+    ] = None,
 ) -> None:
     """Analyze supported services and emit deterministic technical outputs."""
     app_config = load_config(config)
@@ -81,10 +113,14 @@ def analyze(
         processes_file_explicit=processes_file is not None,
     )
     output.mkdir(parents=True, exist_ok=True)
+    try:
+        _clean_generated_output(output)
+    except OutputCleanupError as exc:
+        typer.echo(f"Output cleanup failed: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
     (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
     services = [service for package in analysis.packages for service in package.services]
     documents = [document for package in analysis.packages for document in package.document_types]
-    index_path = write_documentation_index(output, analysis)
     service_paths = write_service_markdown(
         output,
         services,
@@ -101,11 +137,24 @@ def analyze(
         analysis.process_document_relationships,
         analysis.processes,
     )
-    process_paths = write_process_markdown(output, analysis)
     entrypoint_path = write_entrypoint_candidates_markdown(output, analysis)
     dot_path = write_dependency_dot(output, analysis)
     document_dot_path = write_document_dot(output, analysis)
     process_dot_paths = write_process_dots(output, analysis)
+    dot_paths = [dot_path, document_dot_path, *process_dot_paths]
+    graph_assets = build_graph_assets(output, dot_paths)
+    graph_results = render_graphs(
+        output,
+        graph_assets,
+        render_graphs_mode,
+        graphviz_dot=graphviz_dot,
+        runner=GRAPHVIZ_RUNNER,
+        timeout=GRAPH_RENDER_TIMEOUT_SECONDS,
+    )
+    graph_failures = graph_render_failures(graph_results)
+    graph_index_path = write_graph_index(output, graph_assets)
+    index_path = write_documentation_index(output, analysis, graph_assets)
+    process_paths = write_process_markdown(output, analysis, graph_assets)
     flow_count = sum(1 for service in services if service.service_type.value == "FLOW")
     java_count = sum(1 for service in services if service.service_type.value == "JAVA")
     opaque_count = sum(1 for service in services if service.service_type.value == "OPAQUE")
@@ -153,5 +202,81 @@ def analyze(
         f"{entrypoint_path.name}, "
         f"{dot_path.parent.name}/{dot_path.name}, "
         f"{document_dot_path.parent.name}/{document_dot_path.name}, and "
-        f"{len(process_dot_paths)} process DOT file(s)."
+        f"{len(process_dot_paths)} process DOT file(s).\n"
+        "Graph publishing:\n"
+        f"- DOT graphs generated: {len(dot_paths)}\n"
+        f"- SVG graphs rendered: {rendered_count(graph_assets, GraphRenderFormat.SVG)}\n"
+        f"- PNG graphs rendered: {rendered_count(graph_assets, GraphRenderFormat.PNG)}\n"
+        f"- Graph render failures: {len(graph_failures)}\n"
+        f"- Graph index generated: {'yes' if graph_index_path.exists() else 'no'}"
     )
+    if graph_failures:
+        typer.echo("Graph rendering failed:", err=True)
+        for failure in graph_failures:
+            typer.echo(
+                "- "
+                f"{failure.dot_path} {failure.requested_format.value}: "
+                f"{failure.failure_reason or 'render failed'}",
+                err=True,
+            )
+        raise typer.Exit(code=1)
+
+
+def _clean_generated_output(output: Path) -> None:
+    for filename in MANAGED_ROOT_FILES:
+        _remove_managed_path(output, Path(filename))
+    for directory in MANAGED_ROOT_DIRS:
+        _remove_managed_path(output, Path(directory))
+
+
+def _remove_managed_path(output: Path, relative_path: Path) -> None:
+    target = output / relative_path
+    if not target.exists() and not target.is_symlink():
+        return
+    _validate_managed_path(output, target, relative_path)
+    try:
+        if target.is_symlink():
+            target.unlink()
+        elif _is_junction(target):
+            target.rmdir()
+        elif target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    except OSError as exc:
+        raise OutputCleanupError(
+            "OUTPUT_CLEANUP_FAILED",
+            f"Could not remove managed generated output path `{relative_path.as_posix()}`.",
+            _safe_diagnostic(str(exc), output),
+        ) from exc
+
+
+def _validate_managed_path(output: Path, target: Path, relative_path: Path) -> None:
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise OutputCleanupError(
+            "OUTPUT_PATH_UNSAFE",
+            f"Managed generated output path `{relative_path.as_posix()}` is unsafe.",
+        )
+    output_root = output.absolute()
+    try:
+        target.absolute().relative_to(output_root)
+    except ValueError as exc:
+        raise OutputCleanupError(
+            "OUTPUT_PATH_UNSAFE",
+            f"Managed generated output path `{relative_path.as_posix()}` escaped the output root.",
+        ) from exc
+
+
+def _is_junction(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction and is_junction())
+
+
+class OutputCleanupError(Exception):
+    def __init__(self, code: str, safe_message: str, diagnostic: str | None = None) -> None:
+        message = f"{code}: {safe_message}"
+        if diagnostic:
+            message = f"{message} Diagnostic: {diagnostic}"
+        super().__init__(message)
+        self.code = code
+        self.safe_message = message
