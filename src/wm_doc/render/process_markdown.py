@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
+from wm_doc.graph_publish import GraphAsset
 from wm_doc.ir import (
     AnalysisResult,
     FlowService,
@@ -25,9 +26,12 @@ def process_markdown_filename(process_id: str) -> str:
     return f"{process_id}.md"
 
 
-def write_process_markdown(output_dir: Path, analysis: AnalysisResult) -> list[Path]:
+def write_process_markdown(
+    output_dir: Path, analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
+) -> list[Path]:
     if not analysis.processes:
         return []
+    graph_assets = graph_assets or []
     process_dir = output_dir / "processes"
     process_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -36,7 +40,10 @@ def write_process_markdown(output_dir: Path, analysis: AnalysisResult) -> list[P
     written.append(catalog_path)
     for process in sorted(analysis.processes, key=lambda item: item.process_id.casefold()):
         path = process_dir / process_markdown_filename(process.process_id)
-        path.write_text(render_process_markdown(analysis, process), encoding="utf-8")
+        path.write_text(
+            render_process_markdown(analysis, process, graph_assets),
+            encoding="utf-8",
+        )
         written.append(path)
     return written
 
@@ -90,7 +97,12 @@ def render_process_catalog_markdown(analysis: AnalysisResult) -> str:
     return "\n".join(lines)
 
 
-def render_process_markdown(analysis: AnalysisResult, process: ProcessDefinition) -> str:
+def render_process_markdown(
+    analysis: AnalysisResult,
+    process: ProcessDefinition,
+    graph_assets: list[GraphAsset] | None = None,
+) -> str:
+    graph_assets = graph_assets or []
     services = {
         service.identity.full_name: service
         for package in analysis.packages
@@ -168,10 +180,7 @@ def render_process_markdown(analysis: AnalysisResult, process: ProcessDefinition
         "",
         "## Process Call Graph",
         "",
-        (
-            f"- DOT graph: [`graphs/processes/{process.process_id}.dot`]"
-            f"(../graphs/processes/{process.process_id}.dot)"
-        ),
+        _render_process_graph_links(process, graph_assets),
         "",
         "## Services In Process",
         "",
@@ -270,6 +279,30 @@ def _memberships_by_process(
     for membership in analysis.process_service_memberships:
         grouped.setdefault(membership.process_id, []).append(membership)
     return grouped
+
+
+def _render_process_graph_links(
+    process: ProcessDefinition, graph_assets: list[GraphAsset]
+) -> str:
+    dot_path = f"graphs/processes/{process.process_id}.dot"
+    asset = next((item for item in graph_assets if item.dot_path == dot_path), None)
+    lines = [f"- DOT graph: [`{dot_path}`](../{dot_path})"]
+    if asset is None:
+        return "\n".join(lines)
+    svg_path = asset.rendered_paths.get("svg")
+    png_path = asset.rendered_paths.get("png")
+    if svg_path is not None:
+        lines.append(f"- Open SVG graph: [SVG](../{svg_path})")
+        lines.append("")
+        lines.append(f"![Process call graph](../{svg_path})")
+        if png_path is not None:
+            lines.append("")
+            lines.append(f"- Open PNG graph: [PNG](../{png_path})")
+    elif png_path is not None:
+        lines.append(f"- Open PNG graph: [PNG](../{png_path})")
+        lines.append("")
+        lines.append(f"![Process call graph](../{png_path})")
+    return "\n".join(lines)
 
 
 def _render_declared_entrypoints(entrypoints: list[ProcessEntrypoint]) -> str:

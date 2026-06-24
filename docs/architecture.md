@@ -1,10 +1,11 @@
 # Architecture
 
-M6 implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
+M7 implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
 service, and user-maintained process static-analysis slices focused on traceable calls, unique
 dependencies, observed control-flow structure, observed mapping evidence, ordered document field
 trees, exact document-reference resolution, source-first Java Service evidence, opaque service
-identity, optional `processes.yml` catalogs, and policy-safe disclosure.
+identity, optional `processes.yml` catalogs, policy-safe disclosure, and optional derived graph
+publishing for Markdown-oriented repository viewers.
 
 Subsystems:
 
@@ -30,6 +31,9 @@ Subsystems:
   service dependencies with deterministic BFS, retains unresolved calls from member services, derives
   process/document relationships, and emits technical entrypoint candidates for services with zero
   incoming resolved local dependencies.
+- Graph publishing in `wm_doc.graph_publish` discovers the DOT paths produced by the renderers and,
+  only when requested, invokes Graphviz `dot` with argument-list subprocess calls to create derived
+  SVG/PNG files. Render failures do not change canonical analysis or DOT output.
 - Classification in `wm_doc.config` applies deterministic, case-insensitive glob rules. `neverImportant`
   rules take precedence over important service rules.
 - Dependency resolution is exact-name only. It resolves static `INVOKE`, `MAPINVOKE`, and
@@ -48,7 +52,8 @@ Subsystems:
   extraction policies, and typed findings.
 - Renderers produce deterministic inventory JSON/Markdown and deterministic analysis JSON,
   top-level index Markdown, entrypoint candidate Markdown, per-service Markdown, per-document
-  Markdown, process Markdown, and Graphviz DOT.
+  Markdown, process Markdown, graph catalog Markdown, Graphviz DOT, and optional derived SVG/PNG
+  graph assets.
 - The CLI exposes `wm-doc scan` and `wm-doc analyze`.
 
 ## Analysis Schema
@@ -211,8 +216,34 @@ M6 migrates to `analysis.v8`:
   business process definitions.
 - M6 adds a top-level documentation index, process catalog/page Markdown, service/document process
   cross-links, `entrypoints.md`, and per-process DOT graphs. Generated Markdown link integrity is
-  covered by regression tests. It does not render SVG/PNG and does not add process-to-process
-  overview semantics.
+  covered by regression tests. It does not add process-to-process overview semantics.
+
+M7 keeps `analysis.v8`:
+
+- DOT files remain canonical graph outputs: `graphs/dependencies.dot`, `graphs/documents.dot`, and
+  `graphs/processes/<process-id>.dot` for declared processes.
+- `wm-doc analyze --render-graphs none|svg|png|both` controls optional derived graph publishing.
+  The default is `none`, so Graphviz is not required for normal analysis.
+- The CLI resolves Graphviz `dot` from `PATH` or `--graphviz-dot`, probes it with bounded
+  execution, renders each graph/format through `shell=False` subprocess calls, rejects empty output,
+  validates image structure, cleans temporary files, atomically replaces completed assets, and
+  reports path-scrubbed, secret-redacted diagnostics.
+- Temporary-file cleanup failures are surfaced as graph-render failures or secondary failure
+  details; they are not silently discarded. Cleanup diagnostics use the same path and secret
+  redaction as Graphviz process diagnostics.
+- SVG publishing parses Graphviz output as XML, removes the known external SVG 1.1 DTD declaration
+  and comments, and rejects malformed roots, XML entities, unsafe elements, event-handler
+  attributes, unsafe URI references, and absolute local paths. PNG publishing validates PNG
+  signature/chunks, IHDR dimensions, IDAT presence, IEND termination, and CRCs.
+- `graphs/index.md` lists every generated graph with its DOT link and only the SVG/PNG links that
+  were successfully rendered. The top-level index links the graph catalog, and process pages preview
+  SVG when available or PNG otherwise.
+- Before publishing, the CLI removes only managed generated locations under the output root:
+  `analysis.json`, `index.md`, `entrypoints.md`, `services`, `documents`, `processes`, and
+  `graphs`. File/directory shape conflicts at those exact paths are replaced, unrelated files are
+  preserved, and symlinks at managed paths are unlinked rather than followed.
+- Rendered image files are publishing artifacts only. Their determinism depends on using the same
+  Graphviz executable/version; they do not affect IR, metrics, dependency resolution, or schema.
 
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
@@ -227,4 +258,4 @@ semantics, or model Specification artifacts as Document Types.
 Later milestones may add broad Java external-effect classification, fuller FLOW semantics, detailed
 adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, native BPM
 process-model parsing, Service Specification IR, package dependency graphs, snapshot diffing, and
-Ollama input generation. Those are intentionally outside M6 and require a separate gate.
+Ollama input generation. Those are intentionally outside M7 and require a separate gate.

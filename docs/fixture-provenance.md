@@ -35,6 +35,17 @@ M6 fixture note:
 - M6 does not prove native webMethods BPM/process-model serialization because no such fixture is
   present.
 
+M7 fixture note:
+
+- Graph publishing is derived from generated DOT files and does not add or modify fixture evidence.
+- The default fixture analysis has two DOT graphs: service dependencies and document references.
+  Test process catalogs outside `samples/` add per-process DOT graphs for renderer coverage.
+- Local Graphviz availability is optional; normal tests use a deterministic fake renderer that emits
+  valid SVG/PNG structures, and a real Graphviz audit is skipped when `dot` is not installed or not
+  supplied through the test environment.
+- Generated-output cleanup tests create temporary stale files, directories, and symlinks outside the
+  fixture tree to prove managed output replacement without modifying `samples/`.
+
 ## PGP
 
 `samples/PGP` is a public compatibility and discovery corpus used as-is from the local repository
