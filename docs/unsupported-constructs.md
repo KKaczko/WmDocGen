@@ -1,6 +1,6 @@
 # Unsupported Constructs
 
-Unsupported or only partially supported in M7:
+Unsupported or only partially supported in M8a:
 
 - Full FLOW execution semantics
 - Full MAP operation semantics beyond observed evidence extraction
@@ -32,10 +32,14 @@ Unsupported or only partially supported in M7:
 - Process include/exclude, stop-at, tag, owner, system, and maximum-depth catalog options
 - Process-to-process dependency semantics
 - Process-to-process overview graphs
+- Multiple focused publication selectors or selector unions in one run
+- `--target-folder` filesystem-folder targeting; M8a uses namespace-prefix targeting instead
+- Focused parsing, lazy analysis, or persistent analysis caching
 - Interactive graph viewers, Mermaid output, JavaScript graph rendering, and static-site framework
   generation
 - Runtime-only Integration Server configuration
 - Ollama documentation generation
+- Business-context generation, impact analysis, and snapshot comparison
 
 M5-lite keeps parseable service artifacts with explicit unsupported `svc_type` values, after
 surrounding whitespace is trimmed, as `OPAQUE` services. Missing, empty, whitespace-only,
@@ -58,8 +62,19 @@ publishes; arbitrary user-supplied image parsing and repair are out of scope. Re
 publishing failures, not analysis findings.
 
 Generated-output cleanup is likewise publishing hygiene, not package analysis. It is limited to the
-known generated output files/directories and does not attempt to classify, migrate, or delete
-arbitrary user-managed output-root content.
+known generated output files/directories, including `scope.json` and `scope.md`, and does not
+attempt to classify, migrate, or delete arbitrary user-managed output-root content.
+
+M8a focused publication scope is publication-only. It performs full M7 analysis before selector
+resolution and then limits generated Markdown and focused graphs. It does not reduce parsing cost,
+skip packages, cache partial analysis, or imply that services outside the publication subset were
+undiscovered. Non-selected callers can still appear as unlinked `Called By` evidence on scoped
+service pages.
+
+M8a v1 accepts exactly one selector occurrence. It does not support selector unions, repeated
+selector values, fuzzy matching, short service-name fallback, package path substring matching, or
+filesystem-folder targeting. Target namespace matching is canonical namespace segment-prefix
+matching only.
 
 M3 extracts static `INVOKE` and `MAPINVOKE` targets when a literal `SERVICE` attribute is present.
 Targets that are not present in the analyzed snapshot are retained as unresolved call occurrences

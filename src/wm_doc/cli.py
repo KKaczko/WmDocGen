@@ -13,6 +13,7 @@ from wm_doc.graph_publish import (
     GRAPH_RENDER_TIMEOUT_SECONDS,
     GraphRenderFormat,
     GraphRenderMode,
+    GraphRenderResult,
     GraphvizRunner,
     _safe_diagnostic,
     build_graph_assets,
@@ -21,9 +22,17 @@ from wm_doc.graph_publish import (
     rendered_count,
     run_subprocess,
 )
+from wm_doc.ir import AnalysisResult
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.document_markdown import write_document_markdown
-from wm_doc.render.dot import write_dependency_dot, write_document_dot, write_process_dots
+from wm_doc.render.dot import (
+    write_dependency_dot,
+    write_document_dot,
+    write_process_dots,
+    write_scope_document_dot,
+    write_scope_dot,
+    write_scoped_process_dot,
+)
 from wm_doc.render.graph_markdown import write_graph_index
 from wm_doc.render.index_markdown import write_documentation_index
 from wm_doc.render.json import render_inventory_json
@@ -32,14 +41,31 @@ from wm_doc.render.process_markdown import (
     write_entrypoint_candidates_markdown,
     write_process_markdown,
 )
+from wm_doc.render.scope_markdown import (
+    write_scope_json,
+    write_scope_markdown,
+    write_scoped_document_markdown,
+    write_scoped_entrypoints_markdown,
+    write_scoped_index_markdown,
+    write_scoped_process_markdown,
+    write_scoped_service_markdown,
+)
 from wm_doc.render.service_markdown import write_service_markdown
+from wm_doc.scope_analysis import (
+    ScopeRequest,
+    ScopeResult,
+    ScopeSelectorType,
+    build_focused_scope,
+    services_for_scope,
+    validate_scope_request,
+)
 
 app = typer.Typer(
     help="Offline deterministic static inventory for webMethods Integration Server packages."
 )
 
 GRAPHVIZ_RUNNER: GraphvizRunner = run_subprocess
-MANAGED_ROOT_FILES = ("analysis.json", "index.md", "entrypoints.md")
+MANAGED_ROOT_FILES = ("analysis.json", "index.md", "entrypoints.md", "scope.json", "scope.md")
 MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
 
 
@@ -103,8 +129,54 @@ def analyze(
             help="Optional path to the Graphviz dot executable.",
         ),
     ] = None,
+    target_service: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--target-service",
+            help="Publish a focused scope rooted at one exact canonical service name.",
+        ),
+    ] = None,
+    target_namespace: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--target-namespace",
+            help="Publish a focused scope rooted at a namespace prefix and descendants.",
+        ),
+    ] = None,
+    target_package: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--target-package",
+            help="Publish a focused scope rooted at one exact package identity.",
+        ),
+    ] = None,
+    target_process: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--target-process",
+            help="Publish a focused scope rooted at one exact processes.yml process id.",
+        ),
+    ] = None,
+    dependency_depth: Annotated[
+        str,
+        typer.Option(
+            "--dependency-depth",
+            help="Focused publication dependency depth: 0, 1, N, or all.",
+        ),
+    ] = "all",
 ) -> None:
     """Analyze supported services and emit deterministic technical outputs."""
+    try:
+        scope_request = _scope_request_from_cli(
+            target_service=target_service,
+            target_namespace=target_namespace,
+            target_package=target_package,
+            target_process=target_process,
+            dependency_depth=dependency_depth,
+        )
+    except ScopeCliError as exc:
+        typer.echo(f"{exc.code}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=2) from exc
     app_config = load_config(config)
     analysis = analyze_path(
         packages_path,
@@ -112,6 +184,38 @@ def analyze(
         processes_file,
         processes_file_explicit=processes_file is not None,
     )
+    if scope_request is not None:
+        process_catalog_available = _process_catalog_available(packages_path, processes_file)
+        scope_output = build_focused_scope(
+            analysis,
+            scope_request,
+            process_catalog_available=process_catalog_available,
+        )
+        if not scope_output.should_publish or scope_output.scope is None:
+            code_suffix = f" [{scope_output.code}]" if scope_output.code is not None else ""
+            typer.echo(
+                f"Focused publication scope failed{code_suffix}:\n"
+                f"{scope_output.message or 'scope could not be resolved'}",
+                err=True,
+            )
+            raise typer.Exit(code=scope_output.exit_code or 1)
+        graph_failures = _write_scoped_outputs(
+            output,
+            analysis,
+            scope_output.scope,
+            render_graphs_mode,
+            graphviz_dot,
+        )
+        if graph_failures:
+            _echo_graph_failures(graph_failures)
+            raise typer.Exit(code=1)
+        if scope_output.exit_code:
+            typer.echo(
+                "Focused publication completed with scope findings that require attention.",
+                err=True,
+            )
+            raise typer.Exit(code=scope_output.exit_code)
+        return
     output.mkdir(parents=True, exist_ok=True)
     try:
         _clean_generated_output(output)
@@ -211,15 +315,191 @@ def analyze(
         f"- Graph index generated: {'yes' if graph_index_path.exists() else 'no'}"
     )
     if graph_failures:
-        typer.echo("Graph rendering failed:", err=True)
-        for failure in graph_failures:
-            typer.echo(
-                "- "
-                f"{failure.dot_path} {failure.requested_format.value}: "
-                f"{failure.failure_reason or 'render failed'}",
-                err=True,
-            )
+        _echo_graph_failures(graph_failures)
         raise typer.Exit(code=1)
+
+
+def _write_scoped_outputs(
+    output: Path,
+    analysis: AnalysisResult,
+    scope: ScopeResult,
+    render_graphs_mode: GraphRenderMode,
+    graphviz_dot: Path | None,
+) -> list[GraphRenderResult]:
+    output.mkdir(parents=True, exist_ok=True)
+    try:
+        _clean_generated_output(output)
+    except OutputCleanupError as exc:
+        typer.echo(f"Output cleanup failed: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
+    write_scope_json(output, scope)
+    write_scope_markdown(output, scope)
+    services = services_for_scope(analysis, scope)
+    service_paths = write_scoped_service_markdown(output, analysis, scope, services)
+    document_paths = write_scoped_document_markdown(output, analysis, scope)
+    entrypoint_path = write_scoped_entrypoints_markdown(output, scope, analysis)
+    dot_paths = [write_scope_dot(output, scope)]
+    document_dot_path = write_scope_document_dot(output, scope)
+    if document_dot_path is not None:
+        dot_paths.append(document_dot_path)
+    process_dot_path = write_scoped_process_dot(output, scope)
+    if process_dot_path is not None:
+        dot_paths.append(process_dot_path)
+    graph_assets = build_graph_assets(output, dot_paths)
+    graph_results = render_graphs(
+        output,
+        graph_assets,
+        render_graphs_mode,
+        graphviz_dot=graphviz_dot,
+        runner=GRAPHVIZ_RUNNER,
+        timeout=GRAPH_RENDER_TIMEOUT_SECONDS,
+    )
+    graph_failures = graph_render_failures(graph_results)
+    graph_index_path = write_graph_index(output, graph_assets)
+    index_path = write_scoped_index_markdown(output, scope, analysis, graph_assets)
+    process_paths = write_scoped_process_markdown(output, scope, analysis, graph_assets)
+    metrics = scope.metrics
+    typer.echo(
+        "Full snapshot technical metrics:\n"
+        f"- services: {sum(len(package.services) for package in analysis.packages)}\n"
+        f"- unique service dependencies: {analysis.metrics.total_unique_dependency_count}\n"
+        f"- document types: {analysis.metrics.document_type_count}\n"
+        f"- technical entrypoint candidates: "
+        f"{analysis.metrics.technical_entrypoint_candidate_count}\n"
+        "Focused publication metrics:\n"
+        f"- selector type: {metrics.selector_type.value}\n"
+        f"- selector value: {_safe_cli_value(metrics.selector_value)}\n"
+        f"- dependency depth: {metrics.dependency_depth}\n"
+        f"- roots resolved: {metrics.roots_resolved}\n"
+        f"- services included: {metrics.services_included}\n"
+        f"- root services included: {metrics.root_services_included}\n"
+        f"- included resolved dependencies: {metrics.included_resolved_dependencies}\n"
+        f"- boundary dependencies: {metrics.boundary_dependencies}\n"
+        f"- depth-limit boundaries: "
+        f"{metrics.boundary_counts_by_status.get('DEPTH_LIMIT', 0)}\n"
+        f"- unresolved static boundaries: "
+        f"{metrics.boundary_counts_by_status.get('UNRESOLVED', 0)}\n"
+        f"- dynamic boundaries: {metrics.boundary_counts_by_status.get('DYNAMIC', 0)}\n"
+        f"- external built-in boundaries: "
+        f"{metrics.boundary_counts_by_status.get('EXTERNAL_BUILTIN', 0)}\n"
+        f"- documents included: {metrics.documents_included}\n"
+        f"- direct documents included: {metrics.direct_documents_included}\n"
+        f"- transitive documents included: {metrics.transitive_documents_included}\n"
+        f"- processes published: {metrics.processes_published}\n"
+        f"- maximum reached depth: {metrics.maximum_reached_depth}\n"
+        "Wrote full analysis.json plus focused publication files: "
+        f"scope.json, scope.md, {index_path.name}, "
+        f"{len(service_paths)} service markdown file(s), "
+        f"{len(document_paths)} document markdown file(s), "
+        f"{len(process_paths)} process markdown file(s), "
+        f"{entrypoint_path.name}.\n"
+        "Graph publishing:\n"
+        f"- DOT graphs generated: {len(dot_paths)}\n"
+        f"- SVG graphs rendered: {rendered_count(graph_assets, GraphRenderFormat.SVG)}\n"
+        f"- PNG graphs rendered: {rendered_count(graph_assets, GraphRenderFormat.PNG)}\n"
+        f"- Graph render failures: {len(graph_failures)}\n"
+        f"- Graph index generated: {'yes' if graph_index_path.exists() else 'no'}"
+    )
+    return graph_failures
+
+
+def _echo_graph_failures(graph_failures: list[GraphRenderResult]) -> None:
+    typer.echo("Graph rendering failed:", err=True)
+    for failure in graph_failures:
+        typer.echo(
+            "- "
+            f"{failure.dot_path} {failure.requested_format.value}: "
+            f"{failure.failure_reason or 'render failed'}",
+            err=True,
+        )
+
+
+def _scope_request_from_cli(
+    *,
+    target_service: list[str] | None,
+    target_namespace: list[str] | None,
+    target_package: list[str] | None,
+    target_process: list[str] | None,
+    dependency_depth: str,
+) -> ScopeRequest | None:
+    selectors: list[tuple[ScopeSelectorType, str]] = []
+    for selector_type, values, option_name in (
+        (ScopeSelectorType.SERVICE, target_service, "--target-service"),
+        (ScopeSelectorType.NAMESPACE, target_namespace, "--target-namespace"),
+        (ScopeSelectorType.PACKAGE, target_package, "--target-package"),
+        (ScopeSelectorType.PROCESS, target_process, "--target-process"),
+    ):
+        values = values or []
+        if len(values) > 1:
+            raise ScopeCliError(
+                "SCOPE_SELECTOR_CONFLICT",
+                f"{option_name} may be provided at most once in M8a v1.",
+            )
+        if values:
+            selectors.append((selector_type, values[0].strip()))
+
+    depth = _parse_dependency_depth(dependency_depth)
+    if len(selectors) > 1:
+        raise ScopeCliError(
+            "SCOPE_SELECTOR_CONFLICT",
+            "M8a v1 accepts exactly one focused publication selector per run.",
+        )
+    if not selectors:
+        if depth is not None:
+            raise ScopeCliError(
+                "SCOPE_SELECTOR_CONFLICT",
+                "--dependency-depth requires a focused publication selector.",
+            )
+        return None
+
+    selector_type, selector_value = selectors[0]
+    request = ScopeRequest(selector_type, selector_value, depth)
+    malformed = validate_scope_request(request)
+    if malformed is not None:
+        raise ScopeCliError(malformed.code, malformed.message)
+    return request
+
+
+def _parse_dependency_depth(value: str) -> int | None:
+    normalized = value.strip().casefold()
+    if normalized == "all":
+        return None
+    try:
+        parsed = int(normalized, 10)
+    except ValueError as exc:
+        raise ScopeCliError(
+            "SCOPE_TARGET_MALFORMED",
+            "--dependency-depth must be 0, a positive integer, or all.",
+        ) from exc
+    if parsed < 0:
+        raise ScopeCliError(
+            "SCOPE_TARGET_MALFORMED",
+            "--dependency-depth must be 0, a positive integer, or all.",
+        )
+    return parsed
+
+
+def _process_catalog_available(packages_path: Path, processes_file: Path | None) -> bool:
+    if processes_file is not None:
+        return processes_file.exists()
+    return (packages_path / "processes.yml").exists()
+
+
+def _safe_cli_value(value: str) -> str:
+    cleaned = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in value)
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) > 120:
+        return cleaned[:120] + "..."
+    return cleaned
+
+
+class ScopeCliError(Exception):
+    def __init__(self, code: str, safe_message: str) -> None:
+        super().__init__(f"{code}: {safe_message}")
+        self.code = code
+        self.safe_message = safe_message
 
 
 def _clean_generated_output(output: Path) -> None:

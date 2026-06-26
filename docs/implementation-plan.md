@@ -659,5 +659,69 @@ Not implemented in M7:
 
 ## Next Milestone Gate
 
-M4b, detailed JDBC/M5, native BPM process parsing, M8, or any later milestone requires explicit
-approval before implementation.
+M8a focused publication scopes was explicitly approved and implemented.
+
+## M8a Focused Publication Scopes
+
+Implemented in this milestone:
+
+- Schema remains `analysis.v8`; no canonical analysis fields or dependency semantics changed.
+- Full M7 technical analysis still runs before scope selection. Focused publication reduces
+  generated Markdown and graph scope, not initial parsing or analysis cost.
+- `scope.json` uses separate schema `scope.v1` and records selector identity, resolved roots,
+  service memberships, minimum depths, bounded reaching-root and representative-path samples,
+  inside-scope dependencies, scope boundaries, document closure, and selected process projection.
+- CLI selectors: `--target-service`, `--target-namespace`, `--target-package`, and
+  `--target-process`, with optional `--dependency-depth 0|N|all`. M8a v1 accepts exactly one
+  selector occurrence; selector unions and repeated selectors are rejected before analysis when
+  possible.
+- Exact root resolution for service, package, and process targets. Namespace targets use
+  case-sensitive canonical namespace segment-boundary prefix matching, not filesystem paths.
+- Multimap ambiguity checks prevent focused publication from silently choosing among duplicate
+  canonical service names, duplicate selected package identities, or duplicate selected process IDs.
+- Deterministic BFS over resolved `UniqueDependency` records, preserving `INVOKES` and
+  `USES_TRANSFORMER` kinds. Dynamic, unresolved, unsupported, and depth-limited calls are retained
+  as bounded scope boundaries.
+- Scoped document closure is seeded from canonical `service_document_dependencies` for included
+  services and selected process/document relationships for process scopes, then follows resolved
+  document dependencies with cycle protection.
+- Scoped output layout writes full `analysis.json`, `scope.json`, `scope.md`, scoped
+  `entrypoints.md`, scoped service/document pages, `graphs/scope.dot`, optional
+  `graphs/scope-documents.dot`, and selected process pages/graphs only for `--target-process`.
+  Scoped mode does not write global `graphs/dependencies.dot` or `graphs/documents.dot`.
+- Scoped service pages add a `Scope` section, explicit scope boundaries, and a `Called By` section
+  that distinguishes inside-scope linked callers from outside-scope unlinked callers.
+- Scoped process pages distinguish full statically discovered process facts from projected
+  publication facts at the selected depth.
+- M7 Graphviz publishing is reused for focused DOT assets, and the graph index lists only current
+  scoped graph assets.
+- Managed output cleanup covers full-to-scoped, scoped-to-full, selector changes, depth changes,
+  process-scope changes, and Graphviz mode transitions through the existing generated-location
+  cleanup contract.
+- Tests cover selector validation, namespace segment matching, service/namespace/process scopes,
+  depth projection, document closure, scoped entrypoints, no-selector M7 output shape, link
+  integrity, and deterministic `scope.v1` output.
+
+Verification baseline:
+
+- No-selector runs keep accepted M7 output shape: full `analysis.json`, full service/document
+  pages, global dependency/document DOT files, graph index, and no `scope.json`.
+- A focused service scope for `pgp.services.common:readConfig` at depth 1 publishes two service
+  pages, two document pages, `scope.dot`, `scope-documents.dot`, full `analysis.json`, and
+  `scope.v1`.
+- A focused namespace scope for `pgp.services.common` at depth 0 resolves five root services using
+  namespace segment-boundary matching.
+- A focused process scope for a fixture-side `pgp-key-lookup` catalog projects full process facts
+  onto the selected depth and writes only the selected process page and process graph.
+
+Not implemented in M8a:
+
+- Partial/lazy parsing, persistent caching, selector unions, `--target-folder`, business-context or
+  Ollama generation, snapshot comparison, impact analysis, automatic business process discovery,
+  native BPM parsing, detailed JDBC/UM/JMS/trigger/scheduler semantics, M4b Java effects, Mermaid,
+  JavaScript graph viewers, static-site frameworks, ZIP publishing, or CI definitions.
+
+## Next Milestone Gate
+
+M4b, detailed JDBC/M5, native BPM process parsing, M8b business-context generation, or any later
+milestone requires explicit approval before implementation.

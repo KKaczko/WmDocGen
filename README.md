@@ -3,7 +3,7 @@
 `wm-doc` is an offline, deterministic static-analysis tool for Software AG / IBM webMethods
 Integration Server package snapshots.
 
-The current implemented milestone is **M7 for Gitea-ready graph publishing** on top of
+The current implemented milestone is **M8a for focused publication scopes** on top of
 the M6 process documentation and M5-lite opaque service inventory baselines. It discovers package and namespace artifacts, parses
 observed FLOW Service signatures, extracts ordered FLOW and mapping evidence, extracts observed
 Document Types with ordered field trees, resolves local document references by exact full name,
@@ -14,6 +14,8 @@ implementation details. M6 adds optional `processes.yml` business process declar
 entrypoint validation, deterministic reachability over resolved service dependencies, technical
 entrypoint candidates, process Markdown, and per-process DOT graphs. M7 keeps those DOT graphs
 canonical and can optionally render derived SVG/PNG graph views for publishable Markdown sites.
+M8a performs the complete accepted M7 technical analysis first, then optionally limits publication
+to one focused service, namespace, package, or process scope.
 
 This is not a claim of full webMethods 10.15 compatibility. `samples/OriginalSmall/OAAdapter` is the
 primary 10.15 fixture; `samples/PGP` is a compatibility and discovery corpus with unknown upstream
@@ -26,6 +28,9 @@ wm-doc scan samples --output out\inventory
 wm-doc analyze samples --output out\m7-analysis
 wm-doc analyze samples --processes-file processes.yml --output out\m7-process-analysis
 wm-doc analyze samples --processes-file processes.yml --render-graphs both --output out\m7-published
+wm-doc analyze samples --target-service pgp.services.common:readConfig --dependency-depth 1 --output out\m8a-service-scope
+wm-doc analyze samples --target-namespace pgp.services.common --dependency-depth 0 --output out\m8a-namespace-scope
+wm-doc analyze samples --processes-file processes.yml --target-process pgp-key-lookup --dependency-depth all --output out\m8a-process-scope
 ```
 
 The scan command writes:
@@ -45,6 +50,19 @@ The analyze command writes:
 - `graphs/index.md`
 - `processes/*.md` and `graphs/processes/*.dot` when process definitions are declared
 - optional `*.svg` and/or `*.png` graph images when `--render-graphs` requests them
+
+Focused publication mode is selected by exactly one of `--target-service <namespace:service>`,
+`--target-namespace <namespace-prefix>`, `--target-package <package-name>`, or
+`--target-process <process-id>`. `--dependency-depth` accepts `0`, a positive integer, or `all`
+and defaults to `all`. More than one selector, or repeating the same selector, is a validation
+error in M8a v1.
+
+M8a reduces generated documentation and graph scope. It does not reduce the initial parsing and
+analysis cost. Focused runs still write full canonical `analysis.json` using schema `analysis.v8`.
+They additionally write `scope.json` using `scope.v1`, `scope.md`, scoped `entrypoints.md`, scoped
+service/document Markdown, `graphs/scope.dot`, optional `graphs/scope-documents.dot`, and selected
+process pages/graphs only for `--target-process`. Focused mode does not write global
+`graphs/dependencies.dot` or `graphs/documents.dot`.
 
 Its completion output reports analyzed service counts, support-status counts, opaque description
 counts, promoted call occurrence counts, unique service dependency counts, process counts,
@@ -67,6 +85,11 @@ support statuses, opaque services, and resolved opaque targets. M6 adds top-leve
 `process_unresolved_calls`, `process_document_relationships`, and
 `technical_entrypoint_candidates`.
 
+In focused mode, `analysis.json` describes the complete discovered snapshot. `scope.json` describes
+the selected publication subset. Markdown and focused graphs describe the selected publication
+subset. Scope membership is deterministic BFS over resolved unique service dependencies, while
+unresolved, dynamic, unsupported, or depth-limited calls become explicit scope boundaries.
+
 Graph rendering is disabled by default: `--render-graphs none`. Use `svg`, `png`, or `both` to ask
 the CLI to render every generated DOT graph with Graphviz `dot`, resolved from `PATH` or
 `--graphviz-dot`. Graphviz is optional and is not installed by `wm-doc`. When rendering is requested
@@ -78,11 +101,12 @@ absolute local paths are present. Rendered PNG must be structurally valid PNG da
 image dimensions, IDAT data, IEND, and CRCs.
 
 Before writing analysis output, `wm-doc analyze` cleans only its managed generated locations:
-`analysis.json`, `index.md`, `entrypoints.md`, `services`, `documents`, `processes`, and `graphs`.
-Shape conflicts at those paths are replaced, unrelated files under the output root are preserved,
-and symlinks at managed paths are unlinked rather than followed. Cleanup and Graphviz diagnostics
-are bounded and scrub secret-like keys such as `password`, `passwd`, `token`, `access_token`,
-`api-key`, and bearer authorization values before CLI output.
+`analysis.json`, `index.md`, `entrypoints.md`, `scope.json`, `scope.md`, `services`,
+`documents`, `processes`, and `graphs`. Shape conflicts at those paths are replaced, unrelated
+files under the output root are preserved, and symlinks at managed paths are unlinked rather than
+followed. Cleanup and Graphviz diagnostics are bounded and scrub secret-like keys such as
+`password`, `passwd`, `token`, `access_token`, `api-key`, and bearer authorization values before
+CLI output.
 
 If `--processes-file` is omitted, `wm-doc analyze` looks for `processes.yml` under the scan root.
 Default absence is normal and produces no finding. A process catalog must use `version: 1`, stable
@@ -158,11 +182,12 @@ limitation. The `java_type_references` count covers imported types referenced by
 method, not every possible fully qualified type expression.
 
 The tool works offline, treats analyzed packages as read-only, never connects to Integration Server,
-and never executes analyzed Java or FLOW code. M7 also does not compile Java source, load
+and never executes analyzed Java or FLOW code. M8a also does not compile Java source, load
 classes, perform broad Java external-effect classification, analyze helper method bodies as service
 behavior, or parse JDBC, SQL, database resources, connection aliases, UM/JMS, triggers, schedulers,
 native BPM/process-model definitions, Mermaid diagrams, JavaScript graph viewers, static-site
-frameworks, ZIP archives, or CI publishing definitions.
+frameworks, ZIP archives, CI publishing definitions, Ollama/business-context generation, snapshot
+comparison, impact analysis, persistent caching, or partial/lazy parsing.
 
 ## Development
 

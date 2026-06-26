@@ -59,13 +59,38 @@ Observed from current fixtures:
   bearer authorization values do not expose their values. Raw renderer stderr/stdout is not written
   to canonical JSON, Markdown, graph indexes, or process/service/document pages.
 - Generated-output cleanup is shape-tolerant only for managed generated paths:
-  `analysis.json`, `index.md`, `entrypoints.md`, `services`, `documents`, `processes`, and
-  `graphs`. Other output-root files are outside the managed cleanup contract.
+  `analysis.json`, `index.md`, `entrypoints.md`, `scope.json`, `scope.md`, `services`,
+  `documents`, `processes`, and `graphs`. Other output-root files are outside the managed cleanup
+  contract.
 - SVG output is accepted only after XML parsing and normalization. The known Graphviz SVG 1.1
   external DTD declaration and comments are removed; malformed XML, entity declarations, script,
   JavaScript URLs, `foreignObject`, event handlers, `file://` links, absolute local paths, and
   unexpected external hrefs are rejected. PNG output must be structurally valid PNG data with valid
   chunk CRCs, non-zero IHDR dimensions, IDAT data, and a final IEND chunk.
+- M8a focused publication scope runs the complete accepted M7 technical analysis before scope
+  selection. Focused publication reduces generated documentation and graph scope only; it does not
+  reduce initial parsing or analysis cost.
+- Focused mode supports exactly one selector occurrence: `--target-service`, `--target-namespace`,
+  `--target-package`, or `--target-process`. Selector values are trimmed, case-sensitive, exact
+  where applicable, and never fuzzy-matched. Repeated selectors or selector unions are rejected.
+- `--target-namespace` matches canonical service namespaces by segment-boundary prefix. For example,
+  `a.b` matches `a.b` and `a.b.c`, but not `a.bc` or `a.broken`.
+- Focused runs keep full `analysis.json` as schema `analysis.v8` and write `scope.json` as
+  `scope.v1`. Scoped Markdown repeats that `analysis.json` describes the complete discovered
+  snapshot while `scope.json`, Markdown, and focused graphs describe the selected publication
+  subset.
+- Focused output writes `graphs/scope.dot` and, when useful document edges exist,
+  `graphs/scope-documents.dot`. It does not write global `graphs/dependencies.dot` or
+  `graphs/documents.dot` in scoped mode. Graphviz SVG/PNG rendering reuses the M7 publishing rules
+  and links only assets generated in the current scoped run.
+- Scope boundaries are generated only from canonical evidence: resolved dependencies stopped by
+  depth, unresolved static dependencies, dynamic invocation evidence, or unsupported call-like
+  findings. Repeated equivalent boundaries aggregate by source service, safe target/category,
+  dependency or call kind, and boundary status.
+- Scoped document inclusion is seeded from canonical `service_document_dependencies` for included
+  services and selected process document relationships for process scopes, then expanded through
+  deterministic resolved document dependencies. Unresolved document references are boundaries, not
+  placeholder pages.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
 - Observed active Document Types in current fixtures all come from PGP. OAAdapter contains service
