@@ -46,6 +46,17 @@ M7 fixture note:
 - Generated-output cleanup tests create temporary stale files, directories, and symlinks outside the
   fixture tree to prove managed output replacement without modifying `samples/`.
 
+M8a fixture note:
+
+- Focused publication scope tests run the complete fixture analysis first and then limit generated
+  publication output. They do not modify `samples/`, add process evidence to fixture packages, or
+  claim lower parsing cost.
+- Service, namespace, package, and process scopes are validated with existing fixture services plus
+  temporary process catalogs outside `samples/`.
+- Focused output keeps full `analysis.json` as the canonical fixture snapshot and writes
+  `scope.json` as derived publication metadata. Scoped DOT files use focused names such as
+  `graphs/scope.dot` so they are not mistaken for global dependency or document graphs.
+
 ## PGP
 
 `samples/PGP` is a public compatibility and discovery corpus used as-is from the local repository

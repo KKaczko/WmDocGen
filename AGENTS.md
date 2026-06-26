@@ -2,8 +2,12 @@
 
 This project builds an offline static-analysis tool for webMethods Integration Server packages.
 
-Current implementation milestone is M7: Gitea-ready graph publishing and publishable
-documentation on top of the accepted M6 process catalog baseline. M4a associates Java Services with generated source under
+Current implementation milestone is M8a: focused publication scopes on top of the accepted M7
+graph-publishing baseline. M8a performs the complete M7 technical analysis first, keeps
+`analysis.json` as the full `analysis.v8` snapshot, and then optionally limits generated Markdown
+and focused graph publication through one selector. Focused publication reduces generated
+documentation and graph scope; it does not reduce the initial parsing or analysis cost. M4a
+associates Java Services with generated source under
 `code/source`, checks each matched method against `java.frag` with normalized Java tokens, extracts
 imports, referenced types, observed pipeline READ/WRITE/REMOVE accesses, and narrowly supported
 static or dynamic `Service.doInvoke` sites, and integrates only statically confirmed Java calls into
@@ -32,7 +36,15 @@ Managed output cleanup is limited to generated root files and generated director
 at those paths may be replaced, but unrelated output-root files must be preserved and symlinks must
 be unlinked rather than traversed.
 
-Do not add M4b, detailed JDBC/M5, native BPM process parsing, or later work without later explicit
+M8a focused publication supports exactly one selector per run: `--target-service`,
+`--target-namespace`, `--target-package`, or `--target-process`, plus optional
+`--dependency-depth`. Selector unions and repeated selectors are intentionally deferred. In focused
+mode `scope.json` uses `scope.v1`; `analysis.json` remains the complete snapshot. Scoped outputs
+use focused graph names such as `graphs/scope.dot` and do not write global
+`graphs/dependencies.dot` or `graphs/documents.dot`.
+
+Do not add M4b, detailed JDBC/M5, native BPM process parsing, M8b business-context generation, or
+later work without later explicit
 milestone approval. In particular, do not add broad Java external-effect classification, adapter
 parsers, trigger parsers, runtime simulation, Ollama integration, snapshot diffing, Java execution,
 Java compilation, Java class loading, Mermaid, JavaScript graph viewers, static-site frameworks, or

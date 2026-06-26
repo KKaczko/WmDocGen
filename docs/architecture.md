@@ -1,11 +1,12 @@
 # Architecture
 
-M7 implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
+M8a implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
 service, and user-maintained process static-analysis slices focused on traceable calls, unique
 dependencies, observed control-flow structure, observed mapping evidence, ordered document field
 trees, exact document-reference resolution, source-first Java Service evidence, opaque service
 identity, optional `processes.yml` catalogs, policy-safe disclosure, and optional derived graph
-publishing for Markdown-oriented repository viewers.
+publishing for Markdown-oriented repository viewers. It also adds focused publication scopes that
+limit generated Markdown and focused graph output after the complete M7 analysis result is built.
 
 Subsystems:
 
@@ -34,6 +35,12 @@ Subsystems:
 - Graph publishing in `wm_doc.graph_publish` discovers the DOT paths produced by the renderers and,
   only when requested, invokes Graphviz `dot` with argument-list subprocess calls to create derived
   SVG/PNG files. Render failures do not change canonical analysis or DOT output.
+- Focused publication in `wm_doc.scope_analysis` consumes the complete `AnalysisResult`, resolves
+  exactly one CLI selector, traverses resolved `UniqueDependency` records with deterministic BFS,
+  records bounded provenance, extracts scope boundaries from resolved depth limits, unresolved
+  static dependencies, dynamic invocation evidence, and unsupported call-like findings, computes
+  document closure from canonical service/document relationships, and writes `scope.v1` separately
+  from canonical analysis.
 - Classification in `wm_doc.config` applies deterministic, case-insensitive glob rules. `neverImportant`
   rules take precedence over important service rules.
 - Dependency resolution is exact-name only. It resolves static `INVOKE`, `MAPINVOKE`, and
@@ -239,11 +246,36 @@ M7 keeps `analysis.v8`:
   were successfully rendered. The top-level index links the graph catalog, and process pages preview
   SVG when available or PNG otherwise.
 - Before publishing, the CLI removes only managed generated locations under the output root:
-  `analysis.json`, `index.md`, `entrypoints.md`, `services`, `documents`, `processes`, and
-  `graphs`. File/directory shape conflicts at those exact paths are replaced, unrelated files are
-  preserved, and symlinks at managed paths are unlinked rather than followed.
+  `analysis.json`, `index.md`, `entrypoints.md`, `scope.json`, `scope.md`, `services`,
+  `documents`, `processes`, and `graphs`. File/directory shape conflicts at those exact paths are
+  replaced, unrelated files are preserved, and symlinks at managed paths are unlinked rather than
+  followed.
 - Rendered image files are publishing artifacts only. Their determinism depends on using the same
   Graphviz executable/version; they do not affect IR, metrics, dependency resolution, or schema.
+
+M8a keeps `analysis.v8` and adds `scope.v1` for focused publication:
+
+- Scope selection happens after full package discovery, parsing, dependency resolution, process
+  analysis, classification, and global metrics are complete. Focused publication reduces generated
+  documentation and graph scope; it does not reduce initial parsing or analysis cost.
+- The full canonical `analysis.json` remains unchanged and describes the complete discovered
+  snapshot. `scope.json` describes the selected publication subset. Markdown and focused graphs
+  describe the selected publication subset.
+- M8a v1 accepts exactly one selector occurrence per run: `--target-service`, `--target-namespace`,
+  `--target-package`, or `--target-process`. `--target-namespace` uses case-sensitive namespace
+  segment-boundary prefix matching, not filesystem paths.
+- Root resolution uses multimaps and rejects ambiguous duplicate canonical service names, duplicate
+  selected package identities, and duplicate selected process IDs instead of selecting by discovery
+  order.
+- Traversal follows resolved unique service dependencies only, preserving existing dependency kinds
+  such as `INVOKES` and `USES_TRANSFORMER`. Dynamic, unresolved, unsupported, and depth-limited
+  calls become scope boundaries.
+- Scoped document pages are seeded from canonical `service_document_dependencies` for included
+  services and, for process scopes, selected `process_document_relationships`, then expanded through
+  deterministic document dependency closure.
+- Focused output uses focused graph names such as `graphs/scope.dot` and
+  `graphs/scope-documents.dot`. It does not write global `graphs/dependencies.dot` or
+  `graphs/documents.dot` in scoped mode. No-selector mode remains the accepted M7 publication path.
 
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
@@ -258,4 +290,5 @@ semantics, or model Specification artifacts as Document Types.
 Later milestones may add broad Java external-effect classification, fuller FLOW semantics, detailed
 adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, native BPM
 process-model parsing, Service Specification IR, package dependency graphs, snapshot diffing, and
-Ollama input generation. Those are intentionally outside M7 and require a separate gate.
+Ollama or business-context generation. Those are intentionally outside M8a and require a separate
+gate.
