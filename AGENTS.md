@@ -2,11 +2,14 @@
 
 This project builds an offline static-analysis tool for webMethods Integration Server packages.
 
-Current implementation milestone is M8a: focused publication scopes on top of the accepted M7
-graph-publishing baseline. M8a performs the complete M7 technical analysis first, keeps
-`analysis.json` as the full `analysis.v8` snapshot, and then optionally limits generated Markdown
-and focused graph publication through one selector. Focused publication reduces generated
-documentation and graph scope; it does not reduce the initial parsing or analysis cost. M4a
+Current implementation milestone is M8b: deterministic business context packs on top of the
+accepted M8a focused-publication baseline. M8a performs the complete M7 technical analysis first,
+keeps `analysis.json` as the full `analysis.v8` snapshot, and then optionally limits generated
+Markdown and focused graph publication through one selector. Focused publication reduces generated
+documentation and graph scope; it does not reduce the initial parsing or analysis cost. M8b consumes
+focused `analysis.json` and `scope.json` artifacts through `wm-doc build-business-context` and
+writes bounded `business-context.v1` JSON plus a deterministic preview Markdown file. M8b does not
+call Ollama, generate business prose, add prompts, select models, or cache model responses. M4a
 associates Java Services with generated source under
 `code/source`, checks each matched method against `java.frag` with normalized Java tokens, extracts
 imports, referenced types, observed pipeline READ/WRITE/REMOVE accesses, and narrowly supported
@@ -43,12 +46,12 @@ mode `scope.json` uses `scope.v1`; `analysis.json` remains the complete snapshot
 use focused graph names such as `graphs/scope.dot` and do not write global
 `graphs/dependencies.dot` or `graphs/documents.dot`.
 
-Do not add M4b, detailed JDBC/M5, native BPM process parsing, M8b business-context generation, or
+Do not add M4b, detailed JDBC/M5, native BPM process parsing, M8c Ollama/business generation, or
 later work without later explicit
 milestone approval. In particular, do not add broad Java external-effect classification, adapter
-parsers, trigger parsers, runtime simulation, Ollama integration, snapshot diffing, Java execution,
-Java compilation, Java class loading, Mermaid, JavaScript graph viewers, static-site frameworks, or
-ZIP publishing.
+parsers, trigger parsers, runtime simulation, Ollama integration, LLM prompts, model selection,
+snapshot diffing, Java execution, Java compilation, Java class loading, Mermaid, JavaScript graph
+viewers, static-site frameworks, or ZIP publishing.
 
 Important constraints:
 

@@ -1,6 +1,6 @@
 # Unsupported Constructs
 
-Unsupported or only partially supported in M8a:
+Unsupported or only partially supported in M8b:
 
 - Full FLOW execution semantics
 - Full MAP operation semantics beyond observed evidence extraction
@@ -39,7 +39,7 @@ Unsupported or only partially supported in M8a:
   generation
 - Runtime-only Integration Server configuration
 - Ollama documentation generation
-- Business-context generation, impact analysis, and snapshot comparison
+- Model-generated business documentation, impact analysis, and snapshot comparison
 
 M5-lite keeps parseable service artifacts with explicit unsupported `svc_type` values, after
 surrounding whitespace is trimmed, as `OPAQUE` services. Missing, empty, whitespace-only,
@@ -75,6 +75,12 @@ M8a v1 accepts exactly one selector occurrence. It does not support selector uni
 selector values, fuzzy matching, short service-name fallback, package path substring matching, or
 filesystem-folder targeting. Target namespace matching is canonical namespace segment-prefix
 matching only.
+
+M8b supports deterministic `business-context.v1` packs from focused M8a artifacts only. It does not
+call Ollama, select models, build prompts, validate model responses, cache LLM output, or infer
+business owners, actors, outcomes, external-system names, SLAs, database technologies, or legal
+meaning from technical names. It also does not extend `processes.yml` with owner/actor/outcome
+metadata.
 
 M3 extracts static `INVOKE` and `MAPINVOKE` targets when a literal `SERVICE` attribute is present.
 Targets that are not present in the analyzed snapshot are retained as unresolved call occurrences

@@ -657,10 +657,6 @@ Not implemented in M7:
   runtime execution, Integration Server connectivity, database connectivity, snapshot diffing, or
   Ollama.
 
-## Next Milestone Gate
-
-M8a focused publication scopes was explicitly approved and implemented.
-
 ## M8a Focused Publication Scopes
 
 Implemented in this milestone:
@@ -721,7 +717,44 @@ Not implemented in M8a:
   native BPM parsing, detailed JDBC/UM/JMS/trigger/scheduler semantics, M4b Java effects, Mermaid,
   JavaScript graph viewers, static-site frameworks, ZIP publishing, or CI definitions.
 
+## M8b Deterministic Business Context Packs
+
+Implemented in this milestone:
+
+- `wm-doc build-business-context` is a separate command that consumes focused M8a artifacts. It
+  supports `--input <focused-output-dir>` or explicit `--analysis` and `--scope` paths plus required
+  `--output`.
+- Existing schemas remain unchanged: `analysis.json` stays `analysis.v8`, and `scope.json` stays
+  `scope.v1`.
+- `context.json` uses new schema `business-context.v1`; `context.md` is a deterministic review
+  preview. Neither file is model-authored business documentation.
+- The builder validates schema versions, duplicate/ambiguous canonical identities, scoped service and
+  document membership integrity, exact scoped dependency/document-dependency identity fields,
+  process projection counts, and boundary source/evidence compatibility before context construction
+  or publishing. Semantic scope mismatches fail with `BUSINESS_CONTEXT_SCOPE_MISMATCH`.
+- Supported context kinds are `PROCESS`, `SERVICE`, and `SCOPE_SUMMARY`. Namespace and package
+  scopes produce one summary context rather than per-service contexts.
+- Contexts separate approved process metadata, canonical technical facts, deterministic summaries,
+  technical stages, services, dependencies, documents, mappings, boundaries, unknowns, limitations,
+  omissions, and evidence records.
+- Mapping literals are represented structurally as withheld literal assignments. Raw literal values
+  are not copied from `analysis.json` into `context.json`.
+- The output publisher owns only `context.json` and `context.md`, preserves unrelated files in the
+  output directory, and avoids absolute path disclosure in diagnostics and generated content. The
+  two files are staged and replaced with backups so a failed publication restores the previous
+  complete bundle or leaves no first-build partial bundle.
+- `COMPLETE` and `PARTIAL` are machine-readable context statuses. Incomplete scopes, depth limits,
+  unresolved/dynamic/unsupported boundaries, unresolved document references, and truncation can make
+  a context partial; built-in `pub.*`/`wm.*` boundaries and safe disclosure redaction alone remain
+  limitations but do not make the context partial.
+
+Not implemented in M8b:
+
+- Ollama communication, provider/model selection, prompts, structured model output validation, LLM
+  cache, generated business Markdown, snapshot comparison, impact analysis, new process catalog
+  metadata fields, or changes to canonical analysis/scope schemas.
+
 ## Next Milestone Gate
 
-M4b, detailed JDBC/M5, native BPM process parsing, M8b business-context generation, or any later
-milestone requires explicit approval before implementation.
+M4b, detailed JDBC/M5, native BPM process parsing, M8c Ollama/business-document generation, or any
+later milestone requires explicit approval before implementation.

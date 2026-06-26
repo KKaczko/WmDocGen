@@ -28,6 +28,7 @@ wm-doc analyze samples --output out\m7-analysis
 wm-doc analyze samples --render-graphs both --output out\m7-analysis-graphs
 wm-doc analyze samples --target-service pgp.services.common:readConfig --dependency-depth 1 --output out\m8a-read-config-scope
 wm-doc analyze samples --target-namespace pgp.services.common --dependency-depth 0 --output out\m8a-common-namespace-scope
+wm-doc build-business-context --input out\m8a-read-config-scope --output out\m8a-read-config-scope\business-context
 ```
 
 Current analysis observations:
@@ -58,6 +59,9 @@ Current analysis observations:
 - M7 graph publishing is validated from generated DOT files. The checked-in fixtures do not require
   Graphviz, and the normal test suite uses a deterministic fake renderer with valid SVG/PNG output
   structures for publishing behavior.
+- M8b business context tests consume generated focused M8a fixture outputs. They validate
+  `business-context.v1` service, package, and process contexts without modifying `samples/` or
+  adding LLM/Ollama behavior.
 
 M2b observed active mapping tag counts:
 
