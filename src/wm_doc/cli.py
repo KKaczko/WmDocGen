@@ -7,6 +7,11 @@ from typing import Annotated
 import typer
 
 from wm_doc.analysis import analyze_path
+from wm_doc.business_context import (
+    BusinessContextError,
+    build_business_context,
+    load_business_context_inputs,
+)
 from wm_doc.config import load_config
 from wm_doc.discovery import scan_path
 from wm_doc.graph_publish import (
@@ -24,6 +29,7 @@ from wm_doc.graph_publish import (
 )
 from wm_doc.ir import AnalysisResult
 from wm_doc.render.analysis_json import render_analysis_json
+from wm_doc.render.business_context_markdown import write_business_context_outputs
 from wm_doc.render.document_markdown import write_document_markdown
 from wm_doc.render.dot import (
     write_dependency_dot,
@@ -93,6 +99,72 @@ def scan(
     typer.echo(
         f"Scanned {len(inventory.packages)} package(s); wrote {output / 'inventory.json'} "
         f"and {output / 'fixture-inventory.md'}."
+    )
+
+
+@app.command("build-business-context")
+def build_business_context_command(
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Directory for business-context.v1 outputs.",
+        ),
+    ],
+    input_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--input",
+            help="Focused publication output directory containing analysis.json and scope.json.",
+        ),
+    ] = None,
+    analysis_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis",
+            help="Path to analysis.json from a focused publication run.",
+        ),
+    ] = None,
+    scope_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--scope",
+            help="Path to scope.json from the same focused publication run.",
+        ),
+    ] = None,
+) -> None:
+    """Build a deterministic business-context.v1 pack from M8a focused outputs."""
+    try:
+        analysis_input, scope_input = _business_context_input_paths(
+            input_path=input_path,
+            analysis_path=analysis_path,
+            scope_path=scope_path,
+        )
+        inputs = load_business_context_inputs(analysis_input, scope_input)
+        build = build_business_context(inputs)
+        written_paths = write_business_context_outputs(output, build.context)
+    except BusinessContextCliError as exc:
+        typer.echo(f"{exc.code}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=2) from exc
+    except BusinessContextError as exc:
+        typer.echo(f"{exc.code.value}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        "Built deterministic business context:\n"
+        f"- schema: {build.context.schema_version}\n"
+        f"- kind: {build.context.context_kind.value}\n"
+        f"- status: {build.context.status.value}\n"
+        f"- status reasons: {len(build.context.status_reasons)}\n"
+        f"- services: {len(build.context.services)}\n"
+        f"- documents: {len(build.context.documents)}\n"
+        f"- dependencies: {len(build.context.dependencies)}\n"
+        f"- boundaries: {len(build.context.boundaries)}\n"
+        f"- evidence records: {len(build.context.evidence)}\n"
+        f"- analysis sha256: {build.analysis_sha256}\n"
+        f"- scope sha256: {build.scope_sha256}\n"
+        f"- output files: {', '.join(path.name for path in written_paths)}"
     )
 
 
@@ -500,6 +572,34 @@ class ScopeCliError(Exception):
         super().__init__(f"{code}: {safe_message}")
         self.code = code
         self.safe_message = safe_message
+
+
+class BusinessContextCliError(Exception):
+    def __init__(self, code: str, safe_message: str) -> None:
+        super().__init__(f"{code}: {safe_message}")
+        self.code = code
+        self.safe_message = safe_message
+
+
+def _business_context_input_paths(
+    *,
+    input_path: Path | None,
+    analysis_path: Path | None,
+    scope_path: Path | None,
+) -> tuple[Path, Path]:
+    if input_path is not None and (analysis_path is not None or scope_path is not None):
+        raise BusinessContextCliError(
+            "BUSINESS_CONTEXT_INPUT_INVALID",
+            "--input cannot be combined with --analysis or --scope.",
+        )
+    if input_path is not None:
+        return input_path / "analysis.json", input_path / "scope.json"
+    if analysis_path is None or scope_path is None:
+        raise BusinessContextCliError(
+            "BUSINESS_CONTEXT_INPUT_MISSING",
+            "Use either --input or both --analysis and --scope.",
+        )
+    return analysis_path, scope_path
 
 
 def _clean_generated_output(output: Path) -> None:

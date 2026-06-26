@@ -277,6 +277,25 @@ M8a keeps `analysis.v8` and adds `scope.v1` for focused publication:
   `graphs/scope-documents.dot`. It does not write global `graphs/dependencies.dot` or
   `graphs/documents.dot` in scoped mode. No-selector mode remains the accepted M7 publication path.
 
+M8b keeps `analysis.v8` and `scope.v1` unchanged and adds a separate deterministic context package:
+
+- `wm-doc build-business-context` consumes generated focused artifacts rather than reparsing package
+  snapshots. It accepts either `--input <focused-output-dir>` or explicit `--analysis` and
+  `--scope` paths.
+- The command validates supported schemas and cross-references before writing output. Invalid or
+  incompatible inputs fail without emitting a context bundle.
+- `business-context/context.json` uses schema `business-context.v1`; `business-context/context.md`
+  is a deterministic human review preview, not model-authored business documentation.
+- The context pack separates canonical technical facts, approved process metadata, deterministic
+  summaries, boundaries, unknowns, limitations, omissions, and evidence records. Evidence IDs refer
+  to stable canonical or context-specific identifiers and never to Markdown filenames or absolute
+  paths.
+- M8b is allowlist-based: it does not serialize raw XML, Java bodies, MAP literal values, arbitrary
+  constants, absolute local paths, Graphviz diagnostics, provider settings, prompts, model
+  responses, or cache metadata.
+- `COMPLETE` and `PARTIAL` describe the deterministic context package. Built-in `pub.*`/`wm.*`
+  boundaries are retained as limitations but do not make a context partial by themselves.
+
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
 treating them as silently supported. Mapping paths preserve the raw declared webMethods path as
@@ -290,5 +309,5 @@ semantics, or model Specification artifacts as Document Types.
 Later milestones may add broad Java external-effect classification, fuller FLOW semantics, detailed
 adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, native BPM
 process-model parsing, Service Specification IR, package dependency graphs, snapshot diffing, and
-Ollama or business-context generation. Those are intentionally outside M8a and require a separate
-gate.
+Ollama/model-generated business documentation. Those are intentionally outside M8b and require a
+separate gate.

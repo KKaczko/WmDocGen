@@ -91,6 +91,29 @@ Observed from current fixtures:
   services and selected process document relationships for process scopes, then expanded through
   deterministic resolved document dependencies. Unresolved document references are boundaries, not
   placeholder pages.
+- M8b adds a separate `business-context.v1` artifact generated only by
+  `wm-doc build-business-context`. It consumes focused M8a `analysis.json` and `scope.json` files;
+  it does not run package analysis, change `analysis.v8`, or change `scope.v1`.
+- The M8b command writes only `context.json` and `context.md` under the requested output directory.
+  It preserves unrelated files there. The two managed files are published as a rollback-capable
+  pair: input, compatibility, disclosure, or write failures preserve the previous valid pair when
+  one exists and leave no first-build partial pair. `context.md` is a deterministic preview for
+  review, not model-authored business documentation.
+- `context.json` records source input hashes, selector/subject identity, approved process metadata
+  when available, scope metrics, technical service stages, bounded services, documents,
+  dependencies, mappings, boundaries, unknowns, limitations, omissions, and evidence records.
+- Context status is `COMPLETE` or `PARTIAL`. Built-in `pub.*` and `wm.*` boundaries are represented
+  as limitations but do not make a context partial by themselves. Safe upstream or M8b redaction is
+  recorded with `BUSINESS_CONTEXT_DISCLOSURE_REDACTED` and a limitation, but does not by itself make
+  the context partial. Depth limits, unresolved, dynamic, unsupported, document-boundary, and
+  truncation conditions can make a context partial.
+- Active M8b v1 evidence types are limited to facts the builder can emit: process, service,
+  service signature, dependency, document, document field, document reference, mapping operation,
+  transformer binding, scope membership, scope boundary, finding, approved metadata, and
+  deterministic summary evidence.
+- M8b exports allowlisted structured facts only. Raw XML, Java bodies, MAP literal values, arbitrary
+  constants, absolute paths, provider/model/prompt fields, model responses, and cache metadata are
+  not serialized.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
 - Observed active Document Types in current fixtures all come from PGP. OAAdapter contains service

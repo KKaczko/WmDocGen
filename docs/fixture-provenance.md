@@ -57,6 +57,14 @@ M8a fixture note:
   `scope.json` as derived publication metadata. Scoped DOT files use focused names such as
   `graphs/scope.dot` so they are not mistaken for global dependency or document graphs.
 
+M8b fixture note:
+
+- Deterministic business context tests consume focused M8a fixture outputs plus temporary process
+  catalogs. They do not modify `samples/`, add business facts to fixture packages, or call a model.
+- The generated `business-context.v1` files are derived review packs for future enrichment. They
+  retain source hashes and evidence IDs but do not claim business ownership, external-system names,
+  runtime order, or business outcomes.
+
 ## PGP
 
 `samples/PGP` is a public compatibility and discovery corpus used as-is from the local repository
