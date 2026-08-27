@@ -1,12 +1,13 @@
 # Architecture
 
-M8a implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
+M8c implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
 service, and user-maintained process static-analysis slices focused on traceable calls, unique
 dependencies, observed control-flow structure, observed mapping evidence, ordered document field
 trees, exact document-reference resolution, source-first Java Service evidence, opaque service
 identity, optional `processes.yml` catalogs, policy-safe disclosure, and optional derived graph
 publishing for Markdown-oriented repository viewers. It also adds focused publication scopes that
-limit generated Markdown and focused graph output after the complete M7 analysis result is built.
+limit generated Markdown and focused graph output after the complete M7 analysis result is built,
+deterministic business context packs, and optional local Ollama structured business enrichment.
 
 Subsystems:
 
@@ -41,6 +42,16 @@ Subsystems:
   static dependencies, dynamic invocation evidence, and unsupported call-like findings, computes
   document closure from canonical service/document relationships, and writes `scope.v1` separately
   from canonical analysis.
+- Business context generation in `wm_doc.business_context` consumes focused `analysis.json` and
+  `scope.json` artifacts, validates cross-references, and writes bounded `business-context.v1`
+  inputs for local enrichment without calling a model.
+- Business enrichment in `wm_doc.business_enrichment` consumes one `business-context.v1` file,
+  builds a deterministic prompt envelope, calls a `BusinessEnrichmentProvider` with the small
+  internal `business-draft.v1` structured-output schema, validates draft text and evidence IDs, and
+  then constructs the final application-owned `business-result.v1` bundle.
+- `wm_doc.ollama_provider` is the only M8c provider implementation. It talks to Ollama `/api/chat`
+  with `stream:false`, JSON schema `format`, `temperature=0`, safe URL validation, disabled
+  redirects/proxies, bounded diagnostics, and loopback-only defaults.
 - Classification in `wm_doc.config` applies deterministic, case-insensitive glob rules. `neverImportant`
   rules take precedence over important service rules.
 - Dependency resolution is exact-name only. It resolves static `INVOKE`, `MAPINVOKE`, and
@@ -60,8 +71,9 @@ Subsystems:
 - Renderers produce deterministic inventory JSON/Markdown and deterministic analysis JSON,
   top-level index Markdown, entrypoint candidate Markdown, per-service Markdown, per-document
   Markdown, process Markdown, graph catalog Markdown, Graphviz DOT, and optional derived SVG/PNG
-  graph assets.
-- The CLI exposes `wm-doc scan` and `wm-doc analyze`.
+  graph assets, deterministic business-context previews, and validated business-result Markdown.
+- The CLI exposes `wm-doc scan`, `wm-doc analyze`, `wm-doc build-business-context`,
+  `wm-doc ollama-test`, and `wm-doc enrich-business`.
 
 ## Analysis Schema
 
@@ -296,6 +308,26 @@ M8b keeps `analysis.v8` and `scope.v1` unchanged and adds a separate determinist
 - `COMPLETE` and `PARTIAL` describe the deterministic context package. Built-in `pub.*`/`wm.*`
   boundaries are retained as limitations but do not make a context partial by themselves.
 
+M8c keeps all existing schemas unchanged and adds a separate structured enrichment result package:
+
+- `wm-doc ollama-test` verifies a local Ollama provider, model availability, structured JSON
+  support, and the internal M8c `business-draft.v1` contract without writing files.
+- `wm-doc enrich-business` consumes exactly one `business-context.v1` `context.json`. It does not
+  re-read packages, `analysis.json`, `scope.json`, Markdown, or DOT files.
+- Ollama is asked to produce only a transient draft with `claims`, `inferences`, `unknowns`, and
+  `limitations`. The model does not generate final IDs, status, provenance, validation metadata,
+  cache metadata, or confidence enum values.
+- `business/result.json` uses schema `business-result.v1`; `business/index.md` is deterministic
+  app-rendered Markdown from the validated result. Draft `claims` become `CONFIRMED` claims,
+  `inferences` become `INFERRED` claims, and deterministic source unknowns/limitations are copied
+  even when the model omits them.
+- Unknown evidence IDs, incompatible evidence types, unsafe generated text, non-JSON drafts,
+  Markdown-wrapped JSON, provider failures, or output failures reject the whole response.
+- M8c caches only validated normalized `business-result.v1` files. Cache keys include the prompt
+  version, internal draft schema version, final result schema version, generation parameters, and
+  context/provider/model identity. It never caches raw prompts, raw model responses, tracebacks,
+  invalid output, provider URLs, or authentication material.
+
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
 treating them as silently supported. Mapping paths preserve the raw declared webMethods path as
@@ -309,5 +341,5 @@ semantics, or model Specification artifacts as Document Types.
 Later milestones may add broad Java external-effect classification, fuller FLOW semantics, detailed
 adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, native BPM
 process-model parsing, Service Specification IR, package dependency graphs, snapshot diffing, and
-Ollama/model-generated business documentation. Those are intentionally outside M8b and require a
-separate gate.
+cloud providers, RAG, prompt editing, or richer business-review workflows. Those are intentionally
+outside M8c and require a separate gate.

@@ -12,6 +12,13 @@ from wm_doc.business_context import (
     build_business_context,
     load_business_context_inputs,
 )
+from wm_doc.business_enrichment import (
+    BusinessEnrichmentError,
+    BusinessEnrichmentOptions,
+    default_cache_dir,
+    enrich_business_context,
+)
+from wm_doc.business_result_schema import BusinessResultLanguage
 from wm_doc.config import load_config
 from wm_doc.discovery import scan_path
 from wm_doc.graph_publish import (
@@ -28,8 +35,16 @@ from wm_doc.graph_publish import (
     run_subprocess,
 )
 from wm_doc.ir import AnalysisResult
+from wm_doc.ollama_provider import (
+    HTTP_CONNECT_TIMEOUT_SECONDS,
+    HTTP_TIMEOUT_SECONDS,
+    BusinessEnrichmentProvider,
+    OllamaBusinessEnrichmentProvider,
+    OllamaProviderError,
+)
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.business_context_markdown import write_business_context_outputs
+from wm_doc.render.business_result_markdown import write_business_result_outputs
 from wm_doc.render.document_markdown import write_document_markdown
 from wm_doc.render.dot import (
     write_dependency_dot,
@@ -73,6 +88,24 @@ app = typer.Typer(
 GRAPHVIZ_RUNNER: GraphvizRunner = run_subprocess
 MANAGED_ROOT_FILES = ("analysis.json", "index.md", "entrypoints.md", "scope.json", "scope.md")
 MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
+
+
+def _default_business_enrichment_provider_factory(
+    ollama_url: str,
+    *,
+    allow_remote_provider: bool,
+    connect_timeout_seconds: int,
+    timeout_seconds: int,
+) -> BusinessEnrichmentProvider:
+    return OllamaBusinessEnrichmentProvider(
+        ollama_url,
+        allow_remote_provider=allow_remote_provider,
+        connect_timeout_seconds=connect_timeout_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+BUSINESS_ENRICHMENT_PROVIDER_FACTORY = _default_business_enrichment_provider_factory
 
 
 @app.callback()
@@ -164,6 +197,174 @@ def build_business_context_command(
         f"- evidence records: {len(build.context.evidence)}\n"
         f"- analysis sha256: {build.analysis_sha256}\n"
         f"- scope sha256: {build.scope_sha256}\n"
+        f"- output files: {', '.join(path.name for path in written_paths)}"
+    )
+
+
+@app.command("ollama-test")
+def ollama_test_command(
+    model: Annotated[
+        str,
+        typer.Option("--model", help="Installed Ollama model to test."),
+    ],
+    ollama_url: Annotated[
+        str,
+        typer.Option("--ollama-url", help="Ollama provider URL."),
+    ] = "http://localhost:11434",
+    timeout_seconds: Annotated[
+        int,
+        typer.Option("--timeout-seconds", help="Provider request timeout in seconds."),
+    ] = HTTP_TIMEOUT_SECONDS,
+    connect_timeout_seconds: Annotated[
+        int,
+        typer.Option(
+            "--connect-timeout-seconds",
+            help="Provider connection/probe timeout in seconds.",
+        ),
+    ] = HTTP_CONNECT_TIMEOUT_SECONDS,
+    allow_remote_provider: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote-provider",
+            help="Allow non-loopback Ollama provider URLs.",
+        ),
+    ] = False,
+) -> None:
+    """Check local Ollama M8c draft-contract availability without writing files."""
+    try:
+        provider = BUSINESS_ENRICHMENT_PROVIDER_FACTORY(
+            ollama_url,
+            allow_remote_provider=allow_remote_provider,
+            connect_timeout_seconds=connect_timeout_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+        check = provider.check(model.strip(), structured_probe=True)
+        if not check.structured_output_ok:
+            typer.echo(
+                "BUSINESS_ENRICHMENT_PROVIDER_FAILED: Ollama M8c draft-contract probe failed.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    except OllamaProviderError as exc:
+        typer.echo(f"{exc.code.value}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        "Ollama M8c draft-contract check:\n"
+        f"- provider: {check.provider_kind}\n"
+        f"- version: {check.ollama_version or 'unknown'}\n"
+        f"- model: {_safe_cli_value(check.model)}\n"
+        f"- model digest: {check.model_digest or 'unknown'}\n"
+        f"- model found: {'yes' if check.model_found else 'no'}\n"
+        f"- structured JSON supported: {'yes' if check.structured_output_ok else 'no'}\n"
+        f"- M8c draft contract supported: {'yes' if check.structured_output_ok else 'no'}"
+    )
+
+
+@app.command("enrich-business")
+def enrich_business_command(
+    context: Annotated[
+        Path,
+        typer.Option(
+            "--context",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to business-context.v1 context.json.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Directory for business-result.v1 outputs."),
+    ],
+    model: Annotated[
+        str,
+        typer.Option("--model", help="Installed Ollama model to use."),
+    ],
+    language: Annotated[
+        BusinessResultLanguage,
+        typer.Option("--language", help="Business enrichment output language."),
+    ] = BusinessResultLanguage.PL,
+    ollama_url: Annotated[
+        str,
+        typer.Option("--ollama-url", help="Ollama provider URL."),
+    ] = "http://localhost:11434",
+    timeout_seconds: Annotated[
+        int,
+        typer.Option("--timeout-seconds", help="Provider request timeout in seconds."),
+    ] = HTTP_TIMEOUT_SECONDS,
+    connect_timeout_seconds: Annotated[
+        int,
+        typer.Option(
+            "--connect-timeout-seconds",
+            help="Provider connection/probe timeout in seconds.",
+        ),
+    ] = HTTP_CONNECT_TIMEOUT_SECONDS,
+    allow_remote_provider: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote-provider",
+            help="Allow non-loopback Ollama provider URLs.",
+        ),
+    ] = False,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Disable business enrichment cache reads and writes."),
+    ] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Bypass cache read and replace the validated cache entry."),
+    ] = False,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="Business enrichment cache directory."),
+    ] = None,
+) -> None:
+    """Build validated model-authored business enrichment from context.json."""
+    if not model.strip():
+        typer.echo("BUSINESS_ENRICHMENT_INPUT_INVALID: --model must not be blank.", err=True)
+        raise typer.Exit(code=2)
+    try:
+        provider = BUSINESS_ENRICHMENT_PROVIDER_FACTORY(
+            ollama_url,
+            allow_remote_provider=allow_remote_provider,
+            connect_timeout_seconds=connect_timeout_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+        build = enrich_business_context(
+            BusinessEnrichmentOptions(
+                context_path=context,
+                output_dir=output,
+                model=model.strip(),
+                language=language,
+                timeout_seconds=timeout_seconds,
+                cache_dir=None if no_cache else (cache_dir or default_cache_dir()),
+                no_cache=no_cache,
+                refresh=refresh,
+            ),
+            provider,
+        )
+        written_paths = write_business_result_outputs(output, build.result)
+    except BusinessEnrichmentError as exc:
+        typer.echo(f"{exc.code.value}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+    except OllamaProviderError as exc:
+        typer.echo(f"{exc.code.value}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        "Built validated business enrichment:\n"
+        f"- schema: {build.result.schema_version}\n"
+        f"- status: {build.result.status.value}\n"
+        f"- language: {build.result.language.value}\n"
+        f"- context id: {build.result.context_id}\n"
+        f"- context sha256: {build.context_sha256}\n"
+        f"- claims: {len(build.result.claims)}\n"
+        f"- unknowns: {len(build.result.unknowns)}\n"
+        f"- limitations: {len(build.result.limitations)}\n"
+        f"- cache: {'hit' if build.cache_hit else 'miss'}\n"
+        f"- warnings: {', '.join(build.warnings) if build.warnings else 'none'}\n"
         f"- output files: {', '.join(path.name for path in written_paths)}"
     )
 

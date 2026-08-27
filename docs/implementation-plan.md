@@ -756,5 +756,49 @@ Not implemented in M8b:
 
 ## Next Milestone Gate
 
-M4b, detailed JDBC/M5, native BPM process parsing, M8c Ollama/business-document generation, or any
-later milestone requires explicit approval before implementation.
+M8c structured Ollama business enrichment was explicitly approved and implemented.
+
+## M8c Structured Ollama Business Enrichment
+
+Implemented in this milestone:
+
+- `wm-doc ollama-test` checks local Ollama reachability, model presence, structured JSON support,
+  and the small internal `business-draft.v1` contract without writing files.
+- `wm-doc enrich-business` consumes one `business-context.v1` `context.json`, calls a local Ollama
+  provider by default for a transient draft, validates draft evidence and disclosure, normalizes it
+  into application-owned `business-result.v1`, and writes `result.json` plus `index.md` under the
+  requested output directory.
+- `business-result.v1` records app-normalized model claims, unknowns, limitations, conflicts, safe
+  provider/model provenance, validation counts, source context hash, language, deterministic
+  app-computed IDs, and the internal draft schema version used for validation.
+- The model does not generate final IDs, final status, provider provenance, validation metadata,
+  cache metadata, or confidence enums. Draft `claims` become `CONFIRMED`; draft `inferences`
+  become `INFERRED`; draft unknowns/limitations are merged with deterministic source
+  unknowns/limitations.
+- `CONFIRMED` and `INFERRED` claims must cite valid context evidence IDs. Unknown evidence IDs,
+  incompatible evidence types, unsafe generated text, non-JSON responses, Markdown-wrapped JSON,
+  provider errors, and output failures reject the whole response.
+- Ollama access is loopback HTTP by default. Non-loopback provider URLs require
+  `--allow-remote-provider`; credentials, query strings, fragments, redirects, proxies, raw
+  diagnostics, provider URLs, raw prompts, raw responses, and chain-of-thought are not persisted.
+- The enrichment cache stores only validated normalized `business-result.v1` JSON. Cache keys
+  include raw context hash, provider kind, model, model digest when available, prompt version,
+  internal draft schema version, final result schema, language, and generation parameters.
+- The business-result publisher owns only `result.json` and `index.md`, preserves unrelated output
+  files, and publishes both files as a rollback-capable pair.
+- Tests cover fake-provider draft enrichment, evidence rejection, disclosure rejection, cache
+  hit/miss determinism, local provider URL policy, draft metadata rejection, deterministic source
+  limitation preservation, and `ollama-test` command behavior.
+
+Not implemented in M8c:
+
+- RAG, cloud provider defaults, arbitrary external documents, prompt editing UI, model fine-tuning,
+  schema-correction retries, generated claims without evidence, snapshot comparison, impact
+  analysis, new process catalog metadata, or changes to `analysis.v8`, `scope.v1`, or
+  `business-context.v1`.
+
+## Next Milestone Gate
+
+M4b, detailed JDBC/M5, native BPM process parsing, cloud/RAG business generation, snapshot
+comparison, impact analysis, or any later milestone requires explicit approval before
+implementation.

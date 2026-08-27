@@ -2,14 +2,18 @@
 
 This project builds an offline static-analysis tool for webMethods Integration Server packages.
 
-Current implementation milestone is M8b: deterministic business context packs on top of the
-accepted M8a focused-publication baseline. M8a performs the complete M7 technical analysis first,
+Current implementation milestone is M8c: structured local Ollama business enrichment on top of the
+accepted M8b business-context baseline. M8a performs the complete M7 technical analysis first,
 keeps `analysis.json` as the full `analysis.v8` snapshot, and then optionally limits generated
 Markdown and focused graph publication through one selector. Focused publication reduces generated
 documentation and graph scope; it does not reduce the initial parsing or analysis cost. M8b consumes
 focused `analysis.json` and `scope.json` artifacts through `wm-doc build-business-context` and
-writes bounded `business-context.v1` JSON plus a deterministic preview Markdown file. M8b does not
-call Ollama, generate business prose, add prompts, select models, or cache model responses. M4a
+writes bounded `business-context.v1` JSON plus a deterministic preview Markdown file. M8c consumes
+that context through `wm-doc enrich-business`, calls local Ollama `/api/chat` with a small internal
+`business-draft.v1` structured-output contract, validates draft text and evidence IDs, then builds
+the final application-owned `business-result.v1` plus deterministic Markdown. The model never owns
+final IDs, status, provenance, validation metadata, or confidence enums. M8c does not change package analysis,
+`analysis.v8`, `scope.v1`, or `business-context.v1`. M4a
 associates Java Services with generated source under
 `code/source`, checks each matched method against `java.frag` with normalized Java tokens, extracts
 imports, referenced types, observed pipeline READ/WRITE/REMOVE accesses, and narrowly supported
@@ -46,12 +50,13 @@ mode `scope.json` uses `scope.v1`; `analysis.json` remains the complete snapshot
 use focused graph names such as `graphs/scope.dot` and do not write global
 `graphs/dependencies.dot` or `graphs/documents.dot`.
 
-Do not add M4b, detailed JDBC/M5, native BPM process parsing, M8c Ollama/business generation, or
+Do not add M4b, detailed JDBC/M5, native BPM process parsing, cloud/RAG business generation, or
 later work without later explicit
 milestone approval. In particular, do not add broad Java external-effect classification, adapter
-parsers, trigger parsers, runtime simulation, Ollama integration, LLM prompts, model selection,
-snapshot diffing, Java execution, Java compilation, Java class loading, Mermaid, JavaScript graph
-viewers, static-site frameworks, or ZIP publishing.
+parsers, trigger parsers, runtime simulation, non-Ollama providers, cloud provider defaults, RAG,
+arbitrary external documents, prompt editing UI, model fine-tuning, snapshot diffing, Java
+execution, Java compilation, Java class loading, Mermaid, JavaScript graph viewers, static-site
+frameworks, or ZIP publishing.
 
 Important constraints:
 
@@ -69,5 +74,7 @@ Important constraints:
 - Keep cleanup and Graphviz failure diagnostics bounded, relative/path-scrubbed, and redacted for
   key names such as `password`, `passwd`, `token`, `access_token`, `api-key`, and bearer values.
 - Do not expose secret values from package files.
+- M8c must never persist raw prompts, raw model responses, provider URLs, auth material,
+  chain-of-thought, or invalid model output. Cache only validated normalized `business-result.v1`.
 - Do not serialize complete Java bodies, decoded `java.frag` bodies, raw token streams, arbitrary
   Java string literals, absolute local paths, or wrapper-only source coordinates.

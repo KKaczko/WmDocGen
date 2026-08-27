@@ -65,6 +65,14 @@ M8b fixture note:
   retain source hashes and evidence IDs but do not claim business ownership, external-system names,
   runtime order, or business outcomes.
 
+M8c fixture note:
+
+- Structured business enrichment tests use generated M8b context packs and deterministic fake
+  provider responses. They do not modify `samples/`, install or require Ollama, or add approved
+  business metadata to fixture packages.
+- Real Ollama use remains an optional local audit. Model-authored claims are validated against
+  `business-context.v1` evidence IDs and rendered separately from canonical fixture analysis.
+
 ## PGP
 
 `samples/PGP` is a public compatibility and discovery corpus used as-is from the local repository
