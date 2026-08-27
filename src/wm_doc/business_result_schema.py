@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from wm_doc.business_context_schema import BusinessContextKind, BusinessContextStatus
 
-BUSINESS_DRAFT_SCHEMA_VERSION = "business-draft.v1"
+BUSINESS_DRAFT_SCHEMA_VERSION = "business-draft.v2"
 
 
 class BusinessResultLanguage(StrEnum):
@@ -28,7 +28,7 @@ class BusinessClaimSection(StrEnum):
 
 
 class BusinessClaimConfidence(StrEnum):
-    CONFIRMED = "CONFIRMED"
+    SUPPORTED = "SUPPORTED"
     INFERRED = "INFERRED"
     UNKNOWN = "UNKNOWN"
 
@@ -66,6 +66,7 @@ class BusinessEnrichmentWarningCode(StrEnum):
     CACHE_INVALID = "BUSINESS_ENRICHMENT_CACHE_INVALID"
     CACHE_WRITE_FAILED = "BUSINESS_ENRICHMENT_CACHE_WRITE_FAILED"
     MODEL_DIGEST_UNAVAILABLE = "BUSINESS_ENRICHMENT_MODEL_DIGEST_UNAVAILABLE"
+    CLAIMS_DROPPED_UNGROUNDED = "BUSINESS_ENRICHMENT_CLAIMS_DROPPED_UNGROUNDED"
 
 
 class BusinessResultClaim(BaseModel):
@@ -83,18 +84,38 @@ class BusinessResultClaim(BaseModel):
 
 
 class BusinessDraftItem(BaseModel):
+    """An unknown or limitation, which need not cite evidence."""
+
     model_config = ConfigDict(extra="forbid")
 
     text: str
-    section: str = "general"
+    # An enum, not a bare string: structured decoding then forces a real choice. As a
+    # plain string with default "general", the model was never told the other sections
+    # existed and filed everything under the catch-all.
+    section: BusinessClaimSection = BusinessClaimSection.GENERAL
     evidence_ids: list[str] = Field(default_factory=list)
+
+
+class BusinessDraftClaim(BaseModel):
+    """A claim or inference, which must cite the evidence supporting it.
+
+    `evidence_ids` is required with at least one entry so structured decoding enforces
+    citation. As an optional field it was simply omitted once the prompt asked for
+    business meaning, and every claim was then rejected as uncited.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    section: BusinessClaimSection = BusinessClaimSection.GENERAL
+    evidence_ids: list[str] = Field(min_length=1)
 
 
 class BusinessDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    claims: list[BusinessDraftItem]
-    inferences: list[BusinessDraftItem] = Field(default_factory=list)
+    claims: list[BusinessDraftClaim]
+    inferences: list[BusinessDraftClaim] = Field(default_factory=list)
     unknowns: list[BusinessDraftItem] = Field(default_factory=list)
     limitations: list[BusinessDraftItem] = Field(default_factory=list)
 

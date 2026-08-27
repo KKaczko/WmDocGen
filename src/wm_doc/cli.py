@@ -55,7 +55,10 @@ from wm_doc.render.dot import (
     write_scoped_process_dot,
 )
 from wm_doc.render.graph_markdown import write_graph_index
-from wm_doc.render.index_markdown import write_documentation_index
+from wm_doc.render.index_markdown import (
+    write_analysis_limitations,
+    write_documentation_index,
+)
 from wm_doc.render.json import render_inventory_json
 from wm_doc.render.markdown import render_inventory_markdown
 from wm_doc.render.process_markdown import (
@@ -86,7 +89,14 @@ app = typer.Typer(
 )
 
 GRAPHVIZ_RUNNER: GraphvizRunner = run_subprocess
-MANAGED_ROOT_FILES = ("analysis.json", "index.md", "entrypoints.md", "scope.json", "scope.md")
+MANAGED_ROOT_FILES = (
+    "analysis.json",
+    "index.md",
+    "entrypoints.md",
+    "scope.json",
+    "scope.md",
+    "LIMITATIONS.md",
+)
 MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
 
 
@@ -285,7 +295,7 @@ def enrich_business_command(
     language: Annotated[
         BusinessResultLanguage,
         typer.Option("--language", help="Business enrichment output language."),
-    ] = BusinessResultLanguage.PL,
+    ] = BusinessResultLanguage.EN,
     ollama_url: Annotated[
         str,
         typer.Option("--ollama-url", help="Ollama provider URL."),
@@ -437,6 +447,13 @@ def analyze(
             help="Focused publication dependency depth: 0, 1, N, or all.",
         ),
     ] = "all",
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            help="Include full mapping, FLOW outline, call and source-evidence detail.",
+        ),
+    ] = False,
 ) -> None:
     """Analyze supported services and emit deterministic technical outputs."""
     try:
@@ -478,6 +495,7 @@ def analyze(
             scope_output.scope,
             render_graphs_mode,
             graphviz_dot,
+            verbose=verbose,
         )
         if graph_failures:
             _echo_graph_failures(graph_failures)
@@ -503,6 +521,7 @@ def analyze(
         services,
         analysis.process_service_memberships,
         analysis.processes,
+        verbose=verbose,
     )
     document_paths = write_document_markdown(
         output,
@@ -530,6 +549,7 @@ def analyze(
     )
     graph_failures = graph_render_failures(graph_results)
     graph_index_path = write_graph_index(output, graph_assets)
+    write_analysis_limitations(output)
     index_path = write_documentation_index(output, analysis, graph_assets)
     process_paths = write_process_markdown(output, analysis, graph_assets)
     flow_count = sum(1 for service in services if service.service_type.value == "FLOW")
@@ -598,6 +618,8 @@ def _write_scoped_outputs(
     scope: ScopeResult,
     render_graphs_mode: GraphRenderMode,
     graphviz_dot: Path | None,
+    *,
+    verbose: bool = False,
 ) -> list[GraphRenderResult]:
     output.mkdir(parents=True, exist_ok=True)
     try:
@@ -607,10 +629,13 @@ def _write_scoped_outputs(
         raise typer.Exit(code=1) from exc
 
     (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
+    write_analysis_limitations(output)
     write_scope_json(output, scope)
     write_scope_markdown(output, scope)
     services = services_for_scope(analysis, scope)
-    service_paths = write_scoped_service_markdown(output, analysis, scope, services)
+    service_paths = write_scoped_service_markdown(
+        output, analysis, scope, services, verbose=verbose
+    )
     document_paths = write_scoped_document_markdown(output, analysis, scope)
     entrypoint_path = write_scoped_entrypoints_markdown(output, scope, analysis)
     dot_paths = [write_scope_dot(output, scope)]

@@ -64,7 +64,7 @@ Current analysis observations:
   `business-context.v1` service, package, and process contexts without modifying `samples/` or
   adding LLM/Ollama behavior.
 - M8c business enrichment tests consume generated M8b context packs with a deterministic fake
-  provider. They validate `business-result.v1`, evidence checking, cache behavior, disclosure
+  provider. They validate `business-result.v2`, evidence checking, cache behavior, disclosure
   rejection, and deterministic Markdown without requiring local Ollama or modifying `samples/`.
 
 M2b observed active mapping tag counts:

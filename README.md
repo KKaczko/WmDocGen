@@ -32,6 +32,7 @@ provenance.
 ```powershell
 wm-doc scan samples --output out\inventory
 wm-doc analyze samples --output out\m7-analysis
+wm-doc analyze samples --verbose --output out\m7-analysis-full
 wm-doc analyze samples --processes-file processes.yml --output out\m7-process-analysis
 wm-doc analyze samples --processes-file processes.yml --render-graphs both --output out\m7-published
 wm-doc analyze samples --target-service pgp.services.common:readConfig --dependency-depth 1 --output out\m8a-service-scope
@@ -39,7 +40,7 @@ wm-doc analyze samples --target-namespace pgp.services.common --dependency-depth
 wm-doc analyze samples --processes-file processes.yml --target-process pgp-key-lookup --dependency-depth all --output out\m8a-process-scope
 wm-doc build-business-context --input out\m8a-service-scope --output out\m8a-service-scope\business-context
 wm-doc ollama-test --ollama-url http://localhost:11434 --model llama3.1
-wm-doc enrich-business --context out\m8a-service-scope\business-context\context.json --output out\m8a-service-scope\business --model llama3.1 --language pl
+wm-doc enrich-business --context out\m8a-service-scope\business-context\context.json --output out\m8a-service-scope\business --model llama3.1
 ```
 
 The scan command writes:
@@ -51,6 +52,7 @@ The analyze command writes:
 
 - `analysis.json`
 - `index.md`
+- `LIMITATIONS.md`
 - `entrypoints.md`
 - `services/*.md`
 - `documents/*.md`
@@ -59,6 +61,22 @@ The analyze command writes:
 - `graphs/index.md`
 - `processes/*.md` and `graphs/processes/*.dot` when process definitions are declared
 - optional `*.svg` and/or `*.png` graph images when `--render-graphs` requests them
+
+Each service page opens with a deterministic `## Summary` paragraph synthesised from the
+signature, the ordered call occurrences and the platform effect catalog in `wm_doc.builtins`,
+for example:
+
+> Reads a file, closes a stream, parses XML text and converts XML into a document.
+> Takes `userId` and returns `key`. Calls 1 local service(s) and 4 platform service(s).
+> No explicit error handling.
+
+Summaries restate analysed facts. No model is involved and no business meaning is inferred.
+Platform (`pub.*` / `wm.*`) dependencies are labelled from a fixed catalog of documented
+services; an uncatalogued platform service is reported as uncatalogued rather than guessed.
+
+`wm-doc analyze --verbose` adds the full mapping tables, FLOW outline, call occurrences,
+Java analysis and source-evidence detail. The default page carries the summary, identity,
+signatures, dependencies, callers and processes.
 
 Focused publication mode is selected by exactly one of `--target-service <namespace:service>`,
 `--target-namespace <namespace-prefix>`, `--target-package <package-name>`, or
@@ -102,17 +120,32 @@ only accepts loopback HTTP Ollama URLs such as `http://localhost:11434`; non-loo
 require explicit `--allow-remote-provider`.
 
 The `enrich-business` command requires a `business-context.v1` `context.json`, an explicit model,
-and an output directory. It writes only `result.json` using schema `business-result.v1` and
+and an output directory. It writes only `result.json` using schema `business-result.v2` and
 `index.md` under that output directory. The generated result records model provenance without
 provider URLs, raw prompts, raw responses, or chain-of-thought. The model does not generate final
 IDs, status, provenance, validation metadata, or confidence enums. Instead it returns draft buckets:
-`claims` become `CONFIRMED`, `inferences` become `INFERRED`, and draft `unknowns`/`limitations`
-are merged with deterministic source unknowns and limitations. `CONFIRMED` and `INFERRED` claims
-must cite valid context evidence IDs. Valid partial results exit successfully and remain labeled
+`claims` become `SUPPORTED`, `inferences` become `INFERRED`, and draft `unknowns`/`limitations`
+are merged with deterministic source unknowns and limitations. Claims must cite valid context
+evidence IDs.
+
+A claim that fails validation is discarded and reported rather than rejecting the whole
+generation: cited-but-unknown evidence, evidence a section does not accept, no citation at all, or
+an unsupported identifier each produce a `*_CLAIM_DISCARDED` limitation naming what was dropped and
+why, while the remaining claims publish. Malformed drafts and unsafe text still fail the run.
+
+Citing a valid evidence ID is not sufficient. Every claim is also checked against the identifiers
+its cited evidence actually contains: a claim naming a service, document, field or proper noun that
+no cited evidence supports is discarded, and the discarded names are reported as an
+`UNGROUNDED_CLAIM_DISCARDED` limitation. Sentence-initial prose and acronyms are not treated as
+identifiers, so ordinary wording is unaffected. There is no `CONFIRMED` confidence: the application
+never asserts that it verified a model statement beyond this grounding check.
+
+Output language defaults to `en`. Generating another language leads small local models to translate
+identifiers that must be copied verbatim, which the grounding check then discards. Valid partial results exit successfully and remain labeled
 `PARTIAL`; invalid drafts, unknown evidence IDs, unsafe text, provider errors, and output failures
 exit non-zero without publishing a partial bundle.
 
-M8c caches only validated normalized `business-result.v1` JSON. The cache key includes the raw
+M8c caches only validated normalized `business-result.v2` JSON. The cache key includes the raw
 context hash, provider kind, model name and digest when available, prompt version, internal draft
 schema version, final result schema, language, and generation parameters. Use `--refresh` to bypass
 a cache read or `--no-cache` to disable cache reads and writes. The persisted result stays

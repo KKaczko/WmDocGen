@@ -17,12 +17,17 @@ from wm_doc.business_result_schema import (
     business_draft_json_schema,
 )
 
-HTTP_TIMEOUT_SECONDS = 120
+HTTP_TIMEOUT_SECONDS = 600
 HTTP_CONNECT_TIMEOUT_SECONDS = 5
 MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024
-PROMPT_VERSION = "business-enrichment-draft-prompt.v3"
+PROMPT_VERSION = "business-enrichment-draft-prompt.v8"
 TEMPERATURE = 0
 NUM_PREDICT = 2048
+# Ollama otherwise allocates the model's full advertised context (131072 tokens for
+# qwen3.5), which inflated a 3.4 GB model to 8.9 GB resident and caused paging on
+# memory-constrained machines. A business-context prompt runs ~4k tokens, so this
+# leaves generous headroom for the prompt plus NUM_PREDICT output tokens.
+NUM_CTX = 8192
 
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 SECRET_KEY_VALUE_RE = re.compile(
@@ -152,7 +157,11 @@ class OllamaBusinessEnrichmentProvider:
             "format": request.schema,
             "stream": False,
             "think": False,
-            "options": {"temperature": TEMPERATURE, "num_predict": NUM_PREDICT},
+            "options": {
+                "temperature": TEMPERATURE,
+                "num_predict": NUM_PREDICT,
+                "num_ctx": NUM_CTX,
+            },
         }
         attempts = 0
         last_error: OllamaProviderError | None = None
@@ -206,7 +215,7 @@ class OllamaBusinessEnrichmentProvider:
             "format": schema,
             "stream": False,
             "think": False,
-            "options": {"temperature": TEMPERATURE, "num_predict": 256},
+            "options": {"temperature": TEMPERATURE, "num_predict": 256, "num_ctx": NUM_CTX},
         }
         response = self._post_json(
             "/api/chat",

@@ -766,22 +766,23 @@ Implemented in this milestone:
   and the small internal `business-draft.v1` contract without writing files.
 - `wm-doc enrich-business` consumes one `business-context.v1` `context.json`, calls a local Ollama
   provider by default for a transient draft, validates draft evidence and disclosure, normalizes it
-  into application-owned `business-result.v1`, and writes `result.json` plus `index.md` under the
+  into application-owned `business-result.v2`, and writes `result.json` plus `index.md` under the
   requested output directory.
-- `business-result.v1` records app-normalized model claims, unknowns, limitations, conflicts, safe
+- `business-result.v2` records app-normalized model claims, unknowns, limitations, conflicts, safe
   provider/model provenance, validation counts, source context hash, language, deterministic
   app-computed IDs, and the internal draft schema version used for validation.
 - The model does not generate final IDs, final status, provider provenance, validation metadata,
-  cache metadata, or confidence enums. Draft `claims` become `CONFIRMED`; draft `inferences`
+  cache metadata, or confidence enums. Draft `claims` become `SUPPORTED`; draft `inferences`
   become `INFERRED`; draft unknowns/limitations are merged with deterministic source
   unknowns/limitations.
-- `CONFIRMED` and `INFERRED` claims must cite valid context evidence IDs. Unknown evidence IDs,
+- `SUPPORTED` and `INFERRED` claims must cite valid context evidence IDs, and each identifier a
+  claim names must appear in the cited evidence; ungrounded claims are discarded. Unknown evidence IDs,
   incompatible evidence types, unsafe generated text, non-JSON responses, Markdown-wrapped JSON,
   provider errors, and output failures reject the whole response.
 - Ollama access is loopback HTTP by default. Non-loopback provider URLs require
   `--allow-remote-provider`; credentials, query strings, fragments, redirects, proxies, raw
   diagnostics, provider URLs, raw prompts, raw responses, and chain-of-thought are not persisted.
-- The enrichment cache stores only validated normalized `business-result.v1` JSON. Cache keys
+- The enrichment cache stores only validated normalized `business-result.v2` JSON. Cache keys
   include raw context hash, provider kind, model, model digest when available, prompt version,
   internal draft schema version, final result schema, language, and generation parameters.
 - The business-result publisher owns only `result.json` and `index.md`, preserves unrelated output

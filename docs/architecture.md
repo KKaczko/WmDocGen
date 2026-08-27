@@ -48,7 +48,7 @@ Subsystems:
 - Business enrichment in `wm_doc.business_enrichment` consumes one `business-context.v1` file,
   builds a deterministic prompt envelope, calls a `BusinessEnrichmentProvider` with the small
   internal `business-draft.v1` structured-output schema, validates draft text and evidence IDs, and
-  then constructs the final application-owned `business-result.v1` bundle.
+  then constructs the final application-owned `business-result.v2` bundle.
 - `wm_doc.ollama_provider` is the only M8c provider implementation. It talks to Ollama `/api/chat`
   with `stream:false`, JSON schema `format`, `temperature=0`, safe URL validation, disabled
   redirects/proxies, bounded diagnostics, and loopback-only defaults.
@@ -317,13 +317,13 @@ M8c keeps all existing schemas unchanged and adds a separate structured enrichme
 - Ollama is asked to produce only a transient draft with `claims`, `inferences`, `unknowns`, and
   `limitations`. The model does not generate final IDs, status, provenance, validation metadata,
   cache metadata, or confidence enum values.
-- `business/result.json` uses schema `business-result.v1`; `business/index.md` is deterministic
-  app-rendered Markdown from the validated result. Draft `claims` become `CONFIRMED` claims,
+- `business/result.json` uses schema `business-result.v2`; `business/index.md` is deterministic
+  app-rendered Markdown from the validated result. Draft `claims` become `SUPPORTED` claims,
   `inferences` become `INFERRED` claims, and deterministic source unknowns/limitations are copied
   even when the model omits them.
 - Unknown evidence IDs, incompatible evidence types, unsafe generated text, non-JSON drafts,
   Markdown-wrapped JSON, provider failures, or output failures reject the whole response.
-- M8c caches only validated normalized `business-result.v1` files. Cache keys include the prompt
+- M8c caches only validated normalized `business-result.v2` files. Cache keys include the prompt
   version, internal draft schema version, final result schema version, generation parameters, and
   context/provider/model identity. It never caches raw prompts, raw model responses, tracebacks,
   invalid output, provider URLs, or authentication material.

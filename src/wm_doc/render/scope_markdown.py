@@ -96,6 +96,8 @@ def write_scoped_service_markdown(
     analysis: AnalysisResult,
     scope: ScopeResult,
     services: list[FlowService],
+    *,
+    verbose: bool = False,
 ) -> list[Path]:
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
@@ -113,6 +115,7 @@ def write_scoped_service_markdown(
             incoming.get(service.identity.full_name, []),
             process_memberships_by_service.get(service.identity.full_name, []),
             process_definitions,
+            verbose=verbose,
         )
         markdown = _insert_scope_section(
             markdown,

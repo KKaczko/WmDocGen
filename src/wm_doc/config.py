@@ -3,7 +3,6 @@ from __future__ import annotations
 from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
@@ -33,7 +32,10 @@ class ExtractionMode(StrEnum):
 
 
 class LiteralExtractionConfig(BaseModel):
-    mode: ExtractionMode = ExtractionMode.REDACT
+    # Literal values are the filenames, keys and flags a reader needs to understand a
+    # service. The secret guard runs before this mode is consulted, so secret-like
+    # literals stay redacted regardless of the setting.
+    mode: ExtractionMode = ExtractionMode.INCLUDE
 
 
 class FreeTextExtractionConfig(BaseModel):
@@ -145,7 +147,3 @@ def _match_rule_set(
 
 def _glob_match(pattern: str, value: str) -> bool:
     return fnmatchcase(value.casefold(), pattern.casefold())
-
-
-def config_to_dict(config: AppConfig) -> dict[str, Any]:
-    return config.model_dump(mode="json", exclude_none=True)

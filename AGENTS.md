@@ -2,7 +2,48 @@
 
 This project builds an offline static-analysis tool for webMethods Integration Server packages.
 
-Current implementation milestone is M8c: structured local Ollama business enrichment on top of the
+Current implementation milestone is M9: readable deterministic documentation plus grounded
+business enrichment, on top of the accepted M8c baseline.
+
+M9 adds `src/wm_doc/builtins.py`, a fixed name-to-label catalog of documented webMethods platform
+(`pub.*` / `wm.*`) services, and `src/wm_doc/render/service_summary.py`, which synthesises a
+deterministic `## Summary` paragraph from the signature, the ordered call occurrences and that
+catalog. Summaries restate analysed facts only; no model is involved and no business meaning is
+inferred. The catalog is a static lookup, not an adapter, trigger or resource parser, and an
+uncatalogued platform service is reported as uncatalogued rather than guessed.
+
+M9 makes service Markdown summary-first. Mapping, FLOW-outline, call-occurrence, Java and
+source-evidence detail moves behind `wm-doc analyze --verbose`. `## Mapping Deletes` is removed
+because its rows only record pipeline cleanup. The repeated per-file limitations paragraph becomes
+a single generated `LIMITATIONS.md`. The headings `## Input Signature`, `## Called By` and
+`## Processes` are load-bearing for scoped publication string surgery and must exist in both modes.
+
+M9 changes two defaults. Literal disclosure defaults to `include`, because blanket redaction hid
+the filenames and flags a reader needs; the secret guard is evaluated before the disclosure mode and
+still blocks secret-like literals in every mode. Business enrichment output language defaults to
+`en`, because generating Polish caused a local model to translate identifiers it must copy verbatim.
+
+M9 makes claim rejection non-fatal. A claim that cites a non-existent evidence id, cites evidence
+its section does not accept, cites nothing, or names an identifier no cited evidence supports is
+discarded and reported as an `UNGROUNDED_CLAIM_DISCARDED`, `UNCITED_CLAIM_DISCARDED`,
+`UNKNOWN_EVIDENCE_CLAIM_DISCARDED`, or `MISSECTIONED_CLAIM_DISCARDED` limitation; the remaining
+claims still publish. This replaces the earlier contract in which any of those rejected the whole
+response, which repeatedly discarded multi-minute generations over one bad item. Malformed drafts
+and unsafe generated text still reject the entire response and exit non-zero.
+
+M9 widens claim sectioning. Narrative sections (`purpose`, `actors`, `triggers`, `outcomes`,
+`systems`, `exceptions`) may now cite `DEPENDENCY` and document evidence. Withholding those left
+`general` as the only section able to cite substantial evidence, which pushed models into it and
+produced restatements of the dependency graph rather than business statements.
+
+M9 grounds model claims. `business-result.v2` replaces the `CONFIRMED` confidence with `SUPPORTED`,
+and a claim naming an identifier that no cited evidence supports is discarded and reported as an
+`UNGROUNDED_CLAIM_DISCARDED` limitation. Confidence is no longer taken from the draft array a
+statement appeared in alone. `business-context` no longer carries `DELETE` mapping operations.
+`analysis.json` remains `analysis.v8` and `scope.json` remains `scope.v1`; summaries and platform
+effect labels are render-time derivations and are never written into the canonical snapshot.
+
+The previous milestone is M8c: structured local Ollama business enrichment on top of the
 accepted M8b business-context baseline. M8a performs the complete M7 technical analysis first,
 keeps `analysis.json` as the full `analysis.v8` snapshot, and then optionally limits generated
 Markdown and focused graph publication through one selector. Focused publication reduces generated

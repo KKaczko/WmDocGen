@@ -79,7 +79,7 @@ def test_no_selector_remains_global_m7_output_shape(tmp_path) -> None:
     assert (output / "graphs" / "dependencies.dot").exists()
     assert (output / "graphs" / "documents.dot").exists()
     assert not (output / "graphs" / "scope.dot").exists()
-    assert sum(1 for path in output.rglob("*") if path.is_file()) == 48
+    assert sum(1 for path in output.rglob("*") if path.is_file()) == 49
 
 
 def test_scope_selector_validation_rejects_conflicts_and_repetition(tmp_path) -> None:

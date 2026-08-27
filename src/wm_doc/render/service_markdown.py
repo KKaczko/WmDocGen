@@ -7,6 +7,7 @@ from pathlib import Path
 
 from jinja2 import Template
 
+from wm_doc.builtins import builtin_effect, is_builtin_name
 from wm_doc.ir import (
     CallOccurrence,
     DependencyKind,
@@ -31,6 +32,7 @@ from wm_doc.ir import (
     UniqueDependency,
 )
 from wm_doc.render.document_markdown import document_markdown_filename
+from wm_doc.render.service_summary import derived_layer, render_service_summary
 
 IMPORTANCE_ORDER = {"IMPORTANT": 0, "NORMAL": 1, "LOW": 2}
 MAX_OUTLINE_DEPTH = 5
@@ -39,6 +41,10 @@ MAX_MAPPING_ROWS = 50
 
 _TEMPLATE = Template(
     """# {{ service.identity.full_name }}
+
+## Summary
+
+{{ summary_text }}
 
 ## Identity
 
@@ -52,7 +58,7 @@ _TEMPLATE = Template(
 | Analysis support | `{{ service.analysis_status }}` |
 | Description status | `{{ service.description_status }}` |
 | Importance | `{{ service.classification.importance }}` |
-| Layer | `{{ service.classification.layer }}` |
+| Layer | `{{ layer_text }}` |
 | Identity basis | `{{ service.identity.basis }}` |
 
 ## Analysis Support
@@ -85,6 +91,7 @@ No description was declared in supported metadata.
 
 {{ render_fields(service.signature.outputs) }}
 
+{% if input_document_dependencies or output_document_dependencies or verbose %}
 ## Document Type Usage
 
 ### Input Document Types
@@ -94,7 +101,9 @@ No description was declared in supported metadata.
 ### Output Document Types
 
 {{ render_document_usage(output_document_dependencies) }}
+{% endif %}
 
+{% if verbose %}
 ### Resolved Document References
 
 {{ render_document_references(resolved_document_references) }}
@@ -103,6 +112,8 @@ No description was declared in supported metadata.
 
 {{ render_document_references(unresolved_document_references) }}
 
+{% endif %}
+{% if verbose %}
 {% if service.java_analysis %}
 ## Java Analysis
 
@@ -139,6 +150,8 @@ No description was declared in supported metadata.
 {{ render_java_types(service.java_analysis.referenced_types) }}
 {% endif %}
 
+{% endif %}
+{% if verbose %}
 ## FLOW Overview
 
 | Metric | Count |
@@ -173,22 +186,21 @@ No description was declared in supported metadata.
 
 {{ render_mapping_operations(set_operations, "SET") }}
 
-## Mapping Deletes
-
-{{ render_mapping_operations(delete_operations, "DELETE") }}
-
 ## Transformer Bindings
 
 {{ render_transformer_bindings(service.transformer_bindings) }}
 
+{% endif %}
 ## Normal Service Dependencies
 
 {{ render_dependencies(normal_dependencies) }}
 
+{% if verbose %}
 ## Transformer Dependencies
 
 {{ render_dependencies(transformer_dependencies) }}
 
+{% endif %}
 ## Called By
 
 {{ render_incoming_dependencies(incoming_dependencies) }}
@@ -197,6 +209,7 @@ No description was declared in supported metadata.
 
 {{ render_process_memberships(process_memberships, process_definitions) }}
 
+{% if verbose %}
 ## Call Occurrences
 
 {{ render_calls(service_calls, "INVOKE") }}
@@ -209,6 +222,7 @@ No description was declared in supported metadata.
 
 {{ flow_outline }}
 
+{% endif %}
 ## Unsupported Or Unknown Constructs
 
 {% if service.findings %}
@@ -219,28 +233,24 @@ No description was declared in supported metadata.
 No service-level findings.
 {% endif %}
 
+{% if verbose %}
 ## Source Evidence
 
 - Service metadata: `{{ service.source.path }}`
 - Signature metadata: `{{ service.signature.source.path }}`
 {% for call in service.call_occurrences[:20] %}
 - {{ call.call_type }} `{{ call.id }}` target `{{ call.target }}`:
-  `{{ call.source.path }}`{% if call.source.line %}:{{ call.source.line }}{% endif %}
+  `{{ call.source.path }}`{{ ":" ~ call.source.line if call.source.line else "" }}
 {% endfor %}
 {% if service.call_occurrences|length > 20 %}
 - Source evidence list truncated after 20 call occurrences in Markdown.
   Full evidence is in `analysis.json`.
 {% endif %}
 
+{% endif %}
 ## Analysis Limitations
 
-M6 extracts observed FLOW, mapping, document-reference, Java Service source evidence, opaque service
-common metadata, and user-declared process catalog evidence with literal and free-text disclosure
-policies. It does not resolve mapped paths against document schemas, evaluate branch conditions,
-simulate loops or runtime state, infer dynamic Java invocation targets, promote nested Java
-executable bodies without a callback/control-flow model, execute Java code, compile Java source,
-connect to Integration Server, or parse JDBC, trigger, scheduler, messaging, BPM process-model, or
-database-resource semantics.
+See [analysis limitations](../LIMITATIONS.md).
 """,
     trim_blocks=True,
     lstrip_blocks=True,
@@ -252,6 +262,8 @@ def render_service_markdown(
     incoming_dependencies: list[UniqueDependency] | None = None,
     process_memberships: list[ProcessServiceMembership] | None = None,
     process_definitions: dict[str, ProcessDefinition] | None = None,
+    *,
+    verbose: bool = False,
 ) -> str:
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
@@ -287,6 +299,9 @@ def render_service_markdown(
     description_text = _text_display(service.description)
     return _TEMPLATE.render(
         service=service,
+        verbose=verbose,
+        summary_text=render_service_summary(service),
+        layer_text=derived_layer(service) or service.classification.layer,
         description_text=description_text,
         source_service_type=service.source_service_type or "<not declared>",
         normal_dependencies=normal_dependencies,
@@ -394,17 +409,24 @@ def _render_dependencies(dependencies: list[UniqueDependency]) -> str:
     if not dependencies:
         return "No static targets were extracted for this dependency kind.\n"
     lines = [
-        "| Occurrences | Resolved | Target Type | Target Support | Target |",
-        "| ---: | --- | --- | --- | --- |",
+        "| Occurrences | Target | Kind | Effect |",
+        "| ---: | --- | --- | --- |",
     ]
     for dependency in dependencies:
+        target = dependency.target_service
+        effect = builtin_effect(target)
+        if effect is not None:
+            kind, description = "PLATFORM", effect.label
+        elif is_builtin_name(target):
+            # A platform service outside the catalog: say so rather than guess.
+            kind, description = "PLATFORM", "uncatalogued platform service"
+        elif dependency.resolved:
+            kind = str(dependency.target_type or "UNKNOWN")
+            description = f"in this snapshot ({dependency.target_analysis_status or 'UNKNOWN'})"
+        else:
+            kind, description = "EXTERNAL", "not in this snapshot"
         lines.append(
-            "| "
-            f"{dependency.occurrence_count} | "
-            f"{dependency.resolved} | "
-            f"`{dependency.target_type or 'UNKNOWN'}` | "
-            f"`{dependency.target_analysis_status or 'UNKNOWN'}` | "
-            f"`{dependency.target_service}` |"
+            f"| {dependency.occurrence_count} | `{target}` | `{kind}` | {description} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -822,6 +844,8 @@ def write_service_markdown(
     services: list[FlowService],
     process_memberships: list[ProcessServiceMembership] | None = None,
     processes: list[ProcessDefinition] | None = None,
+    *,
+    verbose: bool = False,
 ) -> list[Path]:
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
@@ -845,6 +869,7 @@ def write_service_markdown(
                 incoming_dependencies.get(service.identity.full_name, []),
                 memberships_by_service.get(service.identity.full_name, []),
                 process_definitions,
+                verbose=verbose,
             ),
             encoding="utf-8",
         )
