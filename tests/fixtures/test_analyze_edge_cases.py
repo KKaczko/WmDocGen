@@ -24,6 +24,7 @@ from wm_doc.config import (
     LiteralExtractionConfig,
 )
 from wm_doc.discovery import scan_path
+from wm_doc.ir import AnalysisFinding, LiteralDisclosure, SourceReference
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.document_markdown import document_markdown_filename, render_document_markdown
 from wm_doc.render.dot import (
@@ -817,7 +818,7 @@ def test_generated_markdown_links_are_valid_without_process_catalog(tmp_path) ->
 
     _run_cli_analyze(_samples(), output)
 
-    assert _generated_file_count(output) == 48
+    assert _generated_file_count(output) == 49
     assert (output / "graphs" / "index.md").exists()
     assert not (output / "processes").exists()
     _assert_generated_markdown_links_valid(output)
@@ -836,7 +837,7 @@ def test_generated_markdown_links_are_valid_for_fixture_catalog_modes(tmp_path) 
             free_text_mode=mode,
         )
 
-        assert _generated_file_count(output) == 53
+        assert _generated_file_count(output) == 54
         assert (output / "graphs" / "index.md").exists()
         assert len(list((output / "processes").glob("*.md"))) == 3
         assert len(list((output / "graphs" / "processes").glob("*.dot"))) == 2
@@ -867,10 +868,10 @@ def test_graph_render_modes_publish_expected_files_and_links(tmp_path, monkeypat
     _write_fixture_process_catalog(processes_file)
 
     cases = [
-        ("none", 53, 0, 0),
-        ("svg", 57, 4, 0),
-        ("png", 57, 0, 4),
-        ("both", 61, 4, 4),
+        ("none", 54, 0, 0),
+        ("svg", 58, 4, 0),
+        ("png", 58, 0, 4),
+        ("both", 62, 4, 4),
     ]
     for mode, expected_count, expected_svg, expected_png in cases:
         output = tmp_path / f"fixture-{mode}"
@@ -915,10 +916,10 @@ def test_graph_render_modes_without_process_catalog(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
 
     cases = [
-        ("none", 48, 0, 0),
-        ("svg", 50, 2, 0),
-        ("png", 50, 0, 2),
-        ("both", 52, 2, 2),
+        ("none", 49, 0, 0),
+        ("svg", 51, 2, 0),
+        ("png", 51, 0, 2),
+        ("both", 53, 2, 2),
     ]
     for mode, expected_count, expected_svg, expected_png in cases:
         output = tmp_path / f"no-process-{mode}"
@@ -1553,13 +1554,21 @@ def test_literal_redact_include_omit_and_secret_guard(tmp_path) -> None:
     _write_node(service_dir / "node.ndf")
     _write_flow_with_mapset(service_dir / "flow.xml", "/target;1;0", "visible-value")
 
-    default_service = analyze_path(tmp_path, DEFAULT_CONFIG).packages[0].services[0]
-    literal = default_service.mapping_operations[0].literal
+    redact_config = _config(literal_mode=ExtractionMode.REDACT)
+    redact_service = analyze_path(tmp_path, redact_config).packages[0].services[0]
+    literal = redact_service.mapping_operations[0].literal
     assert literal is not None
     assert literal.disclosure == "REDACTED"
     assert literal.length == len("visible-value")
     assert literal.value is None
-    assert "visible-value" not in render_analysis_json(analyze_path(tmp_path, DEFAULT_CONFIG))
+    assert "visible-value" not in render_analysis_json(analyze_path(tmp_path, redact_config))
+
+    # M9 default: non-secret literals are disclosed so readers can see filenames and flags.
+    default_service = analyze_path(tmp_path, DEFAULT_CONFIG).packages[0].services[0]
+    default_literal = default_service.mapping_operations[0].literal
+    assert default_literal is not None
+    assert default_literal.disclosure == "INCLUDED"
+    assert default_literal.value == "visible-value"
 
     include_config = _config(literal_mode=ExtractionMode.INCLUDE)
     include_service = analyze_path(tmp_path, include_config).packages[0].services[0]
@@ -1724,7 +1733,7 @@ def test_policy_snapshot_records_secret_guard(tmp_path) -> None:
     payload = render_analysis_json(analysis)
 
     assert analysis.schema_version == "analysis.v8"
-    assert analysis.extraction_policy.literal_mode == "redact"
+    assert analysis.extraction_policy.literal_mode == "include"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
     assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v1"
@@ -2528,6 +2537,45 @@ def _assert_marker_absent_from_raw_attribute_collections(service, marker: str) -
 
     for attributes in collections:
         assert marker not in "".join(attributes.values())
+
+
+def test_secret_literals_stay_redacted_when_literals_are_included() -> None:
+    """The default literal mode is `include`; the secret guard must still win.
+
+    Guards the M9 default flip: blanket literal redaction hid the filenames readers
+    need, but secret-like literals must never be disclosed regardless of mode.
+    """
+    from lxml import etree
+
+    from wm_doc.analysis import _parse_mapset_literal
+
+    mapset = etree.fromstring(
+        b'<MAPSET FIELD="/privateKeyPassword" NAME="privateKeyPassword">'
+        b'<DATA ENCODING="XMLValues"><Values version="2.0">'
+        b'<value name="xml">hunter2-actual-secret</value>'
+        b'<record name="type"><value name="field_type">string</value>'
+        b'<value name="field_name">privateKeyPassword</value></record>'
+        b'</Values></DATA></MAPSET>'
+    )
+    source = SourceReference(path="pkg/flow.xml", artifact_type="data", line=1)
+
+    for mode in (ExtractionMode.INCLUDE, ExtractionMode.REDACT):
+        findings: list[AnalysisFinding] = []
+        literal = _parse_mapset_literal(
+            mapset,
+            source,
+            _config(literal_mode=mode),
+            Path("pkg/flow.xml"),
+            Path("."),
+            findings,
+        )
+        assert literal.disclosure == LiteralDisclosure.BLOCKED_SECRET, mode
+        assert literal.marker == "<redacted:secret-literal>"
+        assert literal.value is None
+        assert "hunter2-actual-secret" not in literal.model_dump_json()
+        assert "SECRET_LITERAL_REDACTED" in {finding.code for finding in findings}
+
+    assert DEFAULT_CONFIG.extraction.literals.mode == ExtractionMode.INCLUDE
 
 
 def _config(

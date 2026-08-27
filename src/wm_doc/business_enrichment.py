@@ -22,6 +22,7 @@ from wm_doc.business_result_schema import (
     BusinessClaimConfidence,
     BusinessClaimSection,
     BusinessDraft,
+    BusinessDraftClaim,
     BusinessDraftItem,
     BusinessEnrichmentErrorCode,
     BusinessEnrichmentWarningCode,
@@ -34,6 +35,7 @@ from wm_doc.business_result_schema import (
     business_draft_json_schema,
 )
 from wm_doc.ollama_provider import (
+    NUM_CTX,
     NUM_PREDICT,
     PROMPT_VERSION,
     TEMPERATURE,
@@ -42,7 +44,10 @@ from wm_doc.ollama_provider import (
     ProviderGenerationRequest,
 )
 
-RESULT_SCHEMA_VERSION = "business-result.v1"
+# (drop code, claim text, human-readable details)
+DroppedClaim = tuple[str, str, list[str]]
+
+RESULT_SCHEMA_VERSION = "business-result.v2"
 MAX_GENERATED_TEXT_CHARS = 2000
 MAX_PROVIDER_CONTENT_BYTES = 750 * 1024
 MAX_PROVIDER_REQUEST_BYTES = 2 * 1024 * 1024
@@ -154,6 +159,7 @@ def enrich_business_context(
             "temperature": TEMPERATURE,
             "stream": False,
             "num_predict": NUM_PREDICT,
+            "num_ctx": NUM_CTX,
             "attempt_count": generation.attempts,
             "cache_hit": False,
             "request_bytes": request_bytes,
@@ -188,17 +194,49 @@ def default_cache_dir() -> Path:
     return Path.home() / ".cache" / "wm-doc" / "business-enrichment"
 
 
+def _summary_line(summary: dict[str, Any]) -> str:
+    return ", ".join(
+        f"{key}={value}"
+        for key, value in sorted(summary.items())
+        if value not in (None, "", [], {})
+    )
+
+
+def build_context_digest(context: BusinessContext) -> str:
+    """Render the context as a compact brief instead of a raw JSON dump.
+
+    The previous prompt inlined the whole context as JSON alongside a bare
+    comma-separated list of opaque evidence ids, so the model could not tell what any
+    id referred to and had to cite blind. Pairing each id with its own summary is both
+    far smaller and far more useful.
+    """
+    lines: list[str] = [f"SUBJECT: {_summary_line(context.subject)}"]
+
+    if context.approved_metadata:
+        lines.append("")
+        lines.append("APPROVED BUSINESS METADATA (human-authored, authoritative):")
+        lines.append(json.dumps(context.approved_metadata, ensure_ascii=False, sort_keys=True))
+
+    grouped: dict[str, list[str]] = {}
+    for evidence in sorted(context.evidence, key=lambda item: item.evidence_id):
+        line = f"[{evidence.evidence_id}] {_summary_line(evidence.summary)}"
+        grouped.setdefault(evidence.evidence_type.value, []).append(line)
+    for evidence_type in sorted(grouped):
+        lines.append("")
+        lines.append(f"{evidence_type}:")
+        lines.extend(grouped[evidence_type])
+
+    # Context limitations are deliberately not shown. The application merges them into
+    # the result itself, and listing their codes led a model to cite a limitation code
+    # such as LIMITATION_DEPTH_LIMIT as though it were an evidence id.
+    return "\n".join(lines)
+
+
 def build_business_prompt(
     context: BusinessContext,
     language: BusinessResultLanguage,
 ) -> list[dict[str, str]]:
-    allowed_evidence_ids = ", ".join(sorted(item.evidence_id for item in context.evidence))
-    compact_context = json.dumps(
-        context.model_dump(mode="json", exclude_none=True),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    context_digest = build_context_digest(context)
     schema_text = json.dumps(
         business_draft_json_schema(),
         ensure_ascii=False,
@@ -215,7 +253,10 @@ def build_business_prompt(
                 "raw code, raw XML, secrets, local paths, or unsupported facts. "
                 "Put direct evidence-supported statements in claims, cautious interpretations "
                 "in inferences, unavailable information in unknowns, and caveats in limitations. "
-                "Only cite evidence_ids that appear in the supplied evidence catalog."
+                "Only cite evidence_ids that appear in the supplied evidence catalog. "
+                "Never translate, localize, abbreviate, or invent identifiers: service, "
+                "document, namespace, and field names must be copied verbatim from the "
+                "context. Any name you use must already appear in the evidence you cite."
             ),
         },
         {
@@ -227,11 +268,20 @@ def build_business_prompt(
                 "validation metadata, confidence values, or claim IDs. "
                 "Do not invent actors, owners, systems, outcomes, regulations, or SLAs. "
                 "Do not infer runtime ordering from dependency depth. "
-                "Use only IDs from this allowed evidence_id list when citing evidence. "
-                "Do not cite canonical_reference_id values such as service_, mapop_, dep_, "
-                f"or docfield_ identifiers. Allowed evidence_ids: {allowed_evidence_ids}\n"
-                f"Draft schema: {schema_text}\n"
-                f"Business context JSON: {compact_context}"
+                "Choose the most specific section for each statement and use `general` "
+                "only when nothing else fits: `purpose` is what the service is for, "
+                "`stages` the steps it performs, `objects` the business data it handles, "
+                "`systems` what it depends on, `exceptions` failure and edge-case "
+                "handling, `actors` who uses it, `triggers` what starts it, `outcomes` "
+                "what it produces. State what the service means for the business, not "
+                "which service invokes which. "
+                "Every evidence id you may cite appears in the context below inside square "
+                "brackets and begins with `evidence_`. Cite only those, and only the ones "
+                "whose content actually supports the statement. Never cite a section "
+                "heading, a limitation code, or a canonical_reference_id such as service_, "
+                "mapop_, dep_ or docfield_.\n"
+                f"Draft schema: {schema_text}\n\n"
+                f"BUSINESS CONTEXT\n{context_digest}"
             ),
         },
     ]
@@ -250,22 +300,22 @@ def normalize_business_result(
     except ValidationError as exc:
         raise BusinessEnrichmentError(
             BusinessEnrichmentErrorCode.DRAFT_INVALID,
-            "Provider draft did not match business-draft.v1.",
+            f"Provider draft did not match {BUSINESS_DRAFT_SCHEMA_VERSION}.",
         ) from exc
     evidence_index = {item.evidence_id: item for item in context.evidence}
     service_ids = {str(item.get("service")) for item in context.services if item.get("service")}
-    document_ids = {
-        str(item.get("document")) for item in context.documents if item.get("document")
-    }
+    document_ids = {str(item.get("document")) for item in context.documents if item.get("document")}
+    dropped_claims: list[DroppedClaim] = []
     claims = _dedupe_claims(
         [
             *_normalize_draft_claims(
                 draft.claims,
                 context,
-                BusinessClaimConfidence.CONFIRMED,
+                BusinessClaimConfidence.SUPPORTED,
                 evidence_index,
                 service_ids,
                 document_ids,
+                dropped_claims,
             ),
             *_normalize_draft_claims(
                 draft.inferences,
@@ -274,6 +324,7 @@ def normalize_business_result(
                 evidence_index,
                 service_ids,
                 document_ids,
+                dropped_claims,
             ),
         ]
     )
@@ -287,6 +338,7 @@ def normalize_business_result(
         [
             *_normalize_draft_limitations(draft.limitations, evidence_index),
             *_context_limitations(context, evidence_index),
+            *_dropped_claim_limitations(dropped_claims),
         ]
     )
     conflicts: list[BusinessResultConflict] = []
@@ -316,14 +368,12 @@ def normalize_business_result(
             "limitation_count": len(limitations),
             "conflict_count": len(conflicts),
             "context_status": context.status.value,
-            "model_facing_contract": "business-draft.v1",
+            "model_facing_contract": BUSINESS_DRAFT_SCHEMA_VERSION,
             "final_result_contract": RESULT_SCHEMA_VERSION,
         },
         omissions=_json_safe(context.omissions),
     )
-    normalized = normalized.model_copy(
-        update={"result_id": _result_id(normalized)}
-    )
+    normalized = normalized.model_copy(update={"result_id": _result_id(normalized)})
     try:
         normalized = BusinessResult.model_validate(normalized.model_dump(mode="json"))
     except ValidationError as exc:
@@ -460,30 +510,143 @@ def _generate(
         raise BusinessEnrichmentError(exc.code, exc.safe_message) from exc
 
 
+IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+ALIAS_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]{2,})\s*\(\s*([A-Za-z_][A-Za-z0-9_.:]{2,})\s*\)")
+COPULA_RE = re.compile(
+    r"\b([A-Z][A-Za-z0-9_]{2,})\s+(?:is|are|was|were|owns|has|have|belongs)\b"
+    r"|\b([A-Z][A-Za-z0-9_]{2,})'s\b"
+)
+
+
+def _evidence_tokens(
+    evidence_ids: list[str],
+    evidence_index: dict[str, Any],
+) -> set[str]:
+    """Collect casefolded identifier tokens from the summaries of the cited evidence."""
+    tokens: set[str] = set()
+    for evidence_id in evidence_ids:
+        evidence = evidence_index.get(evidence_id)
+        if evidence is None:
+            continue
+        payload = json.dumps(evidence.summary, ensure_ascii=False, sort_keys=True, default=str)
+        tokens.update(match.casefold() for match in IDENTIFIER_RE.findall(payload))
+    return tokens
+
+
+def _is_identifier_shaped(token: str) -> bool:
+    """Report whether *token* looks like a technical identifier rather than prose.
+
+    All-uppercase tokens are treated as acronyms (XML, JSON, PGP), not identifiers.
+    """
+    if token.isupper():
+        return False
+    if "_" in token or any(char.isdigit() for char in token):
+        return True
+    return any(char.isupper() for char in token[1:])
+
+
+def _sentence_initial_offsets(text: str) -> set[int]:
+    """Return offsets of tokens that open a sentence, where a capital carries no meaning."""
+    offsets: set[int] = set()
+    for match in IDENTIFIER_RE.finditer(text):
+        preceding = text[: match.start()].rstrip()
+        if not preceding or preceding[-1] in ".!?":
+            offsets.add(match.start())
+    return offsets
+
+
+def _context_tokens(context: BusinessContext) -> set[str]:
+    """Every identifier token appearing anywhere in the context, not just one record."""
+    payload = json.dumps(
+        [item.summary for item in context.evidence] + [context.subject],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return {match.casefold() for match in IDENTIFIER_RE.findall(payload)}
+
+
+def _ungrounded_identifiers(
+    text: str,
+    allowed_tokens: set[str],
+    context_tokens: set[str] | None = None,
+) -> list[str]:
+    """Return names in *text* that the cited evidence does not support.
+
+    A token is treated as a name when it is identifier-shaped, when it is capitalised
+    mid-sentence, or when it is asserted as an alias for a grounded identifier such as
+    ``Invented (KeyConfig)``. Sentence-initial prose and acronyms are never flagged.
+    """
+    sentence_initial = _sentence_initial_offsets(text)
+    ungrounded: dict[str, None] = {}
+    for match in IDENTIFIER_RE.finditer(text):
+        token = match.group()
+        if token.isupper() or token.casefold() in allowed_tokens:
+            continue
+        capitalised_mid_sentence = token[0].isupper() and match.start() not in sentence_initial
+        if _is_identifier_shaped(token) or capitalised_mid_sentence:
+            ungrounded.setdefault(token, None)
+    for match in ALIAS_RE.finditer(text):
+        name = match.group(1)
+        if name.isupper() or name.casefold() in allowed_tokens:
+            continue
+        ungrounded.setdefault(name, None)
+    # A capital opening a sentence is usually just grammar, so those are exempt above.
+    # That exemption hid an invented name in first position ("Korzeniewska is the owner
+    # of ..."), so a name asserted to *be* or *own* something is checked as well, against
+    # every token in the context rather than only the cited record.
+    for match in COPULA_RE.finditer(text):
+        name = match.group(1) or match.group(2)
+        if name.isupper() or name.casefold() in allowed_tokens:
+            continue
+        if context_tokens is not None and name.casefold() in context_tokens:
+            continue
+        ungrounded.setdefault(name, None)
+    return list(ungrounded)
+
+
 def _normalize_draft_claims(
-    items: list[BusinessDraftItem],
+    items: list[BusinessDraftClaim],
     context: BusinessContext,
     confidence: BusinessClaimConfidence,
     evidence_index: dict[str, Any],
     service_ids: set[str],
     document_ids: set[str],
+    dropped: list[DroppedClaim] | None = None,
 ) -> list[BusinessResultClaim]:
     if len(items) > MAX_CLAIMS:
         raise BusinessEnrichmentError(
             BusinessEnrichmentErrorCode.DRAFT_INVALID,
             "Provider draft exceeded the supported claim count.",
         )
+    context_tokens = _context_tokens(context)
     normalized: list[BusinessResultClaim] = []
     for item in items:
         text = _sanitize_generated_text(item.text)
-        evidence_ids = _normalize_draft_evidence_ids(item.evidence_ids, evidence_index)
+        # A single bad claim must not discard the whole generation. Malformed drafts and
+        # unsafe text still reject the response; a claim that merely cites badly is
+        # dropped and reported, so the rest of a long run still publishes.
+        try:
+            evidence_ids = _normalize_draft_evidence_ids(item.evidence_ids, evidence_index)
+        except BusinessEnrichmentError as exc:
+            _record_dropped(dropped, "UNKNOWN_EVIDENCE_CLAIM_DISCARDED", text, [exc.safe_message])
+            continue
         if not evidence_ids:
-            raise BusinessEnrichmentError(
-                BusinessEnrichmentErrorCode.EVIDENCE_INVALID,
-                f"{confidence.value} draft claims must cite at least one evidence id.",
-            )
+            _record_dropped(dropped, "UNCITED_CLAIM_DISCARDED", text, [])
+            continue
         section = _normalize_section(item.section)
-        _validate_claim_evidence_compatibility(section, evidence_ids, evidence_index)
+        incompatible = _incompatible_evidence(section, evidence_ids, evidence_index)
+        if incompatible:
+            _record_dropped(dropped, "MISSECTIONED_CLAIM_DISCARDED", text, incompatible)
+            continue
+        ungrounded = _ungrounded_identifiers(
+            text,
+            _evidence_tokens(evidence_ids, evidence_index),
+            context_tokens,
+        )
+        if ungrounded:
+            _record_dropped(dropped, "UNGROUNDED_CLAIM_DISCARDED", text, ungrounded)
+            continue
         related_service_ids, related_document_ids = _related_ids_from_evidence(
             evidence_ids,
             evidence_index,
@@ -592,6 +755,53 @@ def _context_unknowns(
     return output
 
 
+_DROP_REASONS: dict[str, str] = {
+    "UNGROUNDED_CLAIM_DISCARDED": (
+        "referenced identifiers absent from their cited evidence"
+    ),
+    "UNCITED_CLAIM_DISCARDED": "cited no evidence",
+    "UNKNOWN_EVIDENCE_CLAIM_DISCARDED": "cited evidence that does not exist in this context",
+    "MISSECTIONED_CLAIM_DISCARDED": "cited evidence their section does not accept",
+}
+
+
+def _record_dropped(
+    dropped: list[DroppedClaim] | None,
+    code: str,
+    text: str,
+    details: list[str],
+) -> None:
+    if dropped is not None:
+        dropped.append((code, text, details))
+
+
+def _dropped_claim_limitations(dropped: list[DroppedClaim]) -> list[BusinessResultLimitation]:
+    """Report claims discarded during normalization, grouped by why they were dropped."""
+    grouped: dict[str, list[DroppedClaim]] = {}
+    for entry in dropped:
+        grouped.setdefault(entry[0], []).append(entry)
+
+    limitations: list[BusinessResultLimitation] = []
+    for code in sorted(grouped):
+        entries = grouped[code]
+        details = sorted({detail for _, _, items in entries for detail in items}, key=str.casefold)
+        summary = f"{len(entries)} model claim(s) were discarded because they " + _DROP_REASONS.get(
+            code, "did not satisfy the claim contract"
+        )
+        if details:
+            summary += f": {', '.join(details)}"
+        summary = _sanitize_generated_text(summary + ".")
+        limitations.append(
+            BusinessResultLimitation(
+                limitation_id=_stable_id("limitation", code, summary),
+                code=code,
+                summary=summary,
+                evidence_ids=[],
+            )
+        )
+    return limitations
+
+
 def _context_limitations(
     context: BusinessContext,
     evidence_index: dict[str, Any],
@@ -643,11 +853,14 @@ def _context_limitations(
 
 
 def _dedupe_claims(claims: list[BusinessResultClaim]) -> list[BusinessResultClaim]:
-    deduped: dict[tuple[str, str, str, tuple[str, ...]], BusinessResultClaim] = {}
+    # Confidence is deliberately not part of the key. A model that emits the same
+    # sentence in both the claims and inferences buckets previously produced two
+    # published claims with identical text and contradictory confidence; SUPPORTED is
+    # normalized first, so setdefault keeps the stronger one.
+    deduped: dict[tuple[str, str, tuple[str, ...]], BusinessResultClaim] = {}
     for claim in claims:
         key = (
             claim.section.value,
-            claim.confidence.value,
             claim.text,
             tuple(claim.evidence_ids),
         )
@@ -825,10 +1038,13 @@ def _business_sections(
     return {
         "draft_schema_version": BUSINESS_DRAFT_SCHEMA_VERSION,
         "confidence_bucket_policy": {
-            "claims": BusinessClaimConfidence.CONFIRMED.value,
+            "claims": BusinessClaimConfidence.SUPPORTED.value,
             "inferences": BusinessClaimConfidence.INFERRED.value,
             "unknowns": BusinessClaimConfidence.UNKNOWN.value,
         },
+        "claim_grounding_policy": (
+            "Claims naming identifiers absent from their cited evidence are discarded."
+        ),
         "claim_counts_by_section": dict(sorted(counts.items())),
         "unknown_count": len(unknowns),
         "limitation_count": len(limitations),
@@ -868,21 +1084,18 @@ def _validate_evidence_ids(evidence_ids: list[str], evidence_index: dict[str, An
         )
 
 
-def _validate_claim_evidence_compatibility(
+def _incompatible_evidence(
     section: BusinessClaimSection,
     evidence_ids: list[str],
     evidence_index: dict[str, Any],
-) -> None:
-    if not evidence_ids:
-        return
+) -> list[str]:
+    """Return cited evidence whose type the claim's section does not accept."""
     allowed = _allowed_evidence_types(section)
-    for evidence_id in evidence_ids:
-        evidence_type = evidence_index[evidence_id].evidence_type
-        if evidence_type not in allowed:
-            raise BusinessEnrichmentError(
-                BusinessEnrichmentErrorCode.EVIDENCE_INVALID,
-                f"Evidence id `{evidence_id}` is not compatible with section `{section.value}`.",
-            )
+    return [
+        f"{evidence_index[evidence_id].evidence_type.value} in `{section.value}`"
+        for evidence_id in evidence_ids
+        if evidence_index[evidence_id].evidence_type not in allowed
+    ]
 
 
 def _allowed_evidence_types(section: BusinessClaimSection) -> set[BusinessEvidenceType]:
@@ -895,39 +1108,39 @@ def _allowed_evidence_types(section: BusinessClaimSection) -> set[BusinessEviden
         BusinessEvidenceType.SCOPE_MEMBERSHIP,
         BusinessEvidenceType.DETERMINISTIC_SUMMARY,
     }
+    # What a service is *for* is evidenced by what it calls and what it carries, so the
+    # narrative sections may cite dependency and document evidence. Withholding those
+    # left `general` as the only section that could cite anything substantial, which
+    # pushed models into it and produced restatements of the dependency graph.
+    documents = {
+        BusinessEvidenceType.DOCUMENT,
+        BusinessEvidenceType.DOCUMENT_FIELD,
+        BusinessEvidenceType.DOCUMENT_REFERENCE,
+    }
     if section in {
         BusinessClaimSection.PURPOSE,
         BusinessClaimSection.ACTORS,
         BusinessClaimSection.TRIGGERS,
         BusinessClaimSection.OUTCOMES,
     }:
-        return common
+        return common | documents | {BusinessEvidenceType.DEPENDENCY}
     if section == BusinessClaimSection.STAGES:
         return common | {
             BusinessEvidenceType.DEPENDENCY,
             BusinessEvidenceType.TRANSFORMER_BINDING,
         }
     if section == BusinessClaimSection.OBJECTS:
-        return common | {
-            BusinessEvidenceType.DOCUMENT,
-            BusinessEvidenceType.DOCUMENT_FIELD,
-            BusinessEvidenceType.DOCUMENT_REFERENCE,
+        return common | documents
+    return (
+        common
+        | documents
+        | {
+            BusinessEvidenceType.DEPENDENCY,
+            BusinessEvidenceType.SCOPE_BOUNDARY,
+            BusinessEvidenceType.FINDING,
+            BusinessEvidenceType.TRANSFORMER_BINDING,
         }
-    return common | {
-        BusinessEvidenceType.DEPENDENCY,
-        BusinessEvidenceType.SCOPE_BOUNDARY,
-        BusinessEvidenceType.FINDING,
-        BusinessEvidenceType.TRANSFORMER_BINDING,
-    }
-
-
-def _validate_related_ids(ids: list[str], allowed: set[str], label: str) -> None:
-    for item_id in ids:
-        if item_id not in allowed:
-            raise BusinessEnrichmentError(
-                BusinessEnrichmentErrorCode.EVIDENCE_INVALID,
-                f"Provider response referenced unknown related {label} `{item_id}`.",
-            )
+    )
 
 
 def _sanitize_generated_text(value: str | None) -> str:

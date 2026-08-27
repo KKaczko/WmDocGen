@@ -34,6 +34,7 @@ from wm_doc.ir import (
     JavaInvocationTargetStatus,
     LiteralDisclosure,
     MappingEndpoint,
+    MappingOperationType,
     ProcessDefinition,
     ProcessDependencyEdge,
     ProcessDocumentRelationship,
@@ -304,6 +305,7 @@ class _BusinessContextBuilder:
                 "limits": _limits_payload(),
                 "llm": "not_used",
                 "generated_business_claims": False,
+                "excluded_mapping_operation_types": ["DELETE"],
             },
         )
 
@@ -715,6 +717,7 @@ class _BusinessContextBuilder:
             operation
             for operation in self.analysis.mapping_operations
             if operation.service in included_services
+            and operation.operation_type is not MappingOperationType.DELETE
         ]
         operations = sorted(
             operations,

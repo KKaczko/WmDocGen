@@ -69,6 +69,33 @@ def render_documentation_index(
     return "\n".join(lines)
 
 
+ANALYSIS_LIMITATIONS = """# Analysis Limitations
+
+These limits apply to every generated page in this output. They were previously repeated
+in full at the bottom of each service page.
+
+wm-doc extracts observed FLOW, mapping, document-reference, Java Service source evidence,
+opaque service common metadata, and user-declared process catalog evidence with literal and
+free-text disclosure policies. It does not resolve mapped paths against document schemas,
+evaluate branch conditions, simulate loops or runtime state, infer dynamic Java invocation
+targets, promote nested Java executable bodies without a callback/control-flow model, execute
+Java code, compile Java source, connect to Integration Server, or parse JDBC, trigger,
+scheduler, messaging, BPM process-model, or database-resource semantics.
+
+Service summaries are synthesised deterministically from the signature, the ordered call
+occurrences and the platform effect catalog. They restate analysed facts and never infer
+business meaning. Platform (`pub.*` / `wm.*`) services are labelled from a fixed catalog of
+documented services; an uncatalogued platform service is left unlabelled rather than guessed.
+"""
+
+
+def write_analysis_limitations(output_dir: Path) -> Path:
+    """Write the shared limitations page that service and document pages link to."""
+    path = output_dir / "LIMITATIONS.md"
+    path.write_text(ANALYSIS_LIMITATIONS, encoding="utf-8")
+    return path
+
+
 def write_documentation_index(
     output_dir: Path, analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
 ) -> Path:
