@@ -29,6 +29,7 @@ wm-doc analyze samples --render-graphs both --output out\m7-analysis-graphs
 wm-doc analyze samples --target-service pgp.services.common:readConfig --dependency-depth 1 --output out\m8a-read-config-scope
 wm-doc analyze samples --target-namespace pgp.services.common --dependency-depth 0 --output out\m8a-common-namespace-scope
 wm-doc build-business-context --input out\m8a-read-config-scope --output out\m8a-read-config-scope\business-context
+wm-doc enrich-business --context out\m8a-read-config-scope\business-context\context.json --output out\m8a-read-config-scope\business --model llama3.1 --language pl
 ```
 
 Current analysis observations:
@@ -62,6 +63,9 @@ Current analysis observations:
 - M8b business context tests consume generated focused M8a fixture outputs. They validate
   `business-context.v1` service, package, and process contexts without modifying `samples/` or
   adding LLM/Ollama behavior.
+- M8c business enrichment tests consume generated M8b context packs with a deterministic fake
+  provider. They validate `business-result.v1`, evidence checking, cache behavior, disclosure
+  rejection, and deterministic Markdown without requiring local Ollama or modifying `samples/`.
 
 M2b observed active mapping tag counts:
 
