@@ -23,6 +23,11 @@ from wm_doc.business_context_schema import (
     BusinessEvidenceType,
     BusinessServiceGroup,
 )
+from wm_doc.external_systems import (
+    EMPTY_CATALOG,
+    ExternalSystemCatalog,
+    system_label,
+)
 from wm_doc.ir import (
     AnalysisFinding,
     AnalysisResult,
@@ -60,7 +65,7 @@ from wm_doc.scope_analysis import (
     ScopeServiceMembership,
 )
 
-CONTEXT_SCHEMA_VERSION = "business-context.v1"
+CONTEXT_SCHEMA_VERSION = "business-context.v2"
 CONTEXT_PROFILE = "standard"
 MAX_CONTEXT_JSON_BYTES = 750 * 1024
 MAX_SERVICES = 80
@@ -182,12 +187,15 @@ def load_business_context_inputs(analysis_path: Path, scope_path: Path) -> Busin
     return BusinessContextInputs(analysis, scope, analysis_bytes, scope_bytes)
 
 
-def build_business_context(inputs: BusinessContextInputs) -> BusinessContextBuild:
+def build_business_context(
+    inputs: BusinessContextInputs,
+    external_systems: ExternalSystemCatalog = EMPTY_CATALOG,
+) -> BusinessContextBuild:
     indexes = _build_indexes(inputs.analysis)
     _validate_scope_references(inputs.scope, indexes, inputs.analysis)
     analysis_hash = hashlib.sha256(inputs.analysis_bytes).hexdigest()
     scope_hash = hashlib.sha256(inputs.scope_bytes).hexdigest()
-    builder = _BusinessContextBuilder(inputs.analysis, inputs.scope, indexes)
+    builder = _BusinessContextBuilder(inputs.analysis, inputs.scope, indexes, external_systems)
     context = builder.build(analysis_hash=analysis_hash, scope_hash=scope_hash)
     return BusinessContextBuild(
         context=context,
@@ -211,10 +219,12 @@ class _BusinessContextBuilder:
         analysis: AnalysisResult,
         scope: ScopeResult,
         indexes: _Indexes,
+        external_systems: ExternalSystemCatalog = EMPTY_CATALOG,
     ) -> None:
         self.analysis = analysis
         self.scope = scope
         self.indexes = indexes
+        self.external_systems = external_systems
         self.state = _ContextState()
 
     def build(self, *, analysis_hash: str, scope_hash: str) -> BusinessContext:
@@ -229,6 +239,7 @@ class _BusinessContextBuilder:
         documents = self._documents()
         mappings = self._mappings(included_services)
         boundaries = self._boundaries()
+        external_systems = self._external_systems(boundaries)
         unknowns = self._unknowns(boundaries)
         limitations = self._limitations(boundaries)
         self._apply_scope_findings(limitations)
@@ -295,6 +306,7 @@ class _BusinessContextBuilder:
             dependencies=dependencies,
             mappings=mappings,
             boundaries=boundaries,
+            external_systems=external_systems,
             unknowns=unknowns,
             limitations=limitations,
             evidence=sorted(self.state.evidence, key=lambda item: item.evidence_id),
@@ -369,6 +381,9 @@ class _BusinessContextBuilder:
                 {
                     "field": "description",
                     "description_status": process.description_status.value,
+                    # The text itself must be citable, otherwise a claim grounded in
+                    # human-authored business knowledge has no evidence to point at.
+                    "value": description,
                 },
                 [process.description_source],
             )
@@ -785,6 +800,59 @@ class _BusinessContextBuilder:
                 }
             )
         return records
+
+    def _external_systems(self, boundaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach declared external-system facts to the dependencies that leave the snapshot.
+
+        Only targets the operator has declared are described. An unmatched external
+        target keeps its existing "outside this snapshot" treatment; nothing is guessed.
+        """
+        targets: list[str] = []
+        for boundary in boundaries:
+            target = boundary.get("target")
+            if isinstance(target, str) and target:
+                targets.append(target)
+        for dependency in self.scope.boundaries:
+            targets.append(dependency.target)
+
+        matched: dict[str, list[str]] = {}
+        for target in sorted(set(targets)):
+            system = self.external_systems.match(target)
+            if system is not None:
+                matched.setdefault(system.id, []).append(target)
+
+        records: list[dict[str, Any]] = []
+        for system in self.external_systems.systems:
+            reached = matched.get(system.id)
+            if not reached:
+                continue
+            evidence = self._add_evidence(
+                BusinessEvidenceType.EXTERNAL_SYSTEM,
+                BusinessEvidenceOrigin.APPROVED_HUMAN_METADATA,
+                f"external_system:{system.id}",
+                {
+                    "system": system.name,
+                    "vendor": system.vendor,
+                    "kind": system.kind.value,
+                    "description": system.description,
+                    "reached_by": reached[:MAX_SOURCE_SAMPLES],
+                },
+                [],
+            )
+            records.append(
+                {
+                    "system_id": system.id,
+                    "name": system.name,
+                    "label": system_label(system),
+                    "vendor": system.vendor,
+                    "kind": system.kind.value,
+                    "description": system.description,
+                    "reached_by": reached,
+                    "evidence_ids": _present([evidence]),
+                }
+            )
+        return records
+
 
     def _boundaries(self) -> list[dict[str, Any]]:
         boundary_items: list[ScopeBoundary | ScopeDocumentBoundary] = [

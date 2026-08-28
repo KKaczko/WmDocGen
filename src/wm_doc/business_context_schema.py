@@ -33,6 +33,7 @@ class BusinessEvidenceType(StrEnum):
     SCOPE_BOUNDARY = "SCOPE_BOUNDARY"
     FINDING = "FINDING"
     APPROVED_METADATA = "APPROVED_METADATA"
+    EXTERNAL_SYSTEM = "EXTERNAL_SYSTEM"
     DETERMINISTIC_SUMMARY = "DETERMINISTIC_SUMMARY"
 
 
@@ -82,7 +83,7 @@ class BusinessContextEvidence(BaseModel):
 class BusinessContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "business-context.v1"
+    schema_version: str = "business-context.v2"
     context_id: str
     context_kind: BusinessContextKind
     status: BusinessContextStatus
@@ -98,6 +99,7 @@ class BusinessContext(BaseModel):
     dependencies: list[dict[str, Any]] = Field(default_factory=list)
     mappings: list[dict[str, Any]] = Field(default_factory=list)
     boundaries: list[dict[str, Any]] = Field(default_factory=list)
+    external_systems: list[dict[str, Any]] = Field(default_factory=list)
     unknowns: list[dict[str, Any]] = Field(default_factory=list)
     limitations: list[dict[str, Any]] = Field(default_factory=list)
     evidence: list[BusinessContextEvidence] = Field(default_factory=list)

@@ -21,6 +21,7 @@ from wm_doc.business_enrichment import (
 from wm_doc.business_result_schema import BusinessResultLanguage
 from wm_doc.config import load_config
 from wm_doc.discovery import scan_path
+from wm_doc.external_systems import ExternalSystemsError, load_external_systems
 from wm_doc.graph_publish import (
     GRAPH_RENDER_TIMEOUT_SECONDS,
     GraphRenderFormat,
@@ -152,7 +153,7 @@ def build_business_context_command(
         typer.Option(
             "--output",
             "-o",
-            help="Directory for business-context.v1 outputs.",
+            help="Directory for business-context.v2 outputs.",
         ),
     ],
     input_path: Annotated[
@@ -176,8 +177,16 @@ def build_business_context_command(
             help="Path to scope.json from the same focused publication run.",
         ),
     ] = None,
+    external_systems_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--external-systems",
+            help="Path to a declared external-systems.yml describing systems this "
+            "package calls but does not contain.",
+        ),
+    ] = None,
 ) -> None:
-    """Build a deterministic business-context.v1 pack from M8a focused outputs."""
+    """Build a deterministic business-context.v2 pack from M8a focused outputs."""
     try:
         analysis_input, scope_input = _business_context_input_paths(
             input_path=input_path,
@@ -185,7 +194,12 @@ def build_business_context_command(
             scope_path=scope_path,
         )
         inputs = load_business_context_inputs(analysis_input, scope_input)
-        build = build_business_context(inputs)
+        try:
+            catalog = load_external_systems(external_systems_file)
+        except ExternalSystemsError as exc:
+            typer.echo(f"EXTERNAL_SYSTEMS_INVALID: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        build = build_business_context(inputs, catalog)
         written_paths = write_business_context_outputs(output, build.context)
     except BusinessContextCliError as exc:
         typer.echo(f"{exc.code}: {exc.safe_message}", err=True)
@@ -281,7 +295,7 @@ def enrich_business_command(
             file_okay=True,
             dir_okay=False,
             readable=True,
-            help="Path to business-context.v1 context.json.",
+            help="Path to business-context.v2 context.json.",
         ),
     ],
     output: Annotated[
