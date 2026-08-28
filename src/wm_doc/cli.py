@@ -43,6 +43,11 @@ from wm_doc.ollama_provider import (
     OllamaBusinessEnrichmentProvider,
     OllamaProviderError,
 )
+from wm_doc.openai_compatible_provider import (
+    DEFAULT_API_KEY_ENV,
+    OpenAICompatibleProvider,
+    resolve_api_key,
+)
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.business_context_markdown import write_business_context_outputs
 from wm_doc.render.business_result_markdown import write_business_result_outputs
@@ -107,7 +112,19 @@ def _default_business_enrichment_provider_factory(
     allow_remote_provider: bool,
     connect_timeout_seconds: int,
     timeout_seconds: int,
+    provider_kind: str = "ollama",
+    api_key_env: str | None = None,
 ) -> BusinessEnrichmentProvider:
+    if provider_kind == "openai-compatible":
+        # Shared Ollama servers sit behind a proxy that terminates TLS and checks a
+        # bearer token; the token is read from the environment, never from a flag.
+        return OpenAICompatibleProvider(
+            ollama_url,
+            api_key=resolve_api_key(api_key_env),
+            allow_remote_provider=allow_remote_provider,
+            connect_timeout_seconds=connect_timeout_seconds,
+            timeout_seconds=timeout_seconds,
+        )
     return OllamaBusinessEnrichmentProvider(
         ollama_url,
         allow_remote_provider=allow_remote_provider,
@@ -253,14 +270,32 @@ def ollama_test_command(
             help="Allow non-loopback Ollama provider URLs.",
         ),
     ] = False,
+    provider_kind: Annotated[
+        str,
+        typer.Option(
+            "--provider",
+            help="Provider surface: 'ollama' (native /api/chat) or 'openai-compatible' "
+            "for an Ollama server behind an authenticating proxy.",
+        ),
+    ] = "ollama",
+    api_key_env: Annotated[
+        str,
+        typer.Option(
+            "--api-key-env",
+            help="Environment variable holding the bearer token for "
+            "--provider openai-compatible. The token is never read from a flag.",
+        ),
+    ] = DEFAULT_API_KEY_ENV,
 ) -> None:
-    """Check local Ollama M8c draft-contract availability without writing files."""
+    """Check Ollama M8c draft-contract availability without writing files."""
     try:
         provider = BUSINESS_ENRICHMENT_PROVIDER_FACTORY(
             ollama_url,
             allow_remote_provider=allow_remote_provider,
             connect_timeout_seconds=connect_timeout_seconds,
             timeout_seconds=timeout_seconds,
+            provider_kind=provider_kind.strip(),
+            api_key_env=api_key_env.strip() or None,
         )
         check = provider.check(model.strip(), structured_probe=True)
         if not check.structured_output_ok:
@@ -344,6 +379,22 @@ def enrich_business_command(
         Path | None,
         typer.Option("--cache-dir", help="Business enrichment cache directory."),
     ] = None,
+    provider_kind: Annotated[
+        str,
+        typer.Option(
+            "--provider",
+            help="Provider surface: 'ollama' (native /api/chat) or 'openai-compatible' "
+            "for an Ollama server behind an authenticating proxy.",
+        ),
+    ] = "ollama",
+    api_key_env: Annotated[
+        str,
+        typer.Option(
+            "--api-key-env",
+            help="Environment variable holding the bearer token for "
+            "--provider openai-compatible. The token is never read from a flag.",
+        ),
+    ] = DEFAULT_API_KEY_ENV,
 ) -> None:
     """Build validated model-authored business enrichment from context.json."""
     if not model.strip():
@@ -355,6 +406,8 @@ def enrich_business_command(
             allow_remote_provider=allow_remote_provider,
             connect_timeout_seconds=connect_timeout_seconds,
             timeout_seconds=timeout_seconds,
+            provider_kind=provider_kind.strip(),
+            api_key_env=api_key_env.strip() or None,
         )
         build = enrich_business_context(
             BusinessEnrichmentOptions(

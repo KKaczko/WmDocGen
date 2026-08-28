@@ -23,6 +23,15 @@ the filenames and flags a reader needs; the secret guard is evaluated before the
 still blocks secret-like literals in every mode. Business enrichment output language defaults to
 `en`, because generating Polish caused a local model to translate identifiers it must copy verbatim.
 
+M11 adds `src/wm_doc/openai_compatible_provider.py` and `--provider openai-compatible`, reaching an
+Ollama server through its OpenAI-compatible endpoint. This is still Ollama: it exists because a
+shared server has no authentication of its own and is fronted by a proxy that terminates TLS and
+checks a bearer token at a path such as `https://server/ollama/v1`, which the native `/api/chat`
+client cannot address. The token is read from an environment variable named by `--api-key-env`,
+never from a flag, and is never written to provenance, the cache key, or a diagnostic. Sending a
+token to a remote host over plain HTTP is refused; https or a loopback tunnel is required. URL paths
+are accepted only in this mode. The native loopback `ollama` provider remains the default.
+
 M10 adds `src/wm_doc/external_systems.py` and `build-business-context --external-systems`, a
 declared catalog of systems the package calls but does not contain. Each entry matches unresolved
 dependency targets by namespace glob and is attached as `EXTERNAL_SYSTEM` evidence with
@@ -108,7 +117,7 @@ use focused graph names such as `graphs/scope.dot` and do not write global
 Do not add M4b, detailed JDBC/M5, native BPM process parsing, cloud/RAG business generation, or
 later work without later explicit
 milestone approval. In particular, do not add broad Java external-effect classification, adapter
-parsers, trigger parsers, runtime simulation, non-Ollama providers, cloud provider defaults, RAG,
+parsers, trigger parsers, runtime simulation, non-Ollama model providers, cloud provider defaults, RAG,
 arbitrary external documents, prompt editing UI, model fine-tuning, snapshot diffing, Java
 execution, Java compilation, Java class loading, Mermaid, JavaScript graph viewers, static-site
 frameworks, or ZIP publishing.
