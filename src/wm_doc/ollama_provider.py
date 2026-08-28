@@ -20,7 +20,7 @@ from wm_doc.business_result_schema import (
 HTTP_TIMEOUT_SECONDS = 600
 HTTP_CONNECT_TIMEOUT_SECONDS = 5
 MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024
-PROMPT_VERSION = "business-enrichment-draft-prompt.v8"
+PROMPT_VERSION = "business-enrichment-draft-prompt.v9"
 TEMPERATURE = 0
 NUM_PREDICT = 2048
 # Ollama otherwise allocates the model's full advertised context (131072 tokens for

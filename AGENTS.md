@@ -23,6 +23,20 @@ the filenames and flags a reader needs; the secret guard is evaluated before the
 still blocks secret-like literals in every mode. Business enrichment output language defaults to
 `en`, because generating Polish caused a local model to translate identifiers it must copy verbatim.
 
+M10 adds `src/wm_doc/external_systems.py` and `build-business-context --external-systems`, a
+declared catalog of systems the package calls but does not contain. Each entry matches unresolved
+dependency targets by namespace glob and is attached as `EXTERNAL_SYSTEM` evidence with
+`APPROVED_HUMAN_METADATA` origin, so claims naming a declared system are groundable. It is a fixed
+name-to-fact lookup like the platform catalog: not RAG, not free-form document ingestion, and never
+a source of inferred behaviour. An undeclared or unmatched external target keeps its existing
+"outside this snapshot" treatment.
+
+M10 also makes human-authored metadata citable. The approved process description value is now
+carried in its evidence summary, and enrichment grounding considers `approved_metadata`. Previously
+both were excluded, so a claim built on operator-supplied business knowledge cited nothing and the
+grounding gate discarded it as invented -- the exact inverse of the intended behaviour.
+`business-context.v2` adds the `external_systems` section and the `EXTERNAL_SYSTEM` evidence type.
+
 M9 makes claim rejection non-fatal. A claim that cites a non-existent evidence id, cites evidence
 its section does not accept, cites nothing, or names an identifier no cited evidence supports is
 discarded and reported as an `UNGROUNDED_CLAIM_DISCARDED`, `UNCITED_CLAIM_DISCARDED`,

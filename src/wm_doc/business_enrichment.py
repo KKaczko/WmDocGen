@@ -217,6 +217,16 @@ def build_context_digest(context: BusinessContext) -> str:
         lines.append("APPROVED BUSINESS METADATA (human-authored, authoritative):")
         lines.append(json.dumps(context.approved_metadata, ensure_ascii=False, sort_keys=True))
 
+    if context.external_systems:
+        lines.append("")
+        lines.append("DECLARED EXTERNAL SYSTEMS (human-authored, authoritative):")
+        for system in context.external_systems:
+            reached = ", ".join(str(item) for item in system.get("reached_by", [])[:4])
+            lines.append(
+                f"- {system.get('label')} [{system.get('kind')}]: "
+                f"{system.get('description')} Reached via: {reached}"
+            )
+
     grouped: dict[str, list[str]] = {}
     for evidence in sorted(context.evidence, key=lambda item: item.evidence_id):
         line = f"[{evidence.evidence_id}] {_summary_line(evidence.summary)}"
@@ -470,17 +480,17 @@ def _load_context(context_bytes: bytes) -> BusinessContext:
             BusinessEnrichmentErrorCode.INPUT_INVALID,
             "context.json must be a JSON object.",
         )
-    if payload.get("schema_version") != "business-context.v1":
+    if payload.get("schema_version") != "business-context.v2":
         raise BusinessEnrichmentError(
             BusinessEnrichmentErrorCode.SCHEMA_UNSUPPORTED,
-            "context.json must use schema business-context.v1.",
+            "context.json must use schema business-context.v2.",
         )
     try:
         return BusinessContext.model_validate(payload)
     except ValidationError as exc:
         raise BusinessEnrichmentError(
             BusinessEnrichmentErrorCode.INPUT_INVALID,
-            "context.json does not match business-context.v1.",
+            "context.json does not match business-context.v2.",
         ) from exc
 
 
@@ -558,7 +568,8 @@ def _sentence_initial_offsets(text: str) -> set[int]:
 def _context_tokens(context: BusinessContext) -> set[str]:
     """Every identifier token appearing anywhere in the context, not just one record."""
     payload = json.dumps(
-        [item.summary for item in context.evidence] + [context.subject],
+        [item.summary for item in context.evidence]
+        + [context.subject, context.approved_metadata],
         ensure_ascii=False,
         sort_keys=True,
         default=str,
@@ -1117,6 +1128,7 @@ def _allowed_evidence_types(section: BusinessClaimSection) -> set[BusinessEviden
         BusinessEvidenceType.DOCUMENT_FIELD,
         BusinessEvidenceType.DOCUMENT_REFERENCE,
     }
+    common = common | {BusinessEvidenceType.EXTERNAL_SYSTEM}
     if section in {
         BusinessClaimSection.PURPOSE,
         BusinessClaimSection.ACTORS,

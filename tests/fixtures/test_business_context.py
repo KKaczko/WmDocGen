@@ -42,11 +42,11 @@ def test_build_business_context_from_service_scope(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "schema: business-context.v1" in result.output
+    assert "schema: business-context.v2" in result.output
     assert (output / "keep.txt").read_text(encoding="utf-8") == "preserve me"
     context_text = (output / "context.json").read_text(encoding="utf-8")
     context = json.loads(context_text)
-    assert context["schema_version"] == "business-context.v1"
+    assert context["schema_version"] == "business-context.v2"
     assert context["context_kind"] == "SERVICE"
     assert context["status"] == "COMPLETE"
     assert context["status_reasons"] == []
@@ -590,9 +590,27 @@ def test_business_context_active_evidence_types_have_emission_paths(tmp_path) ->
         _published_oa_process_scope(tmp_path),
         tmp_path / "process-context",
     )
+    # EXTERNAL_SYSTEM only exists when an operator declares a catalog, so one context
+    # is built with one. Every declared evidence type must still have a live path.
+    catalog_file = tmp_path / "coverage-systems.yml"
+    catalog_file.write_text(
+        """systems:
+  - id: coverage
+    name: Coverage System
+    kind: CORE_SYSTEM
+    description: Declared purely to keep every evidence type reachable.
+    namespaces: ["pgp.*", "oa.*", "pub.*"]
+""",
+        encoding="utf-8",
+    )
+    external_context = _context_json(
+        _published_service_scope(tmp_path),
+        tmp_path / "external-context",
+        external_systems=catalog_file,
+    )
     emitted = {
         item["evidence_type"]
-        for context in (service_context, process_context)
+        for context in (service_context, process_context, external_context)
         for item in context["evidence"]
     }
     assert emitted == {item.value for item in BusinessEvidenceType}
@@ -620,6 +638,114 @@ def _assert_evidence_references_resolve(context: dict[str, Any]) -> None:
 
     visit(context)
     assert referenced <= evidence_ids
+
+
+def test_declared_external_systems_become_citable_evidence(tmp_path: Path) -> None:
+    """Operator knowledge about systems outside the snapshot must be usable.
+
+    An unresolved target such as `sara.services:createCustomer` leaves the package, so
+    static analysis can only say "not in this snapshot". Declaring the system attaches
+    the fact deterministically and, critically, makes claims naming it groundable --
+    otherwise the enrichment grounding gate discards the most authoritative knowledge
+    in the pack as though it were invented.
+    """
+    from wm_doc.business_enrichment import (
+        _context_tokens,
+        _evidence_tokens,
+        _ungrounded_identifiers,
+        load_business_context_file,
+    )
+
+    scope_dir = tmp_path / "scope"
+    _run_analyze(
+        [
+            "analyze",
+            str(_samples()),
+            "--target-service",
+            "pgp.services.decrypt:decryptAndVerifyFile",
+            "--dependency-depth",
+            "1",
+            "--output",
+            str(scope_dir),
+        ]
+    )
+    catalog_file = tmp_path / "external-systems.yml"
+    catalog_file.write_text(
+        """systems:
+  - id: sara3
+    name: SARA3
+    vendor: Altar
+    kind: CORE_SYSTEM
+    description: Core policy and customer system of record.
+    namespaces: ["pgp.services.common*"]
+""",
+        encoding="utf-8",
+    )
+    context_dir = tmp_path / "context"
+    _run_analyze(
+        [
+            "build-business-context",
+            "--input",
+            str(scope_dir),
+            "--output",
+            str(context_dir),
+            "--external-systems",
+            str(catalog_file),
+        ]
+    )
+
+    context = load_business_context_file(context_dir / "context.json")
+    assert [item["label"] for item in context.external_systems] == ["SARA3 (Altar)"]
+
+    index = {item.evidence_id: item for item in context.evidence}
+    system_evidence = [
+        item.evidence_id
+        for item in context.evidence
+        if item.evidence_type is BusinessEvidenceType.EXTERNAL_SYSTEM
+    ]
+    assert system_evidence
+
+    allowed = _evidence_tokens(system_evidence, index)
+    everywhere = _context_tokens(context)
+    assert not _ungrounded_identifiers(
+        "The record is created in SARA3, the Altar core system.", allowed, everywhere
+    )
+    # An undeclared system stays ungrounded: declaring is what makes it citable.
+    assert _ungrounded_identifiers(
+        "The service calls Acme Billing to settle the invoice.", allowed, everywhere
+    )
+
+
+def test_external_systems_file_is_validated(tmp_path: Path) -> None:
+    from wm_doc.external_systems import ExternalSystemsError, load_external_systems
+
+    assert load_external_systems(None).systems == []
+
+    no_namespaces = tmp_path / "bad.yml"
+    no_namespaces.write_text(
+        """systems:
+  - id: x
+    name: X
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ExternalSystemsError):
+        load_external_systems(no_namespaces)
+
+    duplicate = tmp_path / "dupe.yml"
+    duplicate.write_text(
+        """systems:
+  - id: x
+    name: X
+    namespaces: ["a.*"]
+  - id: X
+    name: Y
+    namespaces: ["b.*"]
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ExternalSystemsError):
+        load_external_systems(duplicate)
 
 
 def _samples() -> Path:
@@ -681,11 +807,15 @@ def _build_context(published: Path):
     return build_business_context(inputs).context
 
 
-def _context_json(published: Path, output: Path) -> dict[str, Any]:
-    result = CliRunner().invoke(
-        app,
-        ["build-business-context", "--input", str(published), "--output", str(output)],
-    )
+def _context_json(
+    published: Path,
+    output: Path,
+    external_systems: Path | None = None,
+) -> dict[str, Any]:
+    args = ["build-business-context", "--input", str(published), "--output", str(output)]
+    if external_systems is not None:
+        args += ["--external-systems", str(external_systems)]
+    result = CliRunner().invoke(app, args)
     assert result.exit_code == 0, result.output
     return _read_json(output / "context.json")
 

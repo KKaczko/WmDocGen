@@ -17,7 +17,7 @@ def render_business_result_markdown(result: BusinessResult) -> str:
         (
             "This page is generated from an application-owned `business-result.v1` built from a "
             "validated structured model draft. Claims are model-authored and evidence-checked "
-            "against `business-context.v1`; they are not canonical technical analysis."
+            "against `business-context.v2`; they are not canonical technical analysis."
         ),
         "",
         "## Identity",
