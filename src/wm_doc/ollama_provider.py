@@ -315,7 +315,12 @@ class OllamaBusinessEnrichmentProvider:
         return payload
 
 
-def validate_ollama_url(base_url: str, *, allow_remote_provider: bool = False) -> str:
+def validate_ollama_url(
+    base_url: str,
+    *,
+    allow_remote_provider: bool = False,
+    allow_path: bool = False,
+) -> str:
     parsed = urllib.parse.urlparse(base_url.strip())
     if parsed.scheme not in {"http", "https"}:
         raise OllamaProviderError(
@@ -332,7 +337,7 @@ def validate_ollama_url(base_url: str, *, allow_remote_provider: bool = False) -
             BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE,
             "Ollama URL must not contain credentials, query strings, or fragments.",
         )
-    if parsed.path not in {"", "/"}:
+    if not allow_path and parsed.path not in {"", "/"}:
         raise OllamaProviderError(
             BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE,
             "Ollama URL must point to the provider root.",
@@ -348,7 +353,8 @@ def validate_ollama_url(base_url: str, *, allow_remote_provider: bool = False) -
             BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE,
             "Remote Ollama providers require --allow-remote-provider.",
         )
-    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    path = parsed.path.rstrip("/") if allow_path else ""
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
 
 
 def _join_api_url(base_url: str, path: str) -> str:
