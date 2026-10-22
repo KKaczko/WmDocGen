@@ -28,12 +28,16 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
+
+if TYPE_CHECKING:
+    from wm_doc.ir import FlowService
 
 FACTS_START_RE = re.compile(r"<!-- wm-doc:facts:start(?: hash=([0-9a-f]+))? -->")
 FACTS_END = "<!-- wm-doc:facts:end -->"
@@ -41,6 +45,9 @@ NOTES_HEADING = "## Notes"
 NOTES_PLACEHOLDER = "<!-- Your notes. wm-doc never changes this section. -->"
 COMMENT_HEADING = "## Designer comment"
 PURPOSE_HEADING = "## Purpose"
+# Overview files use the same format; their `service` front-matter value is one of these.
+PACKAGE_OVERVIEW_PREFIX = "package:"
+SERVER_OVERVIEW = "server"
 MAX_DESIGNER_COMMENT_CHARS = 600
 HASH_LENGTH = 16
 
@@ -138,7 +145,12 @@ class ServiceDoc:
             **self.extra_front_matter,
         }
         header = yaml.safe_dump(front, sort_keys=False, allow_unicode=True).strip()
-        title = self.service.rsplit(":", 1)[-1]
+        if self.service.startswith(PACKAGE_OVERVIEW_PREFIX):
+            title = f"Package {self.service.removeprefix(PACKAGE_OVERVIEW_PREFIX)}"
+        elif self.service == SERVER_OVERVIEW:
+            title = "Server overview"
+        else:
+            title = self.service.rsplit(":", 1)[-1]
         start = f"<!-- wm-doc:facts:start hash={self.current_facts_hash} -->"
         return (
             f"---\n{header}\n---\n# {title}\n\n`{self.service}`\n\n"
@@ -163,10 +175,25 @@ def doc_path(docs_dir: Path, package: str, service: str) -> Path:
     return docs_dir / _safe(package) / Path(*parts) / f"{_safe(name or service)}.md"
 
 
+def overview_doc_path(docs_dir: Path, package: str | None) -> Path:
+    """`<Package>/_package.md` for a package overview, `_server.md` for the server."""
+    if package is None:
+        return docs_dir / "_server.md"
+    return docs_dir / _safe(package) / "_package.md"
+
+
+def is_overview(service: str) -> bool:
+    return service == SERVER_OVERVIEW or service.startswith(PACKAGE_OVERVIEW_PREFIX)
+
+
+class SupportsMarkdown(Protocol):
+    def markdown(self) -> str: ...
+
+
 def new_doc(
     service: str,
     package: str,
-    narrative: Narrative,
+    narrative: SupportsMarkdown,
     *,
     model: str,
     facts: str,
@@ -257,6 +284,17 @@ def write_doc(path: Path, doc: ServiceDoc) -> bool:
     temp.write_text(content, encoding="utf-8")
     temp.replace(path)
     return True
+
+
+def load_service_docs(docs_dir: Path, services: Iterable[FlowService]) -> dict[str, ServiceDoc]:
+    """Service full name -> its description file, for the services that have one."""
+    docs: dict[str, ServiceDoc] = {}
+    for service in services:
+        name = service.identity.full_name
+        doc = read_doc(doc_path(docs_dir, service.identity.package, name))
+        if doc is not None:
+            docs[name] = doc
+    return docs
 
 
 def iter_docs(docs_dir: Path) -> list[tuple[Path, ServiceDoc]]:

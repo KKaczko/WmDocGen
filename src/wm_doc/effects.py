@@ -124,7 +124,7 @@ def compute_service_facts(
     }
     effects = _transitive_effects(services, own)
     callers = _callers(services)
-    entries = _entry_markers(analysis)
+    entries = entry_markers(analysis)
     facts: dict[str, ServiceFacts] = {}
     for name in services:
         all_effects = effects[name]
@@ -353,7 +353,7 @@ def _callers(services: dict[str, FlowService]) -> dict[str, set[str]]:
     return callers
 
 
-def _entry_markers(analysis: AnalysisResult) -> dict[str, list[tuple[str, str]]]:
+def entry_markers(analysis: AnalysisResult) -> dict[str, list[tuple[str, str]]]:
     markers: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for reference in analysis.artifact_references:
         if reference.target_kind is ReferenceTargetKind.SERVICE:

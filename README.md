@@ -6,15 +6,19 @@ never changes the packages.
 
 It produces two things:
 
-- **A technical documentation site** (`wm-doc analyze`): one Markdown page per service and
-  document type, dependency graphs, an index, and for every service a summary, its signature,
-  every call (FLOW steps, transformers and Java), who calls it, which entry points reach it, and
-  which data objects and systems it touches.
+- **A technical documentation site** (`wm-doc analyze`): one Markdown page per package,
+  service and document type, dependency graphs, an index, and for every service a summary, its
+  signature, every call (FLOW steps, transformers and Java), who calls it, which entry points
+  reach it, and which data objects and systems it touches. Each package page lists the
+  package's entry points, services, data and systems, and the packages it calls.
 - **One reviewed description file per service** (`wm-doc describe`): a short text drafted by a
   local language model from the facts above, saying what the service is for, who uses it, what
   it does to which data and where, its main steps and error handling, plus a plain-text comment
   ready to paste into the service's Comments field in Designer. You review, edit and approve
   these files; approved text is never overwritten.
+- **Package and server overviews** (`wm-doc overview`): the same kind of reviewed file for each
+  package and for the whole server, drafted from the package facts and the services' Purpose
+  lines.
 
 The model only words facts the tool has already established. Every name in its answer must
 appear in those facts, or the answer is rejected.
@@ -29,7 +33,7 @@ uv run wm-doc --help
 ```
 
 Graphviz (`dot`) is optional and only needed for `--render-graphs`. An Ollama server is needed
-only for `describe`.
+only for `describe` and `overview`.
 
 ## Documenting a server, step by step
 
@@ -46,6 +50,10 @@ Point the commands at the server's `packages` directory, or a copy of it.
    Product packages (`Wm*`), `Default` and packages marked `system_package=yes` are skipped by
    default; see `--include-package`, `--exclude-package`, `--all-packages` or a config file
    (`examples/wm-doc.yml`).
+
+   The first run analyses every package, which takes minutes on a large server. Later runs of
+   any command reuse that analysis while no package file has changed (about a second); see
+   [Analysis cache](#analysis-cache).
 
 2. **Declare what the code calls but does not contain.** Copy `examples/external-systems.yml`
    and map namespace patterns from the stats report to system names. Optionally list your
@@ -80,20 +88,40 @@ Point the commands at the server's `packages` directory, or a copy of it.
    wm-doc status D:\...\packages --docs-dir service-docs     # writes service-docs/STATUS.md
    ```
 
-6. **Publish.**
+6. **Write package and server overviews** once a package's services are described (the
+   overview prompt uses their Purpose lines, approved text first; services without a
+   description use their generated summary).
+
+   ```powershell
+   wm-doc overview D:\...\packages --package OrdersCore --model qwen3.8:27b --docs-dir service-docs --external-systems external-systems.yml
+   wm-doc overview D:\...\packages --all --server --model qwen3.8:27b --docs-dir service-docs
+   wm-doc approve --docs-dir service-docs --service package:OrdersCore
+   wm-doc approve --docs-dir service-docs --service server
+   ```
+
+   `--package` is repeatable; `--all` takes every analysed package. `--server` writes the server
+   overview after the package overviews, from their Purpose lines. Package facts that do not
+   fit `--num-ctx` are shortened (the service list first) and reported.
+
+7. **Publish.**
 
    ```powershell
    wm-doc analyze D:\...\packages --output site --docs-dir service-docs --external-systems external-systems.yml --render-graphs svg
    wm-doc export-comments --docs-dir service-docs --output designer-comments
    ```
 
-   Service pages show the description with its review status; `service-catalogue.md` lists every
+   Service and package pages show their description with its review status, and `index.md`
+   shows the server overview and a table of packages. `service-catalogue.md` lists every
    service's purpose. `designer-comments/<Package>.txt` holds the comment texts to paste into
-   Designer.
+   Designer. With `--render-graphs`, every service page also gets a call graph: the service, the
+   services it calls (two levels; platform helpers folded into one node), the systems and data
+   it touches, and the services and entry points that reach it.
 
-7. **Keep it current.** After code changes, run `describe` again: unchanged drafts are kept,
-   changed drafts are regenerated, and approved or edited texts are kept while their facts block
-   is refreshed. `status` lists approved texts whose facts have changed so you can review them.
+8. **Keep it current.** After code changes, run `describe` and `overview` again: unchanged
+   drafts are kept, changed drafts are regenerated, and approved or edited texts are kept while
+   their facts block is refreshed. `status` lists approved texts whose facts have changed so you
+   can review them. Rewording a service description does not mark its package overview as
+   changed; use `overview --redo-drafts` to redraft unapproved overviews from new Purpose lines.
 
 ## Description files
 
@@ -116,6 +144,11 @@ text_hash: a81b...       # the text as generated; a different hash means you edi
 ## Facts                 (Used by, Inputs and outputs, Data and systems touched; always refreshed)
 <!-- wm-doc:facts:end -->
 ```
+
+Overviews use the same format: `service-docs/<Package>/_package.md` (`service: package:<Package>`,
+sections Purpose, Main capabilities, Entry points, Systems and data) and `service-docs/_server.md`
+(`service: server`, with Business areas instead of Main capabilities). Their facts block holds
+the package or server facts the draft was written from.
 
 - A draft you edited, or an approved file, is never regenerated. To get a fresh draft, set
   `status: draft` and restore or delete the text, or delete the file.
@@ -147,9 +180,10 @@ such artifacts (key names and counts, no values) so these can be added later fro
 | --- | --- |
 | `stats` | Counts and names to plan the work |
 | `analyze` | Technical documentation site (`--docs-dir` adds descriptions; `--verbose` adds mapping and FLOW detail; `--target-*` publishes a focused subset) |
-| `describe` | Draft or refresh description files with a model |
-| `approve` | Mark descriptions approved |
-| `status` | Report missing, draft, edited, approved and outdated descriptions |
+| `describe` | Draft or refresh service description files with a model |
+| `overview` | Draft or refresh package overviews and the server overview with a model |
+| `approve` | Mark descriptions approved (`--service package:<P>` or `--service server` for overviews) |
+| `status` | Report missing, draft, edited, approved and outdated descriptions and overviews |
 | `export-comments` | Designer comment texts per package |
 | `provider-probe` | Check how a model server can be reached |
 | `probe-shapes` | Key layout of triggers, descriptors and adapter services (no values) |
@@ -169,10 +203,22 @@ such artifacts (key names and counts, no values) so these can be added later fro
 
 `wm-doc analyze` writes `analysis.json` (schema `analysis.v10`; each fact is stored once, on
 the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,
-`entrypoints.md`, `artifacts.md`, `services/*.md`, `documents/*.md`, `graphs/*.dot` and
-`graphs/index.md`, `processes/*.md` when processes are declared, `service-catalogue.md` with
-`--docs-dir`, and SVG/PNG graphs with `--render-graphs`. Before writing it removes only these
-generated files and directories; other files in the output directory are kept.
+`entrypoints.md`, `artifacts.md`, `packages/*.md`, `services/*.md`, `documents/*.md`,
+`graphs/*.dot` and `graphs/index.md`, `processes/*.md` when processes are declared,
+`service-catalogue.md` with `--docs-dir`, and with `--render-graphs` SVG/PNG graphs plus one call
+graph per service (`graphs/services/`). Before writing it removes only these generated files and
+directories; other files in the output directory are kept.
+
+## Analysis cache
+
+`stats`, `analyze`, `describe`, `overview`, `status` and `probe-shapes` start from a full
+analysis of the packages directory. The result is cached (gzip-compressed, one entry per
+packages directory and configuration) and reused while the tool version, the configuration, the
+`processes.yml` file and every package file (path, size, modification time) are unchanged; any
+change triggers a fresh analysis. The cache lives under `%LOCALAPPDATA%\wm-doc\analysis-cache`
+(or `~/.cache/wm-doc/analysis-cache`); set `WM_DOC_ANALYSIS_CACHE_DIR` to move it, or pass
+`--no-analysis-cache` to analyse from scratch. It holds the same data as `analysis.json`, so keep
+it where `analysis.json` may be kept.
 
 Architecture and format details: `docs/architecture.md`, `docs/format-behavior.md`,
 `docs/unsupported-constructs.md`.

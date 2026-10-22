@@ -14,6 +14,7 @@ from wm_doc.describer import (
     DescribeOptions,
     DescribeOutcome,
     DescribeResult,
+    DescribeStats,
     approve_docs,
     collect_states,
     current_facts_hashes,
@@ -43,7 +44,7 @@ from wm_doc.graph_publish import (
     rendered_count,
     run_subprocess,
 )
-from wm_doc.ir import AnalysisResult, FlowService
+from wm_doc.ir import AnalysisResult
 from wm_doc.ollama_provider import (
     HTTP_CONNECT_TIMEOUT_SECONDS,
     HTTP_TIMEOUT_SECONDS,
@@ -54,6 +55,14 @@ from wm_doc.ollama_provider import (
 from wm_doc.openai_compatible_provider import (
     OpenAICompatibleProvider,
     resolve_api_key,
+)
+from wm_doc.overviews import (
+    describe_overviews,
+    overview_states,
+    package_overview_docs,
+    progress_label,
+    service_purposes,
+    summarize_packages,
 )
 from wm_doc.provider_probe import probe_provider
 from wm_doc.render.analysis_json import render_analysis_json
@@ -75,6 +84,11 @@ from wm_doc.render.index_markdown import (
 )
 from wm_doc.render.json import render_inventory_json
 from wm_doc.render.markdown import render_inventory_markdown
+from wm_doc.render.package_markdown import (
+    render_packages_index_section,
+    render_server_overview_section,
+    write_package_markdown,
+)
 from wm_doc.render.process_markdown import (
     write_entrypoint_candidates_markdown,
     write_process_markdown,
@@ -100,9 +114,9 @@ from wm_doc.scope_analysis import (
 )
 from wm_doc.service_docs import (
     DocState,
-    ServiceDoc,
-    doc_path,
     iter_docs,
+    load_service_docs,
+    overview_doc_path,
     read_doc,
 )
 from wm_doc.shapes import render_shapes
@@ -218,7 +232,7 @@ MANAGED_ROOT_FILES = (
     "artifacts.md",
     "service-catalogue.md",
 )
-MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
+MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs", "packages")
 
 
 def _default_provider_factory(
@@ -554,12 +568,80 @@ DocsDirOption = Annotated[
 ]
 
 
+ModelOption = Annotated[str, typer.Option("--model", help="Installed Ollama model to use.")]
+ConfigOption = Annotated[
+    Path | None,
+    typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
+]
+ProcessesFileOption = Annotated[
+    Path | None,
+    typer.Option("--processes-file", help="Optional processes.yml catalog."),
+]
+RedoDraftsOption = Annotated[
+    bool,
+    typer.Option(
+        "--redo-drafts",
+        help="Regenerate unedited drafts even when their facts did not change.",
+    ),
+]
+OllamaUrlOption = Annotated[str, typer.Option("--ollama-url", help="Ollama provider URL.")]
+TimeoutOption = Annotated[
+    int, typer.Option("--timeout-seconds", help="Per-request timeout in seconds.")
+]
+AllowRemoteProviderOption = Annotated[
+    bool,
+    typer.Option("--allow-remote-provider", help="Allow non-loopback Ollama provider URLs."),
+]
+NumCtxOption = Annotated[
+    int,
+    typer.Option(
+        "--num-ctx",
+        min=4096,
+        help="Model context window in tokens. Larger fits bigger services but uses more "
+        "memory on the Ollama host.",
+    ),
+]
+NoCacheOption = Annotated[bool, typer.Option("--no-cache", help="Disable cache reads and writes.")]
+RefreshOption = Annotated[
+    bool, typer.Option("--refresh", help="Ignore cached drafts and ask the model again.")
+]
+CacheDirOption = Annotated[
+    Path | None, typer.Option("--cache-dir", help="Cache directory for validated drafts.")
+]
+ProviderKindOption = Annotated[
+    str,
+    typer.Option(
+        "--provider",
+        help="'ollama' (native API, also through a proxy path) or 'openai-compatible' "
+        "(the /v1 API; set --num-ctx to the server's configured context length).",
+    ),
+]
+ApiKeyEnvOption = Annotated[
+    str | None,
+    typer.Option(
+        "--api-key-env",
+        help="Environment variable holding a bearer token for a proxied server. The token "
+        "is never read from a flag.",
+    ),
+]
+ParallelOption = Annotated[
+    int,
+    typer.Option(
+        "--parallel",
+        min=1,
+        max=16,
+        help="Requests in flight at once; useful only if the server runs several in "
+        "parallel (OLLAMA_NUM_PARALLEL).",
+    ),
+]
+
+
 @app.command()
 def describe(
     packages_path: Annotated[
         Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
     ],
-    model: Annotated[str, typer.Option("--model", help="Installed Ollama model to use.")],
+    model: ModelOption,
     docs_dir: DocsDirOption = Path("service-docs"),
     service: Annotated[
         list[str] | None,
@@ -582,80 +664,24 @@ def describe(
             help="Also describe the services the selection calls (callees are done first).",
         ),
     ] = False,
-    redo_drafts: Annotated[
-        bool,
-        typer.Option(
-            "--redo-drafts",
-            help="Regenerate unedited drafts even when their facts did not change.",
-        ),
-    ] = False,
-    config: Annotated[
-        Path | None,
-        typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
-    ] = None,
-    processes_file: Annotated[
-        Path | None,
-        typer.Option("--processes-file", help="Optional processes.yml catalog."),
-    ] = None,
+    redo_drafts: RedoDraftsOption = False,
+    config: ConfigOption = None,
+    processes_file: ProcessesFileOption = None,
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
     no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
-    ollama_url: Annotated[
-        str, typer.Option("--ollama-url", help="Ollama provider URL.")
-    ] = "http://localhost:11434",
-    timeout_seconds: Annotated[
-        int, typer.Option("--timeout-seconds", help="Per-service request timeout in seconds.")
-    ] = HTTP_TIMEOUT_SECONDS,
-    allow_remote_provider: Annotated[
-        bool,
-        typer.Option("--allow-remote-provider", help="Allow non-loopback Ollama provider URLs."),
-    ] = False,
-    num_ctx: Annotated[
-        int,
-        typer.Option(
-            "--num-ctx",
-            min=4096,
-            help="Model context window in tokens. Larger fits bigger services but uses more "
-            "memory on the Ollama host.",
-        ),
-    ] = DEFAULT_NUM_CTX,
-    no_cache: Annotated[
-        bool, typer.Option("--no-cache", help="Disable cache reads and writes.")
-    ] = False,
-    refresh: Annotated[
-        bool, typer.Option("--refresh", help="Ignore cached drafts and ask the model again.")
-    ] = False,
-    cache_dir: Annotated[
-        Path | None, typer.Option("--cache-dir", help="Cache directory for validated drafts.")
-    ] = None,
-    provider_kind: Annotated[
-        str,
-        typer.Option(
-            "--provider",
-            help="'ollama' (native API, also through a proxy path) or 'openai-compatible' "
-            "(the /v1 API; set --num-ctx to the server's configured context length).",
-        ),
-    ] = "ollama",
-    api_key_env: Annotated[
-        str | None,
-        typer.Option(
-            "--api-key-env",
-            help="Environment variable holding a bearer token for a proxied server. The token "
-            "is never read from a flag.",
-        ),
-    ] = None,
-    parallel: Annotated[
-        int,
-        typer.Option(
-            "--parallel",
-            min=1,
-            max=16,
-            help="Requests in flight at once; useful only if the server runs several in "
-            "parallel (OLLAMA_NUM_PARALLEL).",
-        ),
-    ] = 1,
+    ollama_url: OllamaUrlOption = "http://localhost:11434",
+    timeout_seconds: TimeoutOption = HTTP_TIMEOUT_SECONDS,
+    allow_remote_provider: AllowRemoteProviderOption = False,
+    num_ctx: NumCtxOption = DEFAULT_NUM_CTX,
+    no_cache: NoCacheOption = False,
+    refresh: RefreshOption = False,
+    cache_dir: CacheDirOption = None,
+    provider_kind: ProviderKindOption = "ollama",
+    api_key_env: ApiKeyEnvOption = None,
+    parallel: ParallelOption = 1,
 ) -> None:
     """Write or refresh per-service description files with a local model, callees first."""
     if not model.strip():
@@ -695,13 +721,8 @@ def describe(
         typer.echo(f"[{position}/{total}] {result.service}: {result.outcome.value}{note}")
 
     try:
-        provider = DESCRIBE_PROVIDER_FACTORY(
-            ollama_url,
-            allow_remote_provider=allow_remote_provider,
-            connect_timeout_seconds=HTTP_CONNECT_TIMEOUT_SECONDS,
-            timeout_seconds=timeout_seconds,
-            provider_kind=provider_kind.strip(),
-            api_key_env=(api_key_env or "").strip() or None,
+        provider = _model_provider(
+            ollama_url, allow_remote_provider, timeout_seconds, provider_kind, api_key_env
         )
         _results, describe_stats = describe_services(
             analysis,
@@ -729,23 +750,159 @@ def describe(
     except DescribeError as exc:
         typer.echo(f"DESCRIBE_FAILED: {exc.safe_message}", err=True)
         raise typer.Exit(code=1) from exc
-    counts = describe_stats.counts
-    tokens = describe_stats.prompt_tokens
+    _echo_generation_summary(
+        f"Described {len(selected)} service(s) into {docs_dir}:",
+        describe_stats,
+        num_ctx,
+        "Next: review the drafts, approve them with `wm-doc approve`, and publish with "
+        "`wm-doc analyze ... --docs-dir`.",
+    )
+
+
+def _model_provider(
+    ollama_url: str,
+    allow_remote_provider: bool,
+    timeout_seconds: int,
+    provider_kind: str,
+    api_key_env: str | None,
+) -> ModelProvider:
+    return DESCRIBE_PROVIDER_FACTORY(
+        ollama_url,
+        allow_remote_provider=allow_remote_provider,
+        connect_timeout_seconds=HTTP_CONNECT_TIMEOUT_SECONDS,
+        timeout_seconds=timeout_seconds,
+        provider_kind=provider_kind.strip(),
+        api_key_env=(api_key_env or "").strip() or None,
+    )
+
+
+def _echo_generation_summary(
+    header: str, stats: DescribeStats, num_ctx: int, next_step: str
+) -> None:
+    counts = stats.counts
+    tokens = stats.prompt_tokens
     typer.echo(
-        f"Described {len(selected)} service(s) into {docs_dir}:\n"
+        f"{header}\n"
         f"- new drafts: {counts.get(DescribeOutcome.GENERATED, 0)} generated, "
         f"{counts.get(DescribeOutcome.CACHED, 0)} from cache\n"
         f"- drafts kept (facts unchanged): {counts.get(DescribeOutcome.UNCHANGED, 0)}\n"
         f"- approved or edited, kept: {counts.get(DescribeOutcome.PROTECTED, 0)}\n"
         f"- rejected by validation: {counts.get(DescribeOutcome.REJECTED, 0)}\n"
         f"- generation failed: {counts.get(DescribeOutcome.FAILED, 0)}\n"
-        f"- corrective retries: {describe_stats.retried}\n"
-        f"- facts shortened to fit: {describe_stats.shortened}\n"
+        f"- corrective retries: {stats.retried}\n"
+        f"- facts shortened to fit: {stats.shortened}\n"
         f"- largest prompt: {max(tokens) if tokens else 'n/a'} tokens of {num_ctx}\n"
-        "Next: review the drafts, approve them with `wm-doc approve`, and publish with "
-        "`wm-doc analyze ... --docs-dir`."
+        f"{next_step}"
     )
 
+
+@app.command()
+def overview(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    model: ModelOption,
+    docs_dir: DocsDirOption = Path("service-docs"),
+    package: Annotated[
+        list[str] | None,
+        typer.Option("--package", help="Write the overview of this package (repeatable)."),
+    ] = None,
+    all_overviews: Annotated[
+        bool, typer.Option("--all", help="Write the overview of every analysed package.")
+    ] = False,
+    server: Annotated[
+        bool,
+        typer.Option(
+            "--server",
+            help="Also write the server overview, from the package overviews (run it after "
+            "the package overviews it should use).",
+        ),
+    ] = False,
+    redo_drafts: RedoDraftsOption = False,
+    config: ConfigOption = None,
+    processes_file: ProcessesFileOption = None,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
+    no_analysis_cache: NoAnalysisCacheOption = False,
+    external_systems_file: ExternalSystemsOption = None,
+    ollama_url: OllamaUrlOption = "http://localhost:11434",
+    timeout_seconds: TimeoutOption = HTTP_TIMEOUT_SECONDS,
+    allow_remote_provider: AllowRemoteProviderOption = False,
+    num_ctx: NumCtxOption = DEFAULT_NUM_CTX,
+    no_cache: NoCacheOption = False,
+    refresh: RefreshOption = False,
+    cache_dir: CacheDirOption = None,
+    provider_kind: ProviderKindOption = "ollama",
+    api_key_env: ApiKeyEnvOption = None,
+    parallel: ParallelOption = 1,
+) -> None:
+    """Write or refresh package overviews, and optionally the server overview."""
+    if not model.strip():
+        typer.echo("OVERVIEW_INPUT_INVALID: --model must not be blank.", err=True)
+        raise typer.Exit(code=2)
+    if (package and all_overviews) or not (package or all_overviews or server):
+        typer.echo(
+            "OVERVIEW_INPUT_INVALID: choose --package (repeatable) or --all, and/or --server.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
+    external_catalog = _load_external_systems_or_exit(external_systems_file)
+    analysis = _analyze(packages_path, app_config, processes_file, no_cache=no_analysis_cache)
+    known = {p.name for p in analysis.packages}
+    selected = sorted(known, key=str.casefold) if all_overviews else list(package or [])
+    missing = [name for name in selected if name not in known]
+    if missing:
+        typer.echo(
+            f"OVERVIEW_INPUT_INVALID: unknown package(s): {', '.join(missing)}", err=True
+        )
+        raise typer.Exit(code=2)
+
+    def report_progress(position: int, total: int, result: DescribeResult) -> None:
+        note = f" ({result.note})" if result.note else ""
+        typer.echo(f"[{position}/{total}] {progress_label(result)}: {result.outcome.value}{note}")
+
+    try:
+        provider = _model_provider(
+            ollama_url, allow_remote_provider, timeout_seconds, provider_kind, api_key_env
+        )
+        results, overview_stats = describe_overviews(
+            analysis,
+            selected,
+            provider,
+            DescribeOptions(
+                model=model.strip(),
+                scan_root=packages_path,
+                config=app_config,
+                docs_dir=docs_dir,
+                cache_dir=None if no_cache else (cache_dir or default_describe_cache_dir()),
+                no_cache=no_cache,
+                refresh=refresh,
+                redo_drafts=redo_drafts,
+                num_ctx=num_ctx,
+                timeout_seconds=timeout_seconds,
+                external_systems=external_catalog,
+                parallel=parallel,
+            ),
+            server=server,
+            progress=report_progress,
+        )
+    except OllamaProviderError as exc:
+        typer.echo(f"{exc.code.value}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+    except DescribeError as exc:
+        typer.echo(f"OVERVIEW_FAILED: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_generation_summary(
+        f"Wrote {len(results)} overview(s) into {docs_dir}:",
+        overview_stats,
+        num_ctx,
+        "Next: review the drafts, approve them with `wm-doc approve --service package:<Package>` "
+        "or `--service server`, and publish with `wm-doc analyze ... --docs-dir`.",
+    )
 
 def _describe_selection(
     analysis: AnalysisResult,
@@ -851,20 +1008,35 @@ def status(
     analysis = _analyze(packages_path, app_config, no_cache=no_analysis_cache)
     hashes = current_facts_hashes(analysis, packages_path, app_config, external_catalog)
     states = collect_states(analysis, docs_dir, hashes)
+    overviews = overview_states(
+        analysis, docs_dir, compute_service_facts(analysis, external_catalog)
+    )
     orphans = sorted(
-        (doc.service for _path, doc in iter_docs(docs_dir) if doc.service not in states),
+        (
+            doc.service
+            for _path, doc in iter_docs(docs_dir)
+            if doc.service not in states and doc.service not in overviews
+        ),
         key=str.casefold,
     )
     docs_dir.mkdir(parents=True, exist_ok=True)
-    (docs_dir / "STATUS.md").write_text(render_status(states, orphans), encoding="utf-8")
+    (docs_dir / "STATUS.md").write_text(
+        render_status(states, orphans, overviews), encoding="utf-8"
+    )
     totals: dict[DocState, int] = {}
     for _package, state in states.values():
         totals[state] = totals.get(state, 0) + 1
     typer.echo(f"Services: {len(states)}")
     for state in STATE_ORDER:
         typer.echo(f"- {state.value}: {totals.get(state, 0)}")
+    overview_totals: dict[DocState, int] = {}
+    for state in overviews.values():
+        overview_totals[state] = overview_totals.get(state, 0) + 1
+    typer.echo(f"Overviews (packages and server): {len(overviews)}")
+    for state in STATE_ORDER:
+        typer.echo(f"- {state.value}: {overview_totals.get(state, 0)}")
     if orphans:
-        typer.echo(f"- description files without a service: {len(orphans)}")
+        typer.echo(f"- description files without a service or package: {len(orphans)}")
     typer.echo(f"Wrote {docs_dir / 'STATUS.md'}.")
 
 
@@ -902,16 +1074,6 @@ def _service_graph_links(
     return links
 
 
-def _load_service_docs(docs_dir: Path, services: list[FlowService]) -> dict[str, ServiceDoc]:
-    docs: dict[str, ServiceDoc] = {}
-    for service in services:
-        name = service.identity.full_name
-        doc = read_doc(doc_path(docs_dir, service.identity.package, name))
-        if doc is not None:
-            docs[name] = doc
-    return docs
-
-
 def _write_full_outputs(
     output: Path,
     analysis: AnalysisResult,
@@ -932,7 +1094,7 @@ def _write_full_outputs(
     (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
     services = [service for package in analysis.packages for service in package.services]
     documents = [document for package in analysis.packages for document in package.document_types]
-    service_docs = _load_service_docs(docs_dir, services) if docs_dir is not None else {}
+    service_docs = load_service_docs(docs_dir, services) if docs_dir is not None else {}
     service_facts = compute_service_facts(analysis, external_systems)
     page_filenames = service_markdown_filenames(services)
     catalogue_path: str | None = None
@@ -990,8 +1152,28 @@ def _write_full_outputs(
     graph_index_path = write_graph_index(output, graph_assets)
     write_analysis_limitations(output)
     write_artifact_inventory(output, analysis)
+    package_summaries = summarize_packages(analysis, service_facts)
+    package_overviews = (
+        package_overview_docs(docs_dir, package_summaries) if docs_dir is not None else {}
+    )
+    package_paths = write_package_markdown(
+        output,
+        package_summaries,
+        overviews=package_overviews,
+        docs_enabled=docs_dir is not None,
+        purposes=service_purposes(analysis, service_docs),
+        service_filenames=page_filenames,
+    )
+    server_doc = read_doc(overview_doc_path(docs_dir, None)) if docs_dir is not None else None
     index_path = write_documentation_index(
-        output, analysis, graph_assets, catalogue_path=catalogue_path
+        output,
+        analysis,
+        graph_assets,
+        catalogue_path=catalogue_path,
+        packages_section=render_packages_index_section(
+            package_summaries, package_overviews, docs_enabled=docs_dir is not None
+        ),
+        server_section=render_server_overview_section(server_doc) if server_doc else None,
     )
     process_paths = write_process_markdown(output, analysis, graph_assets)
     flow_count = sum(1 for service in services if service.service_type.value == "FLOW")
@@ -1038,6 +1220,7 @@ def _write_full_outputs(
         "Wrote analysis.json, "
         f"{index_path.name}, "
         f"{len(service_paths)} service markdown file(s), "
+        f"{len(package_paths)} package markdown file(s), "
         f"{len(document_paths)} document markdown file(s), "
         f"{len(process_paths)} process markdown file(s), "
         f"{entrypoint_path.name}, "

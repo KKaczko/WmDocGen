@@ -202,8 +202,7 @@ def describe_services(
         raise DescribeError(f"Unknown service(s): {', '.join(unknown[:5])}.")
     order = [name for name in summary_order(services.values()) if name in wanted]
     facts = compute_service_facts(analysis, options.external_systems)
-    check = provider.check(options.model)
-    run = _Run(services, facts, provider, options, check.model_digest, order)
+    run = _Run(services, facts, open_session(provider, options), options, order)
     results: dict[str, DescribeResult] = {}
 
     def finish(result: DescribeResult) -> None:
@@ -218,6 +217,20 @@ def describe_services(
     else:
         _describe_in_parallel(run, order, options.parallel, finish)
     return [results[name] for name in order], run.stats
+
+
+def open_session(provider: ModelProvider, options: DescribeOptions) -> ModelSession:
+    """Check the model once and return a session using the run's options."""
+    check = provider.check(options.model)
+    return ModelSession(
+        provider,
+        model=options.model,
+        model_digest=check.model_digest,
+        num_ctx=options.num_ctx,
+        timeout_seconds=options.timeout_seconds,
+        cache_dir=None if options.no_cache else options.cache_dir,
+        refresh=options.refresh,
+    )
 
 
 def _describe_in_parallel(
@@ -322,7 +335,11 @@ def collect_states(
     return states
 
 
-def render_status(states: dict[str, tuple[str, DocState]], orphans: list[str]) -> str:
+def render_status(
+    states: dict[str, tuple[str, DocState]],
+    orphans: list[str],
+    overviews: dict[str, DocState] | None = None,
+) -> str:
     counts: dict[str, dict[DocState, int]] = {}
     for package, state in states.values():
         per_package = counts.setdefault(package, {})
@@ -354,8 +371,21 @@ def render_status(states: dict[str, tuple[str, DocState]], orphans: list[str]) -
         if names:
             lines += ["", f"## {state.value.capitalize()} ({len(names)})", ""]
             lines += [f"- `{name}`" for name in names]
+    if overviews:
+        lines += [
+            "",
+            "## Overviews",
+            "",
+            "Package overviews (`<Package>/_package.md`) and the server overview "
+            "(`_server.md`); approve one with `wm-doc approve --service package:<Package>` "
+            "or `--service server`.",
+            "",
+            "| Overview | State |",
+            "| --- | --- |",
+        ]
+        lines += [f"| `{name}` | {state.value} |" for name, state in overviews.items()]
     if orphans:
-        lines += ["", f"## Description files without a service ({len(orphans)})", ""]
+        lines += ["", f"## Description files without a service or package ({len(orphans)})", ""]
         lines += [f"- `{name}`" for name in orphans]
     lines.append("")
     return "\n".join(lines)
@@ -463,26 +493,196 @@ def _field_lines(label: str, fields: list[SignatureField]) -> list[str]:
     return lines
 
 
+@dataclass(frozen=True)
+class AnswerSpec[T]:
+    """What a model answer looks like, and the validated ask-and-check loop for it.
+
+    An answer is accepted only when it parses, passes the disclosure scan, and every
+    identifier-shaped name in it occurs in the facts that were sent; one corrective retry is
+    allowed. Only accepted answers are cached.
+    """
+
+    prompt_version: str
+    schema: dict[str, Any]
+    num_predict: int
+    from_payload: Callable[[Any], T | None]
+    to_payload: Callable[[T], dict[str, Any]]
+    text_of: Callable[[T], str]
+
+    def ask(
+        self, session: ModelSession, messages: list[dict[str, str]], prompt_facts: str
+    ) -> tuple[T | None, bool, tuple[DescribeOutcome, str]]:
+        """Return (answer or None, whether it came from the cache, outcome and note)."""
+        key = session.cache_key(messages, self.prompt_version, self.schema, self.num_predict)
+        if session.cache_dir is not None and not session.refresh:
+            payload = _read_cached_payload(session.cache_dir, key, self.prompt_version)
+            cached = self.from_payload(payload) if payload is not None else None
+            if cached is not None:
+                return cached, True, (DescribeOutcome.CACHED, "")
+        conversation = list(messages)
+        for attempt in range(2):
+            content, failure = session.complete(conversation, self.schema, self.num_predict)
+            if content is None:
+                return None, False, failure
+            try:
+                value = self.from_payload(json.loads(content))
+            except json.JSONDecodeError:
+                value = None
+            if value is None:
+                note = "the model did not return the expected JSON"
+                return None, False, (DescribeOutcome.FAILED, note)
+            answer_text = self.text_of(value)
+            label = unsafe_disclosure_label(answer_text)
+            if label is not None:
+                note = f"the answer failed the disclosure scan: {label}"
+                return None, False, (DescribeOutcome.REJECTED, note)
+            unknown = unknown_names(answer_text, prompt_facts)
+            if not unknown:
+                if session.cache_dir is not None:
+                    _write_cached_payload(
+                        session.cache_dir, key, self.prompt_version, self.to_payload(value)
+                    )
+                return value, False, (DescribeOutcome.GENERATED, "")
+            names = ", ".join(f"`{name}`" for name in unknown[:6])
+            if attempt == 0:
+                with session.lock:
+                    session.stats.retried += 1
+                conversation = [
+                    *messages,
+                    {"role": "assistant", "content": content},
+                    {"role": "user", "content": RETRY_PROMPT_TEMPLATE.format(names=names)},
+                ]
+                continue
+            note = f"the model's answer named things that are not in the facts: {names}"
+            return None, False, (DescribeOutcome.REJECTED, note)
+        raise AssertionError("unreachable")
+
+
+class ModelSession:
+    """One model on one provider, shared by describe and overview runs."""
+
+    def __init__(
+        self,
+        provider: ModelProvider,
+        *,
+        model: str,
+        model_digest: str | None,
+        num_ctx: int,
+        timeout_seconds: int,
+        cache_dir: Path | None,
+        refresh: bool,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.model_digest = model_digest
+        self.num_ctx = num_ctx
+        self.timeout_seconds = timeout_seconds
+        self.cache_dir = cache_dir
+        self.refresh = refresh
+        self.stats = DescribeStats()
+        self.lock = threading.Lock()
+
+    def complete(
+        self, messages: list[dict[str, str]], schema: dict[str, Any], num_predict: int
+    ) -> tuple[str | None, tuple[DescribeOutcome, str]]:
+        """One provider call; refuses answers to prompts the server may have cut off."""
+        try:
+            generation = self.provider.generate(
+                ProviderGenerationRequest(
+                    model=self.model,
+                    messages=messages,
+                    schema=schema,
+                    timeout_seconds=self.timeout_seconds,
+                    num_ctx=self.num_ctx,
+                    num_predict=num_predict,
+                )
+            )
+        except OllamaProviderError as exc:
+            return None, (DescribeOutcome.FAILED, f"generation failed: {exc.safe_message}")
+        # Native Ollama reports prompt_eval_count; the /v1 API reports prompt_tokens.
+        prompt_tokens = generation.metrics.get(
+            "prompt_eval_count", generation.metrics.get("prompt_tokens")
+        )
+        if isinstance(prompt_tokens, int):
+            with self.lock:
+                self.stats.prompt_tokens.append(prompt_tokens)
+            if prompt_tokens >= self.num_ctx - num_predict:
+                return None, (
+                    DescribeOutcome.FAILED,
+                    "the prompt may have been cut off by the model server "
+                    f"({prompt_tokens} prompt tokens for a {self.num_ctx}-token window)",
+                )
+        return generation.content, (DescribeOutcome.GENERATED, "")
+
+    def cache_key(
+        self,
+        messages: list[dict[str, str]],
+        prompt_version: str,
+        schema: dict[str, Any],
+        num_predict: int,
+    ) -> str:
+        payload = {
+            "prompt_version": prompt_version,
+            "model": self.model,
+            "model_digest": self.model_digest or "UNKNOWN",
+            "messages": messages,
+            "schema": schema,
+            "options": {
+                "temperature": TEMPERATURE,
+                "num_ctx": self.num_ctx,
+                "num_predict": num_predict,
+            },
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _cache_path(cache_dir: Path, key: str) -> Path:
+    return cache_dir / key[:2] / f"{key}.json"
+
+
+def _read_cached_payload(cache_dir: Path, key: str, prompt_version: str) -> Any:
+    try:
+        payload = json.loads(_cache_path(cache_dir, key).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("prompt_version") != prompt_version:
+        return None
+    # "narrative" is the key used by the first describe release.
+    return payload.get("answer", payload.get("narrative"))
+
+
+def _write_cached_payload(
+    cache_dir: Path, key: str, prompt_version: str, answer: dict[str, Any]
+) -> None:
+    path = _cache_path(cache_dir, key)
+    payload = {"prompt_version": prompt_version, "answer": answer}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        os.replace(temp, path)
+    except OSError:
+        return  # a cache write failure only costs a regeneration next time
+
+
 class _Run:
     def __init__(
         self,
         services: dict[str, FlowService],
         facts: dict[str, ServiceFacts],
-        provider: ModelProvider,
+        session: ModelSession,
         options: DescribeOptions,
-        model_digest: str | None,
         order: list[str],
     ) -> None:
         self.services = services
         self.facts = facts
-        self.provider = provider
+        self.session = session
         self.options = options
-        self.model_digest = model_digest
         self.position = {name: index for index, name in enumerate(order)}
-        self.stats = DescribeStats()
+        self.stats = session.stats
         self.generated: dict[str, str] = {}
-        self.lock = threading.Lock()
-        self.cache_dir = None if options.no_cache else options.cache_dir
+        self.lock = session.lock
         # Description files as they were before this run. Reading them up front keeps the
         # prompts independent of the order in which parallel requests finish.
         needed = set(order)
@@ -579,23 +779,16 @@ class _Run:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": USER_PROMPT_TEMPLATE.format(facts=prompt_facts)},
         ]
-        key = self.cache_key(messages)
-        narrative: Narrative | None = None
-        from_cache = False
-        if self.cache_dir is not None and not self.options.refresh:
-            narrative = _read_cache(self.cache_dir, key)
-            from_cache = narrative is not None
+        narrative, from_cache, failure = DESCRIBE_SPEC.ask(
+            self.session, messages, prompt_facts
+        )
         if narrative is None:
-            narrative, failure = self.generate(messages, prompt_facts)
-            if narrative is None:
-                outcome, note = failure
-                if existing is not None:
-                    existing.facts_markdown = facts_markdown
-                    existing.current_facts_hash = current_hash
-                    write_doc(path, existing)
-                return DescribeResult(name, outcome, path if existing else None, note, shortened)
-            if self.cache_dir is not None:
-                _write_cache(self.cache_dir, key, narrative)
+            outcome, note = failure
+            if existing is not None:
+                existing.facts_markdown = facts_markdown
+                existing.current_facts_hash = current_hash
+                write_doc(path, existing)
+            return DescribeResult(name, outcome, path if existing else None, note, shortened)
 
         doc = new_doc(
             name,
@@ -616,86 +809,6 @@ class _Run:
         outcome = DescribeOutcome.CACHED if from_cache else DescribeOutcome.GENERATED
         return DescribeResult(name, outcome, path, None, shortened)
 
-    def generate(
-        self, messages: list[dict[str, str]], prompt_facts: str
-    ) -> tuple[Narrative | None, tuple[DescribeOutcome, str]]:
-        conversation = list(messages)
-        for attempt in range(2):
-            try:
-                generation = self.provider.generate(
-                    ProviderGenerationRequest(
-                        model=self.options.model,
-                        messages=conversation,
-                        schema=DESCRIBE_SCHEMA,
-                        timeout_seconds=self.options.timeout_seconds,
-                        num_ctx=self.options.num_ctx,
-                        num_predict=DESCRIBE_NUM_PREDICT,
-                    )
-                )
-            except OllamaProviderError as exc:
-                return None, (DescribeOutcome.FAILED, f"generation failed: {exc.safe_message}")
-            # Native Ollama reports prompt_eval_count; the /v1 API reports prompt_tokens.
-            prompt_tokens = generation.metrics.get(
-                "prompt_eval_count", generation.metrics.get("prompt_tokens")
-            )
-            if isinstance(prompt_tokens, int):
-                with self.lock:
-                    self.stats.prompt_tokens.append(prompt_tokens)
-                if prompt_tokens >= self.options.num_ctx - DESCRIBE_NUM_PREDICT:
-                    return None, (
-                        DescribeOutcome.FAILED,
-                        "the prompt may have been cut off by the model server "
-                        f"({prompt_tokens} prompt tokens for a {self.options.num_ctx}-token "
-                        "window)",
-                    )
-            narrative = parse_narrative(generation.content)
-            if narrative is None:
-                return None, (
-                    DescribeOutcome.FAILED,
-                    "the model did not return the expected JSON",
-                )
-            text = narrative_text(narrative)
-            label = unsafe_disclosure_label(text)
-            if label is not None:
-                return None, (
-                    DescribeOutcome.REJECTED,
-                    f"the answer failed the disclosure scan: {label}",
-                )
-            unknown = unknown_names(text, prompt_facts)
-            if not unknown:
-                return narrative, (DescribeOutcome.GENERATED, "")
-            names = ", ".join(f"`{name}`" for name in unknown[:6])
-            if attempt == 0:
-                with self.lock:
-                    self.stats.retried += 1
-                conversation = [
-                    *messages,
-                    {"role": "assistant", "content": generation.content},
-                    {"role": "user", "content": RETRY_PROMPT_TEMPLATE.format(names=names)},
-                ]
-                continue
-            return None, (
-                DescribeOutcome.REJECTED,
-                f"the model's answer named things that are not in the facts: {names}",
-            )
-        raise AssertionError("unreachable")
-
-    def cache_key(self, messages: list[dict[str, str]]) -> str:
-        payload = {
-            "prompt_version": DESCRIBE_PROMPT_VERSION,
-            "model": self.options.model,
-            "model_digest": self.model_digest or "UNKNOWN",
-            "messages": messages,
-            "schema": DESCRIBE_SCHEMA,
-            "options": {
-                "temperature": TEMPERATURE,
-                "num_ctx": self.options.num_ctx,
-                "num_predict": DESCRIBE_NUM_PREDICT,
-            },
-        }
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
 
 def parse_narrative(content: str) -> Narrative | None:
     try:
@@ -713,13 +826,15 @@ def narrative_from_payload(payload: Any) -> Narrative | None:
         value = payload.get(name)
         if not isinstance(value, str):
             return None
-        texts[name] = _clean(value, limit)
+        texts[name] = clean_text(value, limit)
     steps_value = payload.get("steps")
     comment = payload.get("designer_comment")
     if not isinstance(steps_value, list) or not isinstance(comment, str):
         return None
     steps = tuple(
-        _clean(step, MAX_STEP_CHARS) for step in steps_value[:MAX_STEPS] if isinstance(step, str)
+        clean_text(step, MAX_STEP_CHARS)
+        for step in steps_value[:MAX_STEPS]
+        if isinstance(step, str)
     )
     # Small models sometimes emit punctuation-only items such as ",".
     steps = tuple(step for step in steps if sum(char.isalpha() for char in step) >= 3)
@@ -731,7 +846,7 @@ def narrative_from_payload(payload: Any) -> Narrative | None:
         data_effects=texts["data_effects"],
         steps=steps,
         error_handling=texts["error_handling"],
-        designer_comment=_clean(comment.replace("`", ""), MAX_DESIGNER_COMMENT_CHARS),
+        designer_comment=clean_text(comment.replace("`", ""), MAX_DESIGNER_COMMENT_CHARS),
     )
 
 
@@ -759,7 +874,17 @@ def narrative_payload(narrative: Narrative) -> dict[str, Any]:
     }
 
 
-def _clean(text: str, limit: int) -> str:
+DESCRIBE_SPEC: AnswerSpec[Narrative] = AnswerSpec(
+    prompt_version=DESCRIBE_PROMPT_VERSION,
+    schema=DESCRIBE_SCHEMA,
+    num_predict=DESCRIBE_NUM_PREDICT,
+    from_payload=lambda payload: narrative_from_payload(payload),
+    to_payload=lambda narrative: narrative_payload(narrative),
+    text_of=lambda narrative: narrative_text(narrative),
+)
+
+
+def clean_text(text: str, limit: int) -> str:
     flat = " ".join(text.split())
     if flat[:1] in {"#", ">", "-", "*", "+", "|"}:
         flat = "\\" + flat
@@ -768,29 +893,3 @@ def _clean(text: str, limit: int) -> str:
     cut = flat[:limit]
     sentence_end = cut.rfind(". ")
     return cut[: sentence_end + 1] if sentence_end > limit // 2 else cut.rstrip() + "..."
-
-
-def _cache_path(cache_dir: Path, key: str) -> Path:
-    return cache_dir / key[:2] / f"{key}.json"
-
-
-def _read_cache(cache_dir: Path, key: str) -> Narrative | None:
-    try:
-        payload = json.loads(_cache_path(cache_dir, key).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict) or payload.get("prompt_version") != DESCRIBE_PROMPT_VERSION:
-        return None
-    return narrative_from_payload(payload.get("narrative"))
-
-
-def _write_cache(cache_dir: Path, key: str, narrative: Narrative) -> None:
-    path = _cache_path(cache_dir, key)
-    payload = {"prompt_version": DESCRIBE_PROMPT_VERSION, "narrative": narrative_payload(narrative)}
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(".tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-        os.replace(temp, path)
-    except OSError:
-        return  # a cache write failure only costs a regeneration next time

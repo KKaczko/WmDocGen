@@ -30,7 +30,15 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
 - Prompts (`pseudocode.py`, `callgraph.py`, `summarizer.py`): a per-service pseudo-code view,
   callee-first ordering (Tarjan SCC), context fitting and the name-grounding check.
 - Descriptions (`service_docs.py`, `describer.py`, `disclosure.py`): description files, the
-  describe/approve/status/export workflow, and the disclosure scan for model text.
+  describe/approve/status/export workflow, the shared validated model call (`AnswerSpec`,
+  `ModelSession`), and the disclosure scan for model text.
+- Overviews (`overviews.py`, `render/package_markdown.py`): deterministic package facts
+  (entry points, services, own data effects, calls between packages), package pages, and the
+  package and server overview files written by `overview`.
+- Analysis cache (`analysis_cache.py`): reuses the last `AnalysisResult` of a packages
+  directory while the tool version, configuration, `processes.yml` and every file's path,
+  size and mtime are unchanged. Per-service call graphs (`render/service_graph.py`) are
+  written only when `--render-graphs` asks for images.
 - Providers (`ollama_provider.py`, `openai_compatible_provider.py`, `provider_probe.py`).
 - Rendering (`render/`), `stats.py`, `shapes.py`, `scope_analysis.py` (focused publication).
 
@@ -49,8 +57,11 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
   (`status` draft|approved, `model`, `facts_hash`, `text_hash`), a narrative, a Notes section the
   tool never writes, and a facts block between `wm-doc:facts` markers that is always refreshed.
   An approved narrative, or one whose text differs from `text_hash`, is never overwritten. No
-  timestamps.
-- Model use is limited to `describe`: one service per prompt, sized to `--num-ctx`; every
+  timestamps. Package and server overviews use the same format at `<Package>/_package.md`
+  (`service: package:<Package>`) and `_server.md` (`service: server`); their facts hash covers
+  the package or server facts without the Purpose lines sent as context.
+- Model use is limited to `describe` and `overview`: one service, package or the server per
+  prompt, sized to `--num-ctx`; every
   identifier-shaped name in the answer must occur in the facts sent; the disclosure scan must pass;
   one corrective retry; otherwise the answer is rejected. Only validated drafts are cached.
 - Facts are never inferred from names. Every data-effect row states how it is known. Artifact
