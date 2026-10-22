@@ -39,7 +39,7 @@ from wm_doc.render.service_summary import derived_layer, render_service_summary
 
 if TYPE_CHECKING:
     from wm_doc.effects import ServiceFacts
-    from wm_doc.summarizer import AiServiceSummary
+    from wm_doc.service_docs import ServiceDoc
 
 IMPORTANCE_ORDER = {"IMPORTANT": 0, "NORMAL": 1, "LOW": 2}
 MAX_OUTLINE_DEPTH = 5
@@ -53,25 +53,13 @@ _TEMPLATE = Template(
 
 {{ summary_text }}
 
-{% if ai_summary %}
-## AI Description
+{% if doc %}
+## Description
 
-{% if ai_summary.status.value == "OK" %}
-> Written by a local language model (`{{ ai_model }}`) from the facts on this page and the
-> AI descriptions of the services it calls. It has not been reviewed: check it against the
-> facts below before relying on it.
-{% if ai_summary.facts_shortened %}
-> Some detail was left out to fit the model's context window.
-{% endif %}
+> {{ doc_badge }}
 
-**In short:** {{ ai_text(ai_summary.summary) }}
+{{ doc_body }}
 
-{{ ai_text(ai_summary.description) }}
-
-{% else %}
-No AI description is shown: {{ ai_text(ai_summary.note or "no reason was recorded").rstrip(".") }}.
-
-{% endif %}
 {% endif %}
 ## Identity
 
@@ -304,8 +292,7 @@ def render_service_markdown(
     process_definitions: dict[str, ProcessDefinition] | None = None,
     *,
     verbose: bool = False,
-    ai_summary: AiServiceSummary | None = None,
-    ai_model: str | None = None,
+    doc: ServiceDoc | None = None,
     facts: ServiceFacts | None = None,
 ) -> str:
     incoming_dependencies = incoming_dependencies or []
@@ -341,9 +328,9 @@ def render_service_markdown(
     return _TEMPLATE.render(
         service=service,
         verbose=verbose,
-        ai_summary=ai_summary,
-        ai_model=ai_model or "unknown model",
-        ai_text=_ai_text,
+        doc=doc,
+        doc_badge=_doc_badge(doc) if doc is not None else "",
+        doc_body=_doc_body(doc) if doc is not None else "",
         facts=facts,
         render_effects=render_effects_table,
         render_entry_points=render_entry_points_table,
@@ -447,10 +434,38 @@ def render_entry_points_table(facts: ServiceFacts) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _ai_text(text: str | None) -> str:
-    """Model text as one Markdown paragraph that cannot open a heading or block."""
-    flat = " ".join((text or "").split())
-    return "\\" + flat if flat[:1] in {"#", ">", "-", "*", "+", "|"} else flat
+def _doc_badge(doc: ServiceDoc) -> str:
+    """One line saying who wrote the description and whether it was reviewed."""
+    from wm_doc.service_docs import DocState
+
+    state = doc.state()
+    model = f"`{doc.model}`" if doc.model else "a local language model"
+    if state is DocState.APPROVED:
+        return "**Approved.** Reviewed description from `service-docs`."
+    if state is DocState.STALE:
+        return (
+            "**Approved, but the facts have changed since.** Review the description against "
+            "the facts below."
+        )
+    if state is DocState.EDITED:
+        return f"**Edited draft, not yet approved.** First written by {model}."
+    return (
+        f"**Draft, not reviewed.** Written by {model} from the facts on this page; check it "
+        "before relying on it."
+    )
+
+
+def _doc_body(doc: ServiceDoc) -> str:
+    """The narrative with its headings moved one level down, plus any human notes."""
+    from wm_doc.service_docs import NOTES_PLACEHOLDER
+
+    body = "\n".join(
+        f"#{line}" if line.startswith("## ") else line for line in doc.narrative.splitlines()
+    ).strip()
+    notes = doc.notes.strip()
+    if notes and notes != NOTES_PLACEHOLDER:
+        body += f"\n\n### Notes\n\n{notes}"
+    return body
 
 
 def service_markdown_filename(full_name: str) -> str:
@@ -967,8 +982,7 @@ def write_service_markdown(
     processes: list[ProcessDefinition] | None = None,
     *,
     verbose: bool = False,
-    ai_summaries: Mapping[str, AiServiceSummary] | None = None,
-    ai_model: str | None = None,
+    service_docs: Mapping[str, ServiceDoc] | None = None,
     service_facts: Mapping[str, ServiceFacts] | None = None,
 ) -> list[Path]:
     service_dir = output_dir / "services"
@@ -978,7 +992,7 @@ def write_service_markdown(
     memberships_by_service = _process_memberships_by_service(process_memberships or [])
     process_definitions = {process.process_id: process for process in processes or []}
     filenames = service_markdown_filenames(services)
-    ai_summaries = ai_summaries or {}
+    service_docs = service_docs or {}
     for service in sorted(services, key=lambda item: item.identity.full_name.casefold()):
         path = service_dir / filenames[service.identity.full_name]
         path.write_text(
@@ -988,8 +1002,7 @@ def write_service_markdown(
                 memberships_by_service.get(service.identity.full_name, []),
                 process_definitions,
                 verbose=verbose,
-                ai_summary=ai_summaries.get(service.identity.full_name),
-                ai_model=ai_model,
+                doc=service_docs.get(service.identity.full_name),
                 facts=(service_facts or {}).get(service.identity.full_name),
             ),
             encoding="utf-8",
