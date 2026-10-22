@@ -67,6 +67,7 @@ from wm_doc.openai_compatible_provider import (
     OpenAICompatibleProvider,
     resolve_api_key,
 )
+from wm_doc.provider_probe import probe_provider
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.artifact_markdown import write_artifact_inventory
 from wm_doc.render.business_context_markdown import write_business_context_outputs
@@ -227,6 +228,9 @@ def _default_business_enrichment_provider_factory(
         allow_remote_provider=allow_remote_provider,
         connect_timeout_seconds=connect_timeout_seconds,
         timeout_seconds=timeout_seconds,
+        # The native API can sit behind the same authenticating proxy; the token still
+        # comes only from the environment variable.
+        api_key=resolve_api_key(api_key_env) if api_key_env else None,
     )
 
 
@@ -326,6 +330,48 @@ def probe_shapes(
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(report, encoding="utf-8")
     typer.echo(report)
+
+
+@app.command("provider-probe")
+def provider_probe_command(
+    url: Annotated[
+        str,
+        typer.Option("--url", help="Server URL, e.g. https://server/ollama or .../ollama/v1."),
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Also check that this model is installed.")
+    ] = None,
+    api_key_env: Annotated[
+        str | None,
+        typer.Option(
+            "--api-key-env",
+            help="Environment variable holding the bearer token (never passed as a flag).",
+        ),
+    ] = None,
+    allow_remote_provider: Annotated[
+        bool,
+        typer.Option("--allow-remote-provider", help="Allow non-loopback server URLs."),
+    ] = False,
+    timeout_seconds: Annotated[
+        int, typer.Option("--timeout-seconds", help="Timeout per request in seconds.")
+    ] = 10,
+) -> None:
+    """Report whether a server answers on the native or the OpenAI-compatible API."""
+    api_key = resolve_api_key(api_key_env) if api_key_env else None
+    if api_key_env and not api_key:
+        typer.echo(f"Environment variable {api_key_env} is not set or empty.", err=True)
+        raise typer.Exit(code=2)
+    report = probe_provider(
+        url,
+        api_key=api_key,
+        model=model,
+        allow_remote_provider=allow_remote_provider,
+        timeout_seconds=timeout_seconds,
+    )
+    for line in report.lines:
+        typer.echo(line)
+    if not (report.native_ok or report.openai_ok):
+        raise typer.Exit(code=1)
 
 
 @app.command("build-business-context")
@@ -850,6 +896,32 @@ def describe(
     cache_dir: Annotated[
         Path | None, typer.Option("--cache-dir", help="Cache directory for validated drafts.")
     ] = None,
+    provider_kind: Annotated[
+        str,
+        typer.Option(
+            "--provider",
+            help="'ollama' (native API, also through a proxy path) or 'openai-compatible' "
+            "(the /v1 API; set --num-ctx to the server's configured context length).",
+        ),
+    ] = "ollama",
+    api_key_env: Annotated[
+        str | None,
+        typer.Option(
+            "--api-key-env",
+            help="Environment variable holding a bearer token for a proxied server. The token "
+            "is never read from a flag.",
+        ),
+    ] = None,
+    parallel: Annotated[
+        int,
+        typer.Option(
+            "--parallel",
+            min=1,
+            max=16,
+            help="Requests in flight at once; useful only if the server runs several in "
+            "parallel (OLLAMA_NUM_PARALLEL).",
+        ),
+    ] = 1,
 ) -> None:
     """Write or refresh per-service description files with a local model, callees first."""
     if not model.strip():
@@ -897,6 +969,8 @@ def describe(
             allow_remote_provider=allow_remote_provider,
             connect_timeout_seconds=HTTP_CONNECT_TIMEOUT_SECONDS,
             timeout_seconds=timeout_seconds,
+            provider_kind=provider_kind.strip(),
+            api_key_env=(api_key_env or "").strip() or None,
         )
         _results, describe_stats = describe_services(
             analysis,
@@ -914,6 +988,7 @@ def describe(
                 num_ctx=num_ctx,
                 timeout_seconds=timeout_seconds,
                 external_systems=external_catalog,
+                parallel=parallel,
             ),
             progress=report_progress,
         )

@@ -22,7 +22,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from collections.abc import Callable, Iterable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -146,6 +148,7 @@ class DescribeOptions:
     num_ctx: int = DEFAULT_NUM_CTX
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS
     external_systems: ExternalSystemCatalog = EMPTY_CATALOG
+    parallel: int = 1
 
 
 @dataclass(frozen=True)
@@ -200,15 +203,56 @@ def describe_services(
     order = [name for name in summary_order(services.values()) if name in wanted]
     facts = compute_service_facts(analysis, options.external_systems)
     check = provider.check(options.model)
-    run = _Run(services, facts, provider, options, check.model_digest)
-    results: list[DescribeResult] = []
-    for position, name in enumerate(order, start=1):
-        result = run.describe(name)
+    run = _Run(services, facts, provider, options, check.model_digest, order)
+    results: dict[str, DescribeResult] = {}
+
+    def finish(result: DescribeResult) -> None:
         run.stats.add(result)
-        results.append(result)
+        results[result.service] = result
         if progress is not None:
-            progress(position, len(order), result)
-    return results, run.stats
+            progress(len(results), len(order), result)
+
+    if options.parallel <= 1:
+        for name in order:
+            finish(run.describe(name))
+    else:
+        _describe_in_parallel(run, order, options.parallel, finish)
+    return [results[name] for name in order], run.stats
+
+
+def _describe_in_parallel(
+    run: _Run, order: list[str], workers: int, finish: Callable[[DescribeResult], None]
+) -> None:
+    """Run up to *workers* services at once; a service starts after its earlier callees.
+
+    Callee context only ever comes from services earlier in the call-graph order, which are
+    finished before a caller starts, so the files are the same as in a sequential run.
+    """
+    waiting_on = {
+        name: {
+            callee
+            for callee in run.local_callees(name)
+            if callee in run.position and run.position[callee] < run.position[name]
+        }
+        for name in order
+    }
+    pending = list(order)
+    done: set[str] = set()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        running: dict[Future[DescribeResult], str] = {}
+        while pending or running:
+            for name in list(pending):
+                if len(running) >= workers:
+                    break
+                if waiting_on[name] <= done:
+                    pending.remove(name)
+                    running[pool.submit(run.describe, name)] = name
+            if not running:
+                raise DescribeError("Could not schedule the remaining services.")
+            finished, _ = wait(running, return_when=FIRST_COMPLETED)
+            for future in sorted(finished, key=lambda item: run.position[running[item]]):
+                done.add(running.pop(future))
+                finish(future.result())
 
 
 def deterministic_facts(
@@ -427,38 +471,66 @@ class _Run:
         provider: BusinessEnrichmentProvider,
         options: DescribeOptions,
         model_digest: str | None,
+        order: list[str],
     ) -> None:
         self.services = services
         self.facts = facts
         self.provider = provider
         self.options = options
         self.model_digest = model_digest
+        self.position = {name: index for index, name in enumerate(order)}
         self.stats = DescribeStats()
         self.generated: dict[str, str] = {}
-        self.docs: dict[str, ServiceDoc | None] = {}
+        self.lock = threading.Lock()
         self.cache_dir = None if options.no_cache else options.cache_dir
+        # Description files as they were before this run. Reading them up front keeps the
+        # prompts independent of the order in which parallel requests finish.
+        needed = set(order)
+        for name in order:
+            needed.update(self.local_callees(name))
+        self.docs: dict[str, ServiceDoc | None] = {
+            name: read_doc(self.path(name)) for name in sorted(needed)
+        }
 
     # Context ---------------------------------------------------------------------------
 
+    def local_callees(self, name: str) -> list[str]:
+        return sorted(
+            {
+                dependency.target_service
+                for dependency in self.services[name].unique_dependencies
+                if dependency.resolved
+                and dependency.target_service in self.services
+                and dependency.target_service != name
+            }
+        )
+
     def doc(self, name: str) -> ServiceDoc | None:
-        if name not in self.docs:
-            self.docs[name] = read_doc(self.path(name))
-        return self.docs[name]
+        return self.docs.get(name)
 
     def path(self, name: str) -> Path:
         return doc_path(self.options.docs_dir, self.services[name].identity.package, name)
 
-    def callee_note(self, target: str) -> str | None:
-        if target not in self.services:
+    def callee_notes_for(self, current: str) -> Callable[[str], str | None]:
+        """Callee context for *current*: approved or edited text first, then drafts."""
+
+        def note(target: str) -> str | None:
+            if target not in self.services:
+                return None
+            existing = self.doc(target)
+            if existing is not None and existing.protected:
+                return existing.purpose_line()
+            earlier = self.position.get(target, len(self.position)) < self.position[current]
+            if earlier:
+                with self.lock:
+                    generated = self.generated.get(target)
+                if generated:
+                    return generated
+            if existing is not None:
+                return existing.purpose_line()
             return None
-        existing = self.doc(target)
-        if existing is not None and existing.protected:
-            return existing.purpose_line()
-        if target in self.generated:
-            return self.generated[target]
-        if existing is not None:
-            return existing.purpose_line()
-        return None
+
+        return note
 
     def external_note(self, target: str) -> str | None:
         system = self.options.external_systems.match(target)
@@ -489,12 +561,13 @@ class _Run:
             if not existing.protected:
                 line = existing.purpose_line()
                 if line:
-                    self.generated[name] = line
+                    with self.lock:
+                        self.generated[name] = line
             return DescribeResult(name, outcome, path)
 
         prompt_facts, shortened = fit_facts(
             service,
-            self.callee_note,
+            self.callee_notes_for(name),
             comments,
             self.options.num_ctx,
             facts_text=facts.text(),
@@ -536,10 +609,10 @@ class _Run:
             doc.notes = existing.notes
             doc.extra_front_matter = existing.extra_front_matter
         write_doc(path, doc)
-        self.docs[name] = doc
         line = doc.purpose_line()
         if line:
-            self.generated[name] = line
+            with self.lock:
+                self.generated[name] = line
         outcome = DescribeOutcome.CACHED if from_cache else DescribeOutcome.GENERATED
         return DescribeResult(name, outcome, path, None, shortened)
 
@@ -561,9 +634,13 @@ class _Run:
                 )
             except OllamaProviderError as exc:
                 return None, (DescribeOutcome.FAILED, f"generation failed: {exc.safe_message}")
-            prompt_tokens = generation.metrics.get("prompt_eval_count")
+            # Native Ollama reports prompt_eval_count; the /v1 API reports prompt_tokens.
+            prompt_tokens = generation.metrics.get(
+                "prompt_eval_count", generation.metrics.get("prompt_tokens")
+            )
             if isinstance(prompt_tokens, int):
-                self.stats.prompt_tokens.append(prompt_tokens)
+                with self.lock:
+                    self.stats.prompt_tokens.append(prompt_tokens)
                 if prompt_tokens >= self.options.num_ctx - DESCRIBE_NUM_PREDICT:
                     return None, (
                         DescribeOutcome.FAILED,
@@ -587,7 +664,8 @@ class _Run:
                 return narrative, (DescribeOutcome.GENERATED, "")
             names = ", ".join(f"`{name}`" for name in unknown[:6])
             if attempt == 0:
-                self.stats.retried += 1
+                with self.lock:
+                    self.stats.retried += 1
                 conversation = [
                     *messages,
                     {"role": "assistant", "content": generation.content},

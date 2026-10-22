@@ -114,8 +114,18 @@ class OllamaBusinessEnrichmentProvider:
         allow_remote_provider: bool = False,
         connect_timeout_seconds: int = HTTP_CONNECT_TIMEOUT_SECONDS,
         timeout_seconds: int = HTTP_TIMEOUT_SECONDS,
+        api_key: str | None = None,
     ) -> None:
-        self.base_url = validate_ollama_url(base_url, allow_remote_provider=allow_remote_provider)
+        # A shared server behind an authenticating proxy is reached at a path such as
+        # https://server/ollama with a bearer token. The plain loopback default stays
+        # root-only and unauthenticated.
+        self.base_url = validate_ollama_url(
+            base_url,
+            allow_remote_provider=allow_remote_provider,
+            allow_path=allow_remote_provider or api_key is not None,
+        )
+        require_token_transport(self.base_url, api_key)
+        self._api_key = api_key
         self.connect_timeout_seconds = connect_timeout_seconds
         self.timeout_seconds = timeout_seconds
         self._opener = urllib.request.build_opener(
@@ -247,8 +257,16 @@ class OllamaBusinessEnrichmentProvider:
             "Ollama M8c draft-contract probe did not preserve the synthetic evidence id.",
         )
 
+    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        headers = dict(extra or {})
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
     def _get_json(self, path: str, *, timeout: int) -> dict[str, Any]:
-        request = urllib.request.Request(_join_api_url(self.base_url, path), method="GET")
+        request = urllib.request.Request(
+            _join_api_url(self.base_url, path), method="GET", headers=self._headers()
+        )
         return self._execute_json_request(request, timeout=timeout)
 
     def _post_json(self, path: str, payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
@@ -256,9 +274,22 @@ class OllamaBusinessEnrichmentProvider:
             _join_api_url(self.base_url, path),
             method="POST",
             data=json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=self._headers(
+                {"Content-Type": "application/json", "Accept": "application/json"}
+            ),
         )
         return self._execute_json_request(request, timeout=timeout)
+
+    def model_context_length(self, model: str) -> int | None:
+        """The context length the model advertises via /api/show, when available."""
+        info = self._post_json("/api/show", {"model": model}, timeout=self.connect_timeout_seconds)
+        model_info = info.get("model_info") if isinstance(info, dict) else None
+        if not isinstance(model_info, dict):
+            return None
+        for key, value in sorted(model_info.items()):
+            if str(key).endswith(".context_length") and isinstance(value, int):
+                return value
+        return None
 
     def _execute_json_request(
         self,
@@ -358,6 +389,27 @@ def validate_ollama_url(
         )
     path = parsed.path.rstrip("/") if allow_path else ""
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def require_token_transport(base_url: str, api_key: str | None) -> None:
+    """Refuse to send a token to a remote host over plain HTTP.
+
+    A token to loopback (an SSH tunnel, say) never leaves the machine; one to a remote host
+    over plain HTTP would be on the wire in clear.
+    """
+    if not api_key:
+        return
+    parsed = urllib.parse.urlparse(base_url)
+    loopback = (parsed.hostname or "").casefold() in LOOPBACK_HOSTS
+    if parsed.scheme != "https" and not loopback:
+        raise OllamaProviderError(
+            BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE,
+            "Sending an API key to a remote host requires https. Use an https URL "
+            "or tunnel the endpoint to loopback.",
+        )
 
 
 def _join_api_url(base_url: str, path: str) -> str:
