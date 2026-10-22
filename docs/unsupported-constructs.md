@@ -1,6 +1,6 @@
 # Unsupported Constructs
 
-Unsupported or only partially supported in M8c:
+Unsupported or only partially supported in M12:
 
 - Full FLOW execution semantics
 - Full MAP operation semantics beyond observed evidence extraction
@@ -40,7 +40,9 @@ Unsupported or only partially supported in M8c:
 - Runtime-only Integration Server configuration
 - Cloud provider defaults, RAG, arbitrary external documents, prompt editing UI, model fine-tuning,
   impact analysis, and snapshot comparison
-- Model-generated claims without valid `business-context.v1` evidence references
+- Model-written text that names anything absent from the facts sent with its prompt
+- Semantic content of JDBC adapter services (tables, SQL), trigger conditions, REST paths and
+  scheduler entries; only exact name references found in their `node.ndf` are used
 
 M5-lite keeps parseable service artifacts with explicit unsupported `svc_type` values, after
 surrounding whitespace is trimmed, as `OPAQUE` services. Missing, empty, whitespace-only,
@@ -77,19 +79,12 @@ selector values, fuzzy matching, short service-name fallback, package path subst
 filesystem-folder targeting. Target namespace matching is canonical namespace segment-prefix
 matching only.
 
-M8b supports deterministic `business-context.v1` packs from focused M8a artifacts only. It does not
-call Ollama, select models, build prompts, validate model responses, cache LLM output, or infer
-business owners, actors, outcomes, external-system names, SLAs, database technologies, or legal
-meaning from technical names. It also does not extend `processes.yml` with owner/actor/outcome
-metadata.
-
-M8c supports local structured Ollama enrichment from `business-context.v1` only. It does not reparse
-packages, read arbitrary external documents, use RAG, call cloud providers by default, persist raw
-prompts or raw model responses, cache invalid output, capture raw drafts for debugging, or run
-schema-correction retry loops. Ollama produces only a small transient draft; the app owns final
-`business-result.v1` IDs, status, provenance, validation metadata, and confidence buckets. Draft
-claims and inferences are rejected unless they cite valid context evidence IDs. M8c Markdown is
-app-rendered from validated `business-result.v1`; it is not canonical technical analysis.
+M12 descriptions (`wm-doc describe`) use only facts the tool established from package files: the
+pseudo-code view, usage and data-effect facts, declared external systems and developer step
+comments. They do not read arbitrary external documents, use RAG, call cloud providers, persist raw
+prompts or raw model responses, or cache rejected output. They do not infer owners, actors,
+schedules, tables or legal meaning from names. The earlier M8b/M8c business-context and
+business-enrichment path was removed in M12.
 
 M3 extracts static `INVOKE` and `MAPINVOKE` targets when a literal `SERVICE` attribute is present.
 Targets that are not present in the analyzed snapshot are retained as unresolved call occurrences

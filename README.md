@@ -154,7 +154,6 @@ such artifacts (key names and counts, no values) so these can be added later fro
 | `provider-probe` | Check how a model server can be reached |
 | `probe-shapes` | Key layout of triggers, descriptors and adapter services (no values) |
 | `scan` | Package and artifact inventory only |
-| `ollama-test`, `build-business-context`, `enrich-business` | Earlier business-enrichment path; frozen and planned for removal |
 
 ## Safety
 
@@ -168,7 +167,8 @@ such artifacts (key names and counts, no values) so these can be added later fro
 
 ## Output reference
 
-`wm-doc analyze` writes `analysis.json` (schema `analysis.v9`), `index.md`, `LIMITATIONS.md`,
+`wm-doc analyze` writes `analysis.json` (schema `analysis.v10`; each fact is stored once, on
+the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,
 `entrypoints.md`, `artifacts.md`, `services/*.md`, `documents/*.md`, `graphs/*.dot` and
 `graphs/index.md`, `processes/*.md` when processes are declared, `service-catalogue.md` with
 `--docs-dir`, and SVG/PNG graphs with `--render-graphs`. Before writing it removes only these

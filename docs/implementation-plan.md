@@ -1,5 +1,9 @@
 # Implementation Plan
 
+> Historical milestone log. The M8b/M8c business-context and business-enrichment sections
+> describe a path that was removed in M12; see `AGENTS.md` and `docs/architecture.md` for the
+> current design.
+
 ## M0 Setup + Inventory
 
 Implemented in this milestone:

@@ -57,21 +57,15 @@ M8a fixture note:
   `scope.json` as derived publication metadata. Scoped DOT files use focused names such as
   `graphs/scope.dot` so they are not mistaken for global dependency or document graphs.
 
-M8b fixture note:
+M12 fixture note:
 
-- Deterministic business context tests consume focused M8a fixture outputs plus temporary process
-  catalogs. They do not modify `samples/`, add business facts to fixture packages, or call a model.
-- The generated `business-context.v1` files are derived review packs for future enrichment. They
-  retain source hashes and evidence IDs but do not claim business ownership, external-system names,
-  runtime order, or business outcomes.
-
-M8c fixture note:
-
-- Structured business enrichment tests use generated M8b context packs and deterministic fake
-  provider responses. They do not modify `samples/`, install or require Ollama, or add approved
-  business metadata to fixture packages.
-- Real Ollama use remains an optional local audit. Model-authored claims are validated against
-  `business-context.v1` evidence IDs and rendered separately from canonical fixture analysis.
+- Description-file tests run `describe` over the samples, copies of them and synthetic packages
+  with deterministic fake model responses. They do not modify `samples/`, install or require
+  Ollama, or add business facts to fixture packages.
+- Real Ollama use remains an optional local check. Model-written text is checked against the facts
+  sent with each prompt and kept in separate description files, never in `analysis.json`.
+- No production artifacts are in the repository. Trigger, descriptor, adapter-service and
+  connection behaviour is covered by synthetic `node.ndf` files only.
 
 ## PGP
 
