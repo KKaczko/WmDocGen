@@ -21,7 +21,13 @@ from wm_doc.business_enrichment import (
 from wm_doc.business_result_schema import BusinessResultLanguage
 from wm_doc.config import AppConfig, load_config
 from wm_doc.discovery import scan_path
-from wm_doc.external_systems import ExternalSystemsError, load_external_systems
+from wm_doc.effects import compute_service_facts
+from wm_doc.external_systems import (
+    EMPTY_CATALOG,
+    ExternalSystemCatalog,
+    ExternalSystemsError,
+    load_external_systems,
+)
 from wm_doc.graph_publish import (
     GRAPH_RENDER_TIMEOUT_SECONDS,
     GraphRenderFormat,
@@ -95,6 +101,7 @@ from wm_doc.scope_analysis import (
     services_for_scope,
     validate_scope_request,
 )
+from wm_doc.shapes import render_shapes
 from wm_doc.stats import render_stats
 from wm_doc.summarizer import (
     DEFAULT_NUM_CTX,
@@ -131,6 +138,27 @@ AllPackagesOption = Annotated[
         help="Do not skip Wm*, Default or system packages by default.",
     ),
 ]
+
+
+ExternalSystemsOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--external-systems",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="YAML catalog naming the systems behind namespaces outside the analysed packages.",
+    ),
+]
+
+
+def _load_external_systems_or_exit(path: Path | None) -> ExternalSystemCatalog:
+    try:
+        return load_external_systems(path)
+    except ExternalSystemsError as exc:
+        typer.echo(f"EXTERNAL_SYSTEMS_INVALID: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
 
 
 def _with_package_selection(
@@ -254,6 +282,35 @@ def stats(
         load_config(config), include_package, exclude_package, all_packages
     )
     report = render_stats(analyze_path(packages_path, app_config, None))
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(report, encoding="utf-8")
+    typer.echo(report)
+
+
+@app.command("probe-shapes")
+def probe_shapes(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Also write the report to this Markdown file."),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ] = None,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
+) -> None:
+    """Print node.ndf key paths of triggers, descriptors and adapters (no values)."""
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
+    analysis = analyze_path(packages_path, app_config, None)
+    report = render_shapes(analysis, packages_path)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(report, encoding="utf-8")
@@ -621,6 +678,7 @@ def analyze(
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
+    external_systems_file: ExternalSystemsOption = None,
 ) -> None:
     """Analyze supported services and emit deterministic technical outputs."""
     try:
@@ -637,6 +695,7 @@ def analyze(
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
+    external_catalog = _load_external_systems_or_exit(external_systems_file)
     analysis = analyze_path(
         packages_path,
         app_config,
@@ -677,7 +736,12 @@ def analyze(
             raise typer.Exit(code=scope_output.exit_code)
         return
     report, graph_failures = _write_full_outputs(
-        output, analysis, render_graphs_mode, graphviz_dot, verbose=verbose
+        output,
+        analysis,
+        render_graphs_mode,
+        graphviz_dot,
+        verbose=verbose,
+        external_systems=external_catalog,
     )
     typer.echo(report)
     if graph_failures:
@@ -726,6 +790,7 @@ def summarize(
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
+    external_systems_file: ExternalSystemsOption = None,
     ollama_url: Annotated[
         str,
         typer.Option("--ollama-url", help="Ollama provider URL."),
@@ -767,6 +832,7 @@ def summarize(
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
+    external_catalog = _load_external_systems_or_exit(external_systems_file)
     analysis = analyze_path(
         packages_path,
         app_config,
@@ -799,6 +865,7 @@ def summarize(
                 refresh=refresh,
                 num_ctx=num_ctx,
                 timeout_seconds=timeout_seconds,
+                external_systems=external_catalog,
             ),
             progress=report_progress,
         )
@@ -816,6 +883,7 @@ def summarize(
         graphviz_dot,
         verbose=verbose,
         ai_bundle=bundle,
+        external_systems=external_catalog,
     )
     tokens = stats.prompt_tokens
     typer.echo(report)
@@ -843,6 +911,7 @@ def _write_full_outputs(
     *,
     verbose: bool,
     ai_bundle: ServiceSummaryBundle | None = None,
+    external_systems: ExternalSystemCatalog = EMPTY_CATALOG,
 ) -> tuple[str, list[GraphRenderResult]]:
     """Write the complete (unscoped) documentation set; return the report and failures."""
     output.mkdir(parents=True, exist_ok=True)
@@ -862,6 +931,7 @@ def _write_full_outputs(
         verbose=verbose,
         ai_summaries=ai_bundle.by_service() if ai_bundle else None,
         ai_model=ai_bundle.model if ai_bundle else None,
+        service_facts=compute_service_facts(analysis, external_systems),
     )
     ai_summaries_path: str | None = None
     if ai_bundle is not None:

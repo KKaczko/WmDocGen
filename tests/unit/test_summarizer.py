@@ -238,6 +238,8 @@ def test_summarize_passes_callee_summaries_and_uses_cache(
     assert all(item.status is SummaryStatus.OK for item in by_service.values())
     caller_prompt = _user_prompt_for(provider, READ_CONFIG)
     assert f"CALL {SELECT_FROM_CONFIG}  # Summary of `{SELECT_FROM_CONFIG}`." in caller_prompt
+    assert "data and systems touched (including services it calls):" in caller_prompt
+    assert "filename `./packages/PGP/config/config.xml` [literal]" in caller_prompt
     assert all(request.num_ctx == bundle.num_ctx for request in provider.requests)
 
     second_provider = FakeSummaryProvider()

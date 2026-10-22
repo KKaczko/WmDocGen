@@ -16,6 +16,7 @@ from wm_doc.ir import (
     AnalysisResult,
     AnalyzedPackage,
     ArtifactCandidate,
+    ArtifactReference,
     AttributeClassification,
     AttributeValue,
     CallOccurrence,
@@ -64,6 +65,7 @@ from wm_doc.ir import (
     ProcessEntrypointStatus,
     ProcessServiceMembership,
     ProcessUnresolvedCall,
+    ReferenceTargetKind,
     ServiceAnalysisStatus,
     ServiceDescriptionStatus,
     ServiceDocumentDependency,
@@ -86,6 +88,7 @@ from wm_doc.ir import (
 from wm_doc.java_analysis import analyze_java_service
 from wm_doc.process_analysis import build_process_analysis
 from wm_doc.process_catalog import ParsedProcessCatalog, load_process_catalog
+from wm_doc.references import find_references
 from wm_doc.values import parse_values_file, scalar_value
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
 
@@ -538,6 +541,10 @@ def analyze_path(
         process_output.process_document_relationships,
         process_output.technical_entrypoint_candidates,
     )
+    namespace_artifacts = _namespace_artifacts(inventory.packages)
+    artifact_references = _artifact_references(
+        scan_root, service_index, all_document_types, namespace_artifacts, all_services
+    )
     return AnalysisResult(
         tool_version=__version__,
         packages=sorted(final_packages, key=lambda item: item.name.casefold()),
@@ -565,7 +572,8 @@ def analyze_path(
         process_document_relationships=process_output.process_document_relationships,
         technical_entrypoint_candidates=process_output.technical_entrypoint_candidates,
         excluded_packages=inventory.excluded_packages,
-        namespace_artifacts=_namespace_artifacts(inventory.packages),
+        namespace_artifacts=namespace_artifacts,
+        artifact_references=artifact_references,
         findings=_aggregate_findings(all_findings),
     )
 
@@ -581,6 +589,39 @@ _NOT_LISTED_ARTIFACTS = (
         "unsupported_file",
     }
 )
+
+
+def _artifact_references(
+    scan_root: Path,
+    service_index: dict[str, ServiceSummary],
+    document_types: list[DocumentType],
+    namespace_artifacts: list[NamespaceArtifact],
+    services: list[FlowService],
+) -> list[ArtifactReference]:
+    """References from triggers, descriptors, connections and opaque services to known nodes."""
+    known: dict[str, ReferenceTargetKind] = {}
+    for artifact in namespace_artifacts:
+        known[artifact.full_name] = ReferenceTargetKind.ARTIFACT
+    for document in document_types:
+        known[document.identity.full_name] = ReferenceTargetKind.DOCUMENT
+    for name in service_index:
+        known[name] = ReferenceTargetKind.SERVICE
+    sources: list[tuple[str, str, SourceReference]] = [
+        (artifact.full_name, artifact.node_type or artifact.probable_type, artifact.source)
+        for artifact in namespace_artifacts
+        # Specification signatures are already analysed as service signatures.
+        if artifact.probable_type != "specification"
+    ]
+    sources.extend(
+        (
+            service.identity.full_name,
+            f"service ({service.source_service_type or 'opaque'})",
+            service.source,
+        )
+        for service in services
+        if service.service_type is ServiceType.OPAQUE
+    )
+    return find_references(scan_root, sources, known)
 
 
 def _namespace_artifacts(packages: Iterable[PackageInventory]) -> list[NamespaceArtifact]:
