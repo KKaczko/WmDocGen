@@ -41,13 +41,11 @@ from wm_doc.ir import (
     FlowNodeType,
     FlowService,
     InterpretationConfidence,
-    JavaImport,
     JavaInvocationOccurrence,
     JavaInvocationTargetStatus,
     JavaPipelineAccess,
     JavaServiceAnalysis,
     JavaSourceStatus,
-    JavaTypeReference,
     LiteralDisclosure,
     LiteralValue,
     MappingEndpoint,
@@ -83,7 +81,16 @@ from wm_doc.ir import (
     TransformerBinding,
     TransformerBindingDirection,
     UniqueDependency,
+    call_sort_key,
+    document_type_sort_key,
+    flow_map_sort_key,
+    java_invocation_sort_key,
+    java_pipeline_access_sort_key,
+    java_service_analysis_sort_key,
+    mapping_operation_sort_key,
     stable_relative_path,
+    transformer_binding_sort_key,
+    unique_dependency_sort_key,
 )
 from wm_doc.java_analysis import analyze_java_service
 from wm_doc.process_analysis import build_process_analysis
@@ -354,7 +361,6 @@ def analyze_path(
                 name=package.name,
                 root=package.root,
                 services=[],
-                java_service_analyses=[],
                 document_types=[],
                 # Only this package's own services: listing every service in every package
                 # grew analysis.json with packages x services.
@@ -450,14 +456,6 @@ def analyze_path(
                         services_with_document_refs,
                         key=lambda item: item.identity.full_name.casefold(),
                     ),
-                    "java_service_analyses": sorted(
-                        [
-                            service.java_analysis
-                            for service in services_with_document_refs
-                            if service.java_analysis is not None
-                        ],
-                        key=_java_service_analysis_key,
-                    ),
                     "document_types": sorted(
                         package_documents.get(analyzed_package.name, []),
                         key=_document_type_key,
@@ -485,14 +483,6 @@ def analyze_path(
             for analysis in package.java_service_analyses
         ],
         key=_java_service_analysis_key,
-    )
-    all_java_imports = sorted(
-        [item for analysis in all_java_analyses for item in analysis.imports],
-        key=_java_import_key,
-    )
-    all_java_type_references = sorted(
-        [item for analysis in all_java_analyses for item in analysis.referenced_types],
-        key=_java_type_reference_key,
     )
     all_java_pipeline_accesses = sorted(
         [item for analysis in all_java_analyses for item in analysis.pipeline_accesses],
@@ -550,20 +540,9 @@ def analyze_path(
         packages=sorted(final_packages, key=lambda item: item.name.casefold()),
         metrics=top_level_metrics,
         extraction_policy=extraction_policy,
-        call_occurrences=all_calls,
-        unique_dependencies=all_unique_dependencies,
-        flow_maps=all_flow_maps,
-        mapping_operations=all_mapping_operations,
-        transformer_bindings=all_transformer_bindings,
-        document_types=all_document_types,
         document_reference_occurrences=all_document_reference_occurrences,
         document_dependencies=all_document_dependencies,
         service_document_dependencies=all_service_document_dependencies,
-        java_service_analyses=all_java_analyses,
-        java_imports=all_java_imports,
-        java_type_references=all_java_type_references,
-        java_pipeline_accesses=all_java_pipeline_accesses,
-        java_invocation_occurrences=all_java_invocations,
         processes=process_output.processes,
         process_entrypoints=process_output.process_entrypoints,
         process_service_memberships=process_output.process_service_memberships,
@@ -3638,47 +3617,22 @@ def _is_secret_context(*values: str | None) -> bool:
     return any(term in combined for term in SECRET_TERMS)
 
 
-def _call_key(call: CallOccurrence) -> tuple[str, int, str, str]:
-    return (call.caller.casefold(), call.order, call.id, call.target.casefold())
+_call_key = call_sort_key
 
 
-def _unique_dependency_key(dependency: UniqueDependency) -> tuple[str, str, str]:
-    return (
-        dependency.source_service.casefold(),
-        dependency.dependency_kind.value,
-        dependency.target_service.casefold(),
-    )
+_unique_dependency_key = unique_dependency_sort_key
 
 
-def _flow_map_key(flow_map: FlowMap) -> tuple[str, int, str, str]:
-    return (
-        flow_map.service.casefold(),
-        flow_map.order,
-        flow_map.structural_path,
-        flow_map.id,
-    )
+_flow_map_key = flow_map_sort_key
 
 
-def _mapping_operation_key(operation: MappingOperation) -> tuple[str, int, str, str]:
-    return (
-        operation.service.casefold(),
-        operation.order,
-        operation.structural_path,
-        operation.id,
-    )
+_mapping_operation_key = mapping_operation_sort_key
 
 
-def _transformer_binding_key(binding: TransformerBinding) -> tuple[str, int, str, str]:
-    return (
-        binding.service.casefold(),
-        binding.order,
-        binding.structural_path,
-        binding.id,
-    )
+_transformer_binding_key = transformer_binding_sort_key
 
 
-def _document_type_key(document: DocumentType) -> tuple[str, str]:
-    return (document.identity.full_name.casefold(), document.id)
+_document_type_key = document_type_sort_key
 
 
 def _document_reference_key(
@@ -3712,32 +3666,17 @@ def _service_document_dependency_key(
     )
 
 
-def _java_service_analysis_key(analysis: JavaServiceAnalysis) -> tuple[str, str]:
-    return (analysis.identity.full_name.casefold(), analysis.id)
+_java_service_analysis_key = java_service_analysis_sort_key
 
 
-def _java_import_key(java_import: JavaImport) -> tuple[str, int, str]:
-    return (
-        java_import.service.casefold(),
-        java_import.declaration_order,
-        java_import.declaration.casefold(),
-    )
 
 
-def _java_type_reference_key(reference: JavaTypeReference) -> tuple[str, int, str]:
-    return (
-        reference.service.casefold(),
-        reference.token_ordinal,
-        reference.type_name.casefold(),
-    )
 
 
-def _java_pipeline_access_key(access: JavaPipelineAccess) -> tuple[str, int, str]:
-    return (access.service.casefold(), access.token_ordinal, access.id)
+_java_pipeline_access_key = java_pipeline_access_sort_key
 
 
-def _java_invocation_key(invocation: JavaInvocationOccurrence) -> tuple[str, int, str]:
-    return (invocation.caller.casefold(), invocation.token_ordinal, invocation.id)
+_java_invocation_key = java_invocation_sort_key
 
 
 def _finding_key(finding: AnalysisFinding) -> tuple[str, str, str]:
