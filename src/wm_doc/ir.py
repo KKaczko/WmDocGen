@@ -982,6 +982,32 @@ class AnalyzedPackage(BaseModel):
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
 
+class ExcludedPackage(BaseModel):
+    """A package root that was found but deliberately not analysed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    root: str
+    reason: str
+
+
+class NamespaceArtifact(BaseModel):
+    """A namespace node that is neither a supported service nor a document type.
+
+    Triggers, REST/SOAP descriptors, adapter connections and notifications land here. They
+    are listed by their declared node type only; their content is not interpreted.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    full_name: str
+    package: str
+    probable_type: str
+    node_type: str | None = None
+    source: SourceReference
+
+
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -1013,6 +1039,8 @@ class AnalysisResult(BaseModel):
     technical_entrypoint_candidates: list[TechnicalEntrypointCandidate] = Field(
         default_factory=list
     )
+    excluded_packages: list[ExcludedPackage] = Field(default_factory=list)
+    namespace_artifacts: list[NamespaceArtifact] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
 
@@ -1047,6 +1075,8 @@ class ArtifactCandidate(BaseModel):
     status: FindingStatus
     identity: ArtifactIdentity | None = None
     source: SourceReference
+    # Top-level (or record-level) `node_type` from node.ndf, recorded as found.
+    node_type: str | None = None
 
 
 class PackageInventory(BaseModel):
@@ -1075,6 +1105,7 @@ class InventoryResult(BaseModel):
     tool_version: str
     scan_root: str
     packages: list[PackageInventory] = Field(default_factory=list)
+    excluded_packages: list[ExcludedPackage] = Field(default_factory=list)
     file_summary: list[FileSummary] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 

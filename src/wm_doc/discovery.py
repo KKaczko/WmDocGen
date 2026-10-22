@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 from pathlib import Path
 
 from wm_doc import __version__
+from wm_doc.config import PackageSelectionConfig
 from wm_doc.ir import (
     AnalysisFinding,
     ArtifactCandidate,
     ArtifactFile,
     ArtifactIdentity,
     Confidence,
+    ExcludedPackage,
     FactBasis,
     FileSummary,
     FindingStatus,
@@ -33,9 +36,25 @@ FILE_ROLE_ORDER = {
 }
 
 
-def scan_path(path: Path) -> InventoryResult:
+def scan_path(path: Path, selection: PackageSelectionConfig | None = None) -> InventoryResult:
     scan_root = path.resolve()
-    package_roots = _find_package_roots(scan_root)
+    selection = selection if selection is not None else PackageSelectionConfig()
+    package_roots: list[Path] = []
+    excluded: list[ExcludedPackage] = []
+    for package_root in _find_package_roots(scan_root):
+        reason = selection.exclusion_reason(
+            package_root.name, _is_system_package(package_root)
+        )
+        if reason is None:
+            package_roots.append(package_root)
+        else:
+            excluded.append(
+                ExcludedPackage(
+                    name=package_root.name,
+                    root=stable_relative_path(package_root, scan_root),
+                    reason=reason,
+                )
+            )
     findings: list[AnalysisFinding] = []
     if not package_roots:
         findings.append(
@@ -48,30 +67,47 @@ def scan_path(path: Path) -> InventoryResult:
         )
 
     packages = [_scan_package(package_root, scan_root) for package_root in package_roots]
-    file_summary = _file_summary(scan_root)
+    file_summary = _file_summary(package_roots)
     return InventoryResult(
         tool_version=__version__,
         scan_root=".",
         packages=packages,
+        excluded_packages=excluded,
         file_summary=file_summary,
         findings=findings,
     )
 
 
 def _find_package_roots(scan_root: Path) -> list[Path]:
+    """Find package roots, never descending into a package once it is found.
+
+    A full Integration Server `packages/` directory holds tens of thousands of files in
+    product packages; pruning keeps discovery proportional to the number of directories
+    above the package level. Symbolic links are not followed.
+    """
     if _is_package_root(scan_root):
         return [scan_root]
-    candidates = [
-        candidate
-        for candidate in scan_root.rglob("*")
-        if candidate.is_dir() and _is_package_root(candidate)
-    ]
-    candidates.sort(key=lambda item: stable_relative_path(item, scan_root).lower())
-    accepted: list[Path] = []
-    for candidate in candidates:
-        if not any(_is_relative_to(candidate, parent) for parent in accepted):
-            accepted.append(candidate)
-    return accepted
+    roots: list[Path] = []
+    for current, dirnames, _files in os.walk(scan_root):
+        current_path = Path(current)
+        if current_path != scan_root and _is_package_root(current_path):
+            roots.append(current_path)
+            dirnames[:] = []
+            continue
+        dirnames.sort(key=str.lower)
+    roots.sort(key=lambda item: stable_relative_path(item, scan_root).lower())
+    return roots
+
+
+def _is_system_package(package_root: Path) -> bool:
+    manifest_path = package_root / "manifest.v3"
+    if not manifest_path.is_file():
+        return False
+    try:
+        value = scalar_value(parse_values_file(manifest_path), "system_package")
+    except (XmlParseError, XmlSecurityError):
+        return False
+    return (value or "").strip().casefold() == "yes"
 
 
 def _is_package_root(path: Path) -> bool:
@@ -250,10 +286,12 @@ def _namespace_artifact(
     flow_path = artifact_dir / "flow.xml"
     java_path = artifact_dir / "java.frag"
     values: dict[str, object] = {}
+    node_type: str | None = None
 
     if node_path.exists():
         try:
             values = parse_values_file(node_path)
+            node_type = _node_type(values)
             svc_type = _normalized_svc_type(values)
             if svc_type is not None:
                 evidence.append(f"node.ndf svc_type={svc_type}.")
@@ -328,11 +366,21 @@ def _namespace_artifact(
             source=source_for(
                 node_path if node_path.exists() else artifact_dir, scan_root, probable_type
             ),
+            node_type=node_type,
         ),
         findings,
         aliases,
         consumed,
     )
+
+
+def _node_type(values: dict[str, object]) -> str | None:
+    """The declared node type, at top level or inside a document `record`."""
+    declared = scalar_value(values, "node_type")
+    if declared is None:
+        record = record_value(values, "record")
+        declared = scalar_value(record, "node_type") if record is not None else None
+    return declared.strip() if declared and declared.strip() else None
 
 
 def _classify_from_values(
@@ -485,8 +533,13 @@ def _read_project_name(project_path: Path) -> str | None:
     return text[start + len("<name>") : end].strip() or None
 
 
-def _file_summary(scan_root: Path) -> list[FileSummary]:
-    counts = Counter(path.suffix or "[none]" for path in scan_root.rglob("*") if path.is_file())
+def _file_summary(package_roots: list[Path]) -> list[FileSummary]:
+    counts = Counter(
+        path.suffix or "[none]"
+        for root in package_roots
+        for path in root.rglob("*")
+        if path.is_file()
+    )
     return [
         FileSummary(extension=extension, count=count)
         for extension, count in sorted(counts.items())

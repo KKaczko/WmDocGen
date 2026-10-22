@@ -19,7 +19,7 @@ from wm_doc.business_enrichment import (
     enrich_business_context,
 )
 from wm_doc.business_result_schema import BusinessResultLanguage
-from wm_doc.config import load_config
+from wm_doc.config import AppConfig, load_config
 from wm_doc.discovery import scan_path
 from wm_doc.external_systems import ExternalSystemsError, load_external_systems
 from wm_doc.graph_publish import (
@@ -54,6 +54,7 @@ from wm_doc.render.ai_summary_markdown import (
     write_ai_summary_outputs,
 )
 from wm_doc.render.analysis_json import render_analysis_json
+from wm_doc.render.artifact_markdown import write_artifact_inventory
 from wm_doc.render.business_context_markdown import write_business_context_outputs
 from wm_doc.render.business_result_markdown import write_business_result_outputs
 from wm_doc.render.document_markdown import write_document_markdown
@@ -94,6 +95,7 @@ from wm_doc.scope_analysis import (
     services_for_scope,
     validate_scope_request,
 )
+from wm_doc.stats import render_stats
 from wm_doc.summarizer import (
     DEFAULT_NUM_CTX,
     AiServiceSummary,
@@ -108,6 +110,45 @@ app = typer.Typer(
     help="Offline deterministic static inventory for webMethods Integration Server packages."
 )
 
+IncludePackageOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--include-package",
+        help="Only analyse packages whose directory name matches this glob (repeatable).",
+    ),
+]
+ExcludePackageOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--exclude-package",
+        help="Also skip packages whose directory name matches this glob (repeatable).",
+    ),
+]
+AllPackagesOption = Annotated[
+    bool,
+    typer.Option(
+        "--all-packages",
+        help="Do not skip Wm*, Default or system packages by default.",
+    ),
+]
+
+
+def _with_package_selection(
+    config: AppConfig,
+    include: list[str] | None,
+    exclude: list[str] | None,
+    all_packages: bool,
+) -> AppConfig:
+    selection = config.packages
+    if all_packages:
+        selection = selection.model_copy(update={"exclude": [], "skipSystemPackages": False})
+    if include:
+        selection = selection.model_copy(update={"include": list(include)})
+    if exclude:
+        selection = selection.model_copy(update={"exclude": [*selection.exclude, *exclude]})
+    return config.model_copy(update={"packages": selection})
+
+
 GRAPHVIZ_RUNNER: GraphvizRunner = run_subprocess
 MANAGED_ROOT_FILES = (
     "analysis.json",
@@ -118,6 +159,7 @@ MANAGED_ROOT_FILES = (
     "LIMITATIONS.md",
     "ai-summaries.json",
     "ai-summaries.md",
+    "artifacts.md",
 )
 MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
 
@@ -166,9 +208,19 @@ def scan(
     output: Annotated[
         Path, typer.Option("--output", "-o", help="Directory for inventory outputs.")
     ],
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ] = None,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
 ) -> None:
     """Discover packages and artifact candidates without executing analyzed code."""
-    inventory = scan_path(packages_path)
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
+    inventory = scan_path(packages_path, app_config.packages)
     output.mkdir(parents=True, exist_ok=True)
     (output / "inventory.json").write_text(render_inventory_json(inventory), encoding="utf-8")
     (output / "fixture-inventory.md").write_text(
@@ -178,6 +230,34 @@ def scan(
         f"Scanned {len(inventory.packages)} package(s); wrote {output / 'inventory.json'} "
         f"and {output / 'fixture-inventory.md'}."
     )
+
+
+@app.command()
+def stats(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Also write the report to this Markdown file."),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ] = None,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
+) -> None:
+    """Print counts and names (no code or values) to plan documentation of a server."""
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
+    report = render_stats(analyze_path(packages_path, app_config, None))
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(report, encoding="utf-8")
+    typer.echo(report)
 
 
 @app.command("build-business-context")
@@ -538,6 +618,9 @@ def analyze(
             help="Include full mapping, FLOW outline, call and source-evidence detail.",
         ),
     ] = False,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
 ) -> None:
     """Analyze supported services and emit deterministic technical outputs."""
     try:
@@ -551,7 +634,9 @@ def analyze(
     except ScopeCliError as exc:
         typer.echo(f"{exc.code}: {exc.safe_message}", err=True)
         raise typer.Exit(code=2) from exc
-    app_config = load_config(config)
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
     analysis = analyze_path(
         packages_path,
         app_config,
@@ -638,6 +723,9 @@ def summarize(
             help="Include full mapping, FLOW outline, call and source-evidence detail.",
         ),
     ] = False,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
     ollama_url: Annotated[
         str,
         typer.Option("--ollama-url", help="Ollama provider URL."),
@@ -676,7 +764,9 @@ def summarize(
     if not model.strip():
         typer.echo("SUMMARIZE_INPUT_INVALID: --model must not be blank.", err=True)
         raise typer.Exit(code=2)
-    app_config = load_config(config)
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
     analysis = analyze_path(
         packages_path,
         app_config,
@@ -804,6 +894,7 @@ def _write_full_outputs(
     graph_failures = graph_render_failures(graph_results)
     graph_index_path = write_graph_index(output, graph_assets)
     write_analysis_limitations(output)
+    write_artifact_inventory(output, analysis)
     index_path = write_documentation_index(
         output, analysis, graph_assets, ai_summaries_path=ai_summaries_path
     )
@@ -813,6 +904,8 @@ def _write_full_outputs(
     opaque_count = sum(1 for service in services if service.service_type.value == "OPAQUE")
     metrics = analysis.metrics
     report = (
+        f"Packages: {len(analysis.packages)} analysed, "
+        f"{len(analysis.excluded_packages)} skipped (listed in artifacts.md)\n"
         "Analyzed services:\n"
         f"- FLOW: {flow_count}\n"
         f"- Java: {java_count}\n"

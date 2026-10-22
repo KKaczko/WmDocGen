@@ -25,6 +25,8 @@ def render_documentation_index(
         "",
         "| Area | Count |",
         "| --- | ---: |",
+        f"| Packages analysed | {len(analysis.packages)} |",
+        f"| Packages skipped | {len(analysis.excluded_packages)} |",
         f"| Services | {sum(len(package.services) for package in analysis.packages)} |",
         f"| Document Types | {len(analysis.document_types)} |",
         f"| Process definitions | {len(analysis.processes)} |",
@@ -41,6 +43,7 @@ def render_documentation_index(
         "- [Technical entrypoint candidates](entrypoints.md)",
         "- [Services](services/)",
         "- [Document Types](documents/)",
+        "- [Other artifacts and skipped packages](artifacts.md)",
     ]
     if ai_summaries_path:
         lines.append(f"- [AI service descriptions (not reviewed)]({ai_summaries_path})")
