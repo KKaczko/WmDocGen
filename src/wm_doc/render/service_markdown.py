@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jinja2 import Template
 
@@ -34,6 +36,9 @@ from wm_doc.ir import (
 from wm_doc.render.document_markdown import document_markdown_filename
 from wm_doc.render.service_summary import derived_layer, render_service_summary
 
+if TYPE_CHECKING:
+    from wm_doc.summarizer import AiServiceSummary
+
 IMPORTANCE_ORDER = {"IMPORTANT": 0, "NORMAL": 1, "LOW": 2}
 MAX_OUTLINE_DEPTH = 5
 MAX_OUTLINE_ROWS = 80
@@ -46,6 +51,26 @@ _TEMPLATE = Template(
 
 {{ summary_text }}
 
+{% if ai_summary %}
+## AI Description
+
+{% if ai_summary.status.value == "OK" %}
+> Written by a local language model (`{{ ai_model }}`) from the facts on this page and the
+> AI descriptions of the services it calls. It has not been reviewed: check it against the
+> facts below before relying on it.
+{% if ai_summary.facts_shortened %}
+> Some detail was left out to fit the model's context window.
+{% endif %}
+
+**In short:** {{ ai_text(ai_summary.summary) }}
+
+{{ ai_text(ai_summary.description) }}
+
+{% else %}
+No AI description is shown: {{ ai_text(ai_summary.note or "no reason was recorded").rstrip(".") }}.
+
+{% endif %}
+{% endif %}
 ## Identity
 
 | Field | Value |
@@ -264,6 +289,8 @@ def render_service_markdown(
     process_definitions: dict[str, ProcessDefinition] | None = None,
     *,
     verbose: bool = False,
+    ai_summary: AiServiceSummary | None = None,
+    ai_model: str | None = None,
 ) -> str:
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
@@ -300,6 +327,9 @@ def render_service_markdown(
     return _TEMPLATE.render(
         service=service,
         verbose=verbose,
+        ai_summary=ai_summary,
+        ai_model=ai_model or "unknown model",
+        ai_text=_ai_text,
         summary_text=render_service_summary(service),
         layer_text=derived_layer(service) or service.classification.layer,
         description_text=description_text,
@@ -344,6 +374,29 @@ def render_service_markdown(
         render_java_imports=_render_java_imports,
         render_java_types=_render_java_types,
     )
+
+
+def service_markdown_filenames(services: list[FlowService]) -> dict[str, str]:
+    """Map each service full name to its page filename, disambiguating slug collisions."""
+    slug_counts = Counter(
+        service_markdown_filename(service.identity.full_name) for service in services
+    )
+    filenames: dict[str, str] = {}
+    for service in services:
+        full_name = service.identity.full_name
+        filename = service_markdown_filename(full_name)
+        if slug_counts[filename] > 1:
+            stem = filename.removesuffix(".md")
+            digest = hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:12]
+            filename = f"{stem}__{digest}.md"
+        filenames[full_name] = filename
+    return filenames
+
+
+def _ai_text(text: str | None) -> str:
+    """Model text as one Markdown paragraph that cannot open a heading or block."""
+    flat = " ".join((text or "").split())
+    return "\\" + flat if flat[:1] in {"#", ">", "-", "*", "+", "|"} else flat
 
 
 def service_markdown_filename(full_name: str) -> str:
@@ -846,6 +899,8 @@ def write_service_markdown(
     processes: list[ProcessDefinition] | None = None,
     *,
     verbose: bool = False,
+    ai_summaries: Mapping[str, AiServiceSummary] | None = None,
+    ai_model: str | None = None,
 ) -> list[Path]:
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
@@ -853,16 +908,10 @@ def write_service_markdown(
     incoming_dependencies = _incoming_dependencies_by_target(services)
     memberships_by_service = _process_memberships_by_service(process_memberships or [])
     process_definitions = {process.process_id: process for process in processes or []}
-    slug_counts = Counter(
-        service_markdown_filename(service.identity.full_name) for service in services
-    )
+    filenames = service_markdown_filenames(services)
+    ai_summaries = ai_summaries or {}
     for service in sorted(services, key=lambda item: item.identity.full_name.casefold()):
-        filename = service_markdown_filename(service.identity.full_name)
-        if slug_counts[filename] > 1:
-            stem = filename.removesuffix(".md")
-            digest = hashlib.sha256(service.identity.full_name.encode("utf-8")).hexdigest()[:12]
-            filename = f"{stem}__{digest}.md"
-        path = service_dir / filename
+        path = service_dir / filenames[service.identity.full_name]
         path.write_text(
             render_service_markdown(
                 service,
@@ -870,6 +919,8 @@ def write_service_markdown(
                 memberships_by_service.get(service.identity.full_name, []),
                 process_definitions,
                 verbose=verbose,
+                ai_summary=ai_summaries.get(service.identity.full_name),
+                ai_model=ai_model,
             ),
             encoding="utf-8",
         )
