@@ -818,7 +818,7 @@ def test_generated_markdown_links_are_valid_without_process_catalog(tmp_path) ->
 
     _run_cli_analyze(_samples(), output)
 
-    assert _generated_file_count(output) == 50  # + artifacts.md
+    assert _generated_file_count(output) == 52  # + artifacts, packages
     assert (output / "graphs" / "index.md").exists()
     assert not (output / "processes").exists()
     _assert_generated_markdown_links_valid(output)
@@ -837,7 +837,7 @@ def test_generated_markdown_links_are_valid_for_fixture_catalog_modes(tmp_path) 
             free_text_mode=mode,
         )
 
-        assert _generated_file_count(output) == 55  # + artifacts.md
+        assert _generated_file_count(output) == 57  # + artifacts, packages
         assert (output / "graphs" / "index.md").exists()
         assert len(list((output / "processes").glob("*.md"))) == 3
         assert len(list((output / "graphs" / "processes").glob("*.dot"))) == 2
@@ -867,13 +867,13 @@ def test_graph_render_modes_publish_expected_files_and_links(tmp_path, monkeypat
     processes_file = tmp_path / "processes.yml"
     _write_fixture_process_catalog(processes_file)
 
-    # Counts include artifacts.md (M12). Requesting images also writes and renders one call
-    # graph per service: 35 extra DOT files and 35 extra images per format.
+    # Counts include artifacts.md and packages/*.md. Requesting images also writes and renders
+    # one call graph per service: 35 extra DOT files and 35 extra images per format.
     cases = [
-        ("none", 55, 4, 0, 0),
-        ("svg", 129, 39, 39, 0),
-        ("png", 129, 39, 0, 39),
-        ("both", 168, 39, 39, 39),
+        ("none", 57, 4, 0, 0),
+        ("svg", 131, 39, 39, 0),
+        ("png", 131, 39, 0, 39),
+        ("both", 170, 39, 39, 39),
     ]
     for mode, expected_count, expected_dot, expected_svg, expected_png in cases:
         output = tmp_path / f"fixture-{mode}"
@@ -917,13 +917,13 @@ def test_graph_render_modes_without_process_catalog(tmp_path, monkeypatch) -> No
     fake_runner = FakeGraphvizRunner()
     monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
 
-    # Counts include artifacts.md (M12) and, when images are requested, 35 service call
+    # Counts include artifacts.md, packages/*.md and, when images are requested, 35 service call
     # graphs (DOT plus one image per format).
     cases = [
-        ("none", 50, 0, 0),
-        ("svg", 122, 37, 0),
-        ("png", 122, 0, 37),
-        ("both", 159, 37, 37),
+        ("none", 52, 0, 0),
+        ("svg", 124, 37, 0),
+        ("png", 124, 0, 37),
+        ("both", 161, 37, 37),
     ]
     for mode, expected_count, expected_svg, expected_png in cases:
         output = tmp_path / f"no-process-{mode}"

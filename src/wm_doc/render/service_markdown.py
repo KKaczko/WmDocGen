@@ -338,8 +338,8 @@ def render_service_markdown(
         service=service,
         verbose=verbose,
         doc=doc,
-        doc_badge=_doc_badge(doc) if doc is not None else "",
-        doc_body=_doc_body(doc) if doc is not None else "",
+        doc_badge=doc_badge(doc) if doc is not None else "",
+        doc_body=doc_body(doc) if doc is not None else "",
         facts=facts,
         call_graph=call_graph,
         render_effects=render_effects_table,
@@ -444,7 +444,7 @@ def render_entry_points_table(facts: ServiceFacts) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _doc_badge(doc: ServiceDoc) -> str:
+def doc_badge(doc: ServiceDoc) -> str:
     """One line saying who wrote the description and whether it was reviewed."""
     from wm_doc.service_docs import DocState
 
@@ -465,7 +465,7 @@ def _doc_badge(doc: ServiceDoc) -> str:
     )
 
 
-def _doc_body(doc: ServiceDoc) -> str:
+def doc_body(doc: ServiceDoc) -> str:
     """The narrative with its headings moved one level down, plus any human notes."""
     from wm_doc.service_docs import NOTES_PLACEHOLDER
 

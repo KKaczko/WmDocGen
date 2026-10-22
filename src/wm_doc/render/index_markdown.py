@@ -11,6 +11,8 @@ def render_documentation_index(
     graph_assets: list[GraphAsset] | None = None,
     *,
     catalogue_path: str | None = None,
+    packages_section: str | None = None,
+    server_section: str | None = None,
 ) -> str:
     graph_assets = graph_assets or []
     lines = [
@@ -21,6 +23,7 @@ def render_documentation_index(
             "descriptions, when present, come from `processes.yml`."
         ),
         "",
+        *([server_section] if server_section else []),
         "## Generated Inventory",
         "",
         "| Area | Count |",
@@ -34,6 +37,7 @@ def render_documentation_index(
         f"| Service dependency edges | {len(analysis.unique_dependencies)} |",
         f"| Document dependency edges | {len(analysis.document_dependencies)} |",
         "",
+        *([packages_section] if packages_section else []),
         "## Links",
         "",
         "- [Analysis JSON](analysis.json)",
@@ -110,11 +114,17 @@ def write_documentation_index(
     graph_assets: list[GraphAsset] | None = None,
     *,
     catalogue_path: str | None = None,
+    packages_section: str | None = None,
+    server_section: str | None = None,
 ) -> Path:
     path = output_dir / "index.md"
     path.write_text(
         render_documentation_index(
-            analysis, graph_assets, catalogue_path=catalogue_path
+            analysis,
+            graph_assets,
+            catalogue_path=catalogue_path,
+            packages_section=packages_section,
+            server_section=server_section,
         ),
         encoding="utf-8",
     )
