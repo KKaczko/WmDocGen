@@ -1,321 +1,186 @@
 # wm-doc
 
-`wm-doc` is an offline, deterministic static-analysis tool for Software AG / IBM webMethods
-Integration Server package snapshots.
+`wm-doc` documents webMethods Integration Server packages (built against 10.15) by reading the
+package files offline. It never connects to Integration Server, never runs package code and
+never changes the packages.
 
-The current milestone is **M12: per-service documentation for a production server** (in
-progress; see `AGENTS.md`), on top of M9-M11 and the M6 process documentation and M5-lite opaque
-service inventory baselines. It discovers package and namespace artifacts, parses
-observed FLOW Service signatures, extracts ordered FLOW and mapping evidence, extracts observed
-Document Types with ordered field trees, resolves local document references by exact full name,
-performs source-first Java Service analysis, and preserves parseable unsupported service artifacts
-as opaque services. Opaque services keep identity, trimmed source `svc_type`, safe `node_comment`,
-signatures, source evidence, and exact incoming dependency resolution without interpreting
-implementation details. M6 adds optional `processes.yml` business process declarations, exact
-entrypoint validation, deterministic reachability over resolved service dependencies, technical
-entrypoint candidates, process Markdown, and per-process DOT graphs. M7 keeps those DOT graphs
-canonical and can optionally render derived SVG/PNG graph views for publishable Markdown sites.
-M8a performs the complete accepted M7 technical analysis first, then optionally limits publication
-to one focused service, namespace, package, or process scope. M8b consumes focused M8a
-`analysis.json` and `scope.json` artifacts and emits a bounded, auditable
-`business-context.v1` package for local model use. M8c consumes that context pack through an
-explicit command, calls a local Ollama provider for a small internal structured draft, validates
-that draft against context evidence IDs, and then builds the final app-owned
-`business-result.v1` plus deterministic business Markdown. M8c does not change package analysis,
-focused publication, context generation, or canonical analysis/context schemas.
+It produces two things:
 
-This is not a claim of full webMethods 10.15 compatibility. `samples/Synthetic/SampleOrders` is the
-primary 10.15 fixture; `samples/PGP` is a compatibility and discovery corpus with unknown upstream
-provenance.
+- **A technical documentation site** (`wm-doc analyze`): one Markdown page per service and
+  document type, dependency graphs, an index, and for every service a summary, its signature,
+  every call (FLOW steps, transformers and Java), who calls it, which entry points reach it, and
+  which data objects and systems it touches.
+- **One reviewed description file per service** (`wm-doc describe`): a short text drafted by a
+  local language model from the facts above, saying what the service is for, who uses it, what
+  it does to which data and where, its main steps and error handling, plus a plain-text comment
+  ready to paste into the service's Comments field in Designer. You review, edit and approve
+  these files; approved text is never overwritten.
 
-## Quick Start
+The model only words facts the tool has already established. Every name in its answer must
+appear in those facts, or the answer is rejected.
+
+## Install
+
+Python 3.12+ and [`uv`](https://docs.astral.sh/uv/):
 
 ```powershell
-wm-doc scan samples --output out\inventory
-wm-doc analyze samples --output out\m7-analysis
-wm-doc analyze samples --verbose --output out\m7-analysis-full
-wm-doc analyze samples --processes-file processes.yml --output out\m7-process-analysis
-wm-doc analyze samples --processes-file processes.yml --render-graphs both --output out\m7-published
-wm-doc analyze samples --target-service pgp.services.common:readConfig --dependency-depth 1 --output out\m8a-service-scope
-wm-doc analyze samples --target-namespace pgp.services.common --dependency-depth 0 --output out\m8a-namespace-scope
-wm-doc analyze samples --processes-file processes.yml --target-process pgp-key-lookup --dependency-depth all --output out\m8a-process-scope
-wm-doc build-business-context --input out\m8a-service-scope --output out\m8a-service-scope\business-context
-wm-doc ollama-test --ollama-url http://localhost:11434 --model llama3.1
-wm-doc enrich-business --context out\m8a-service-scope\business-context\context.json --output out\m8a-service-scope\business --model llama3.1
+uv sync
+uv run wm-doc --help
 ```
 
-The scan command writes:
+Graphviz (`dot`) is optional and only needed for `--render-graphs`. An Ollama server is needed
+only for `describe`.
 
-- `inventory.json`
-- `fixture-inventory.md`
+## Documenting a server, step by step
 
-The analyze command writes:
+Point the commands at the server's `packages` directory, or a copy of it.
 
-- `analysis.json`
-- `index.md`
-- `LIMITATIONS.md`
-- `entrypoints.md`
-- `services/*.md`
-- `documents/*.md`
-- `graphs/dependencies.dot`
-- `graphs/documents.dot`
-- `graphs/index.md`
-- `processes/*.md` and `graphs/processes/*.dot` when process definitions are declared
-- optional `*.svg` and/or `*.png` graph images when `--render-graphs` requests them
+1. **See what is there.** `stats` prints counts and names (no code or values): packages, services
+   by kind, artifact types, FLOW elements the parser does not interpret yet, platform services
+   missing from the effect catalog, calls leaving the analysed packages, and the largest services.
 
-Each service page opens with a deterministic `## Summary` paragraph synthesised from the
-signature, the ordered call occurrences and the platform effect catalog in `wm_doc.builtins`,
-for example:
+   ```powershell
+   wm-doc stats D:\IntegrationServer\instances\default\packages --output stats.md
+   ```
 
-> Reads a file, closes a stream, parses XML text and converts XML into a document.
-> Takes `userId` and returns `key`. Calls 1 local service(s) and 4 platform service(s).
-> No explicit error handling.
+   Product packages (`Wm*`), `Default` and packages marked `system_package=yes` are skipped by
+   default; see `--include-package`, `--exclude-package`, `--all-packages` or a config file
+   (`examples/wm-doc.yml`).
 
-Summaries restate analysed facts. No model is involved and no business meaning is inferred.
-Platform (`pub.*` / `wm.*`) dependencies are labelled from a fixed catalog of documented
-services; an uncatalogued platform service is reported as uncatalogued rather than guessed.
+2. **Declare what the code calls but does not contain.** Copy `examples/external-systems.yml`
+   and map namespace patterns from the stats report to system names. Optionally list your
+   business processes in `processes.yml` (see `docs/format-behavior.md`).
 
-`wm-doc analyze --verbose` adds the full mapping tables, FLOW outline, call occurrences,
-Java analysis and source-evidence detail. The default page carries the summary, identity,
-signatures, dependencies, callers and processes.
+3. **Check the model server.**
 
-Focused publication mode is selected by exactly one of `--target-service <namespace:service>`,
-`--target-namespace <namespace-prefix>`, `--target-package <package-name>`, or
-`--target-process <process-id>`. `--dependency-depth` accepts `0`, a positive integer, or `all`
-and defaults to `all`. More than one selector, or repeating the same selector, is a validation
-error in M8a v1.
+   ```powershell
+   $env:OLLAMA_API_KEY = "<token>"   # only for a server behind an authenticating proxy
+   wm-doc provider-probe --url https://server/ollama --api-key-env OLLAMA_API_KEY --allow-remote-provider --model qwen3.8:27b
+   ```
 
-M8a reduces generated documentation and graph scope. It does not reduce the initial parsing and
-analysis cost. Focused runs still write full canonical `analysis.json` using schema `analysis.v8`.
-They additionally write `scope.json` using `scope.v1`, `scope.md`, scoped `entrypoints.md`, scoped
-service/document Markdown, `graphs/scope.dot`, optional `graphs/scope-documents.dot`, and selected
-process pages/graphs only for `--target-process`. Focused mode does not write global
-`graphs/dependencies.dot` or `graphs/documents.dot`.
+   It reports whether the proxy forwards Ollama's native API or only the OpenAI-compatible
+   `/v1` API, the model's context length, and the exact flags to use.
 
-The `build-business-context` command requires focused M8a output. It can read an output directory:
+4. **Describe a pilot package.**
 
-```powershell
-wm-doc build-business-context --input out\m8a-service-scope --output out\m8a-service-scope\business-context
+   ```powershell
+   wm-doc describe D:\...\packages --package OrdersCore --with-callees --model qwen3.8:27b --docs-dir service-docs --external-systems external-systems.yml
+   ```
+
+   Selection: `--service` (repeatable), `--namespace`, `--package` or `--all`. Services are
+   described callees first; each caller's prompt includes the Purpose line of every service it
+   calls. Each file is written as soon as it is validated, so an interrupted run continues where
+   it stopped. Use `--parallel N` if the server runs several requests at once.
+
+5. **Review and approve.** Edit the files under `service-docs/` as needed, then:
+
+   ```powershell
+   wm-doc approve --docs-dir service-docs --service orders.api:createOrder
+   wm-doc approve --docs-dir service-docs --package OrdersCore
+   wm-doc status D:\...\packages --docs-dir service-docs     # writes service-docs/STATUS.md
+   ```
+
+6. **Publish.**
+
+   ```powershell
+   wm-doc analyze D:\...\packages --output site --docs-dir service-docs --external-systems external-systems.yml --render-graphs svg
+   wm-doc export-comments --docs-dir service-docs --output designer-comments
+   ```
+
+   Service pages show the description with its review status; `service-catalogue.md` lists every
+   service's purpose. `designer-comments/<Package>.txt` holds the comment texts to paste into
+   Designer.
+
+7. **Keep it current.** After code changes, run `describe` again: unchanged drafts are kept,
+   changed drafts are regenerated, and approved or edited texts are kept while their facts block
+   is refreshed. `status` lists approved texts whose facts have changed so you can review them.
+
+## Description files
+
+`service-docs/<Package>/<namespace folders>/<service>.md`:
+
+```markdown
+---
+service: orders.api:createOrder
+package: OrdersCore
+status: draft            # draft | approved
+model: qwen3.8:27b
+facts_hash: 3f9c...      # facts the text was written from or approved against
+text_hash: a81b...       # the text as generated; a different hash means you edited it
+---
+# createOrder
+## Purpose / ## Usage / ## What it does to data / ## Main steps / ## Error handling
+## Designer comment      (plain text, at most 600 characters)
+## Notes                 (yours; the tool never writes here)
+<!-- wm-doc:facts:start hash=... -->
+## Facts                 (Used by, Inputs and outputs, Data and systems touched; always refreshed)
+<!-- wm-doc:facts:end -->
 ```
 
-or explicit artifact paths:
+- A draft you edited, or an approved file, is never regenerated. To get a fresh draft, set
+  `status: draft` and restore or delete the text, or delete the file.
+- `--redo-drafts` regenerates unedited drafts even when their facts did not change.
+- Files contain no timestamps; the same inputs give the same files.
 
-```powershell
-wm-doc build-business-context --analysis out\m8a-service-scope\analysis.json --scope out\m8a-service-scope\scope.json --output out\context
-```
+## Where the facts come from
 
-It writes `context.json` using schema `business-context.v1` and a deterministic
-`context.md` preview. `analysis.json` remains the complete `analysis.v8` snapshot, while
-`scope.json` remains the selected `scope.v1` publication subset. The context pack separates
-canonical technical facts, approved process metadata, deterministic summaries, limitations,
-unknowns, omissions, and evidence IDs. It is an input package for M8c enrichment, not business
-documentation generated by a model.
+Everything below is read from package files. Each "data and systems" row says how it is known.
 
-The command validates that scoped dependency, document, process, and boundary facts still agree
-with the referenced canonical analysis facts before publishing. It owns only `context.json` and
-`context.md`; failed builds preserve the previous complete pair when present.
+| Fact | Source |
+| --- | --- |
+| Calls | FLOW `INVOKE` and transformer (`MAPINVOKE`) steps; statically confirmed Java `Service.doInvoke` calls |
+| Signatures | `node.ndf`, or the specification named by `svc_spec` |
+| Error handling | TRY/CATCH, try/catch sequences, REPEAT on failure, EXIT with failure, `pub.flow:getLastError` (FLOW only; Java and opaque services say "not analysed") |
+| Published documents, HTTP/SOAP endpoints, JMS destinations, files, FTP/SFTP, email, storage | the documented input field of the platform service, when the FLOW sets it as a literal or maps it from the pipeline |
+| Adapter and other opaque services | name, signature, and connections their `node.ndf` names |
+| Entry points | triggers, REST/SOAP descriptors and other artifacts whose `node.ndf` contains a service's exact name; `processes.yml`; callers that nothing calls |
+| External systems | `external-systems.yml` namespace patterns |
+| Developer comments | `<COMMENT>` text in `flow.xml` (used in prompts, subject to the free-text policy) |
 
-The `ollama-test` command validates local Ollama availability, model presence, structured JSON
-support, and the M8c internal `business-draft.v1` contract without writing files. By default M8c
-only accepts loopback HTTP Ollama URLs such as `http://localhost:11434`; non-loopback providers
-require explicit `--allow-remote-provider`.
+Not interpreted: the content of JDBC adapter services (tables, SQL), trigger conditions, REST
+paths, scheduler entries, and Java control flow. `wm-doc probe-shapes` prints the key layout of
+such artifacts (key names and counts, no values) so these can be added later from real shapes.
 
-The `enrich-business` command requires a `business-context.v1` `context.json`, an explicit model,
-and an output directory. It writes only `result.json` using schema `business-result.v2` and
-`index.md` under that output directory. The generated result records model provenance without
-provider URLs, raw prompts, raw responses, or chain-of-thought. The model does not generate final
-IDs, status, provenance, validation metadata, or confidence enums. Instead it returns draft buckets:
-`claims` become `SUPPORTED`, `inferences` become `INFERRED`, and draft `unknowns`/`limitations`
-are merged with deterministic source unknowns and limitations. Claims must cite valid context
-evidence IDs.
+## Commands
 
-A claim that fails validation is discarded and reported rather than rejecting the whole
-generation: cited-but-unknown evidence, evidence a section does not accept, no citation at all, or
-an unsupported identifier each produce a `*_CLAIM_DISCARDED` limitation naming what was dropped and
-why, while the remaining claims publish. Malformed drafts and unsafe text still fail the run.
+| Command | Purpose |
+| --- | --- |
+| `stats` | Counts and names to plan the work |
+| `analyze` | Technical documentation site (`--docs-dir` adds descriptions; `--verbose` adds mapping and FLOW detail; `--target-*` publishes a focused subset) |
+| `describe` | Draft or refresh description files with a model |
+| `approve` | Mark descriptions approved |
+| `status` | Report missing, draft, edited, approved and outdated descriptions |
+| `export-comments` | Designer comment texts per package |
+| `provider-probe` | Check how a model server can be reached |
+| `probe-shapes` | Key layout of triggers, descriptors and adapter services (no values) |
+| `scan` | Package and artifact inventory only |
+| `ollama-test`, `build-business-context`, `enrich-business` | Earlier business-enrichment path; frozen and planned for removal |
 
-Citing a valid evidence ID is not sufficient. Every claim is also checked against the identifiers
-its cited evidence actually contains: a claim naming a service, document, field or proper noun that
-no cited evidence supports is discarded, and the discarded names are reported as an
-`UNGROUNDED_CLAIM_DISCARDED` limitation. Sentence-initial prose and acronyms are not treated as
-identifiers, so ordinary wording is unaffected. There is no `CONFIRMED` confidence: the application
-never asserts that it verified a model statement beyond this grounding check.
+## Safety
 
-Output language defaults to `en`. Generating another language leads small local models to translate
-identifiers that must be copied verbatim, which the grounding check then discards. Valid partial results exit successfully and remain labeled
-`PARTIAL`; invalid drafts, unknown evidence IDs, unsafe text, provider errors, and output failures
-exit non-zero without publishing a partial bundle.
+- Package files are only read, with a hardened XML parser (no DTDs or entities).
+- Secret-like literals and comments are redacted in every output; `--config` can redact or omit
+  all literals or free text.
+- Prompts and raw model responses are never stored; only validated text is cached
+  (`--cache-dir`, default under your user cache folder).
+- A server token is read from an environment variable (`--api-key-env`), never from a flag, and
+  is only sent over https or to a loopback address.
 
-M8c caches only validated normalized `business-result.v2` JSON. The cache key includes the raw
-context hash, provider kind, model name and digest when available, prompt version, internal draft
-schema version, final result schema, language, and generation parameters. Use `--refresh` to bypass
-a cache read or `--no-cache` to disable cache reads and writes. The persisted result stays
-byte-stable across cache hits; the CLI reports hit or miss.
+## Output reference
 
-Its completion output reports analyzed service counts, support-status counts, opaque description
-counts, promoted call occurrence counts, unique service dependency counts, process counts,
-entrypoint validation counts, technical candidate counts, process memberships, process edges, and
-unresolved process calls. M7 also reports DOT graph count, SVG/PNG render counts, render failures,
-and graph-index generation. The `Processes with findings` metric is the number of declared process
-definitions carrying process-level findings, not the total number of global catalog findings.
+`wm-doc analyze` writes `analysis.json` (schema `analysis.v9`), `index.md`, `LIMITATIONS.md`,
+`entrypoints.md`, `artifacts.md`, `services/*.md`, `documents/*.md`, `graphs/*.dot` and
+`graphs/index.md`, `processes/*.md` when processes are declared, `service-catalogue.md` with
+`--docs-dir`, and SVG/PNG graphs with `--render-graphs`. Before writing it removes only these
+generated files and directories; other files in the output directory are kept.
 
-`analysis.json` uses schema `analysis.v8`. In this schema, call occurrences preserve each concrete
-FLOW `INVOKE`, FLOW `MAPINVOKE`, or statically confirmed Java invocation site. Unique service
-dependencies aggregate repeated calls by `(caller, target, dependency kind)`. Mapping evidence is
-exposed as `flow_maps`, `mapping_operations`, and `transformer_bindings`; document evidence is
-exposed as `document_types`, `document_reference_occurrences`, `document_dependencies`, and
-`service_document_dependencies`; Java evidence is exposed as `java_service_analyses`,
-`java_imports`, `java_type_references`, `java_pipeline_accesses`, and
-`java_invocation_occurrences`. M5-lite adds service `source_service_type`, `analysis_status`,
-`description_status`, call/dependency `target_analysis_status`, and metrics for service kinds,
-support statuses, opaque services, and resolved opaque targets. M6 adds top-level `processes`,
-`process_entrypoints`, `process_service_memberships`, `process_dependency_edges`,
-`process_unresolved_calls`, `process_document_relationships`, and
-`technical_entrypoint_candidates`.
-
-In focused mode, `analysis.json` describes the complete discovered snapshot. `scope.json` describes
-the selected publication subset. Markdown and focused graphs describe the selected publication
-subset. Scope membership is deterministic BFS over resolved unique service dependencies, while
-unresolved, dynamic, unsupported, or depth-limited calls become explicit scope boundaries.
-
-Graph rendering is disabled by default: `--render-graphs none`. Use `svg`, `png`, or `both` to ask
-the CLI to render every generated DOT graph with Graphviz `dot`, resolved from `PATH` or
-`--graphviz-dot`. Graphviz is optional and is not installed by `wm-doc`. When rendering is requested
-and Graphviz is missing or rejects a graph, canonical analysis, Markdown, and DOT files are still
-written, successful graph assets remain linked, diagnostics are path-scrubbed and secret-redacted,
-and the CLI exits non-zero. Rendered SVG is parsed as XML, stripped of Graphviz's external DTD
-declaration and comments, and rejected when unsafe elements, event handlers, external links, or
-absolute local paths are present. Rendered PNG must be structurally valid PNG data with valid chunks,
-image dimensions, IDAT data, IEND, and CRCs.
-
-Before writing analysis output, `wm-doc analyze` cleans only its managed generated locations:
-`analysis.json`, `index.md`, `entrypoints.md`, `scope.json`, `scope.md`, `services`,
-`documents`, `processes`, and `graphs`. Shape conflicts at those paths are replaced, unrelated
-files under the output root are preserved, and symlinks at managed paths are unlinked rather than
-followed. Cleanup and Graphviz diagnostics are bounded and scrub secret-like keys such as
-`password`, `passwd`, `token`, `access_token`, `api-key`, and bearer authorization values before
-CLI output.
-
-If `--processes-file` is omitted, `wm-doc analyze` looks for `processes.yml` under the scan root.
-Default absence is normal and produces no finding. A process catalog must use `version: 1`, stable
-safe process IDs, user-authored names, optional policy-controlled descriptions, and exact canonical
-service full names as entrypoints. Technical entrypoint candidates are generated from services with
-zero incoming resolved local dependencies; they are not confirmed business process entrypoints.
-Per-process Markdown separates `Declared Entrypoints` (the user-authored catalog values) from
-`Entrypoint Validation` (the exact static resolution status). Process document relationships link to
-generated document pages only when the canonical document is resolved and present in the generated
-output; unresolved document targets remain visible as technical identifiers marked `UNRESOLVED` and
-are not linked.
-
-`graphs/dependencies.dot` remains the service-call dependency graph: one edge per unique static
-service dependency with occurrence counts, not pipeline mappings. `graphs/documents.dot` contains
-unique document-to-document `REFERENCES_DOCUMENT` edges and unresolved document nodes when observed.
-DOT files remain the canonical graph contract. `graphs/index.md` lists every DOT graph and links
-derived SVG/PNG assets only when those files were successfully rendered. Process pages always link
-their DOT graph and show an SVG preview when available, otherwise PNG when available.
-Each document Markdown page includes the active disclosure policy snapshot used for the run.
-Each Java Service Markdown page includes source consistency, declared signatures, observed pipeline
-accesses, Java invocation sites, imports, referenced types, findings, and source evidence without
-printing Java bodies or decoded fragments.
-Opaque service Markdown pages clearly state that the artifact was identified as a service but its
-implementation-specific format was not analyzed. They do not claim absence of database, messaging,
-scheduler, process, file, network, or other external behavior.
-All service Markdown pages include a deterministic `Called By` section derived from resolved static
-FLOW and Java service dependencies plus a bounded `Processes` section when process membership is
-declared. Document pages include process reference sections derived from process/document
-relationships. Generated Markdown link integrity is covered by regression tests for no-catalog,
-fixture-catalog, synthetic unresolved-document, and free-text disclosure-mode outputs.
-
-M4a trusts complete source as the behavioral authority only when the matched service method belongs
-directly to the verified generated service class and has the supported generated shape:
-`static void serviceName(IData pipeline)`. The `IData` parameter may be the imported short name or
-`com.wm.data.IData`, and harmless parameter annotations are accepted. Same-name methods with
-unsupported signatures fall back to `java.frag` and emit
-`JAVA_SOURCE_METHOD_SIGNATURE_UNSUPPORTED`; multiple compatible same-name methods emit
-`JAVA_SOURCE_METHOD_AMBIGUOUS`.
-
-Observed Java facts are extracted from the direct service-method body. M4a continues to analyze
-normal Java control blocks such as `if`, loops, `try/catch`, `switch`, and `synchronized`, but it
-does not promote supported-looking API sites inside lambda bodies, anonymous-class methods, or local
-class bodies as direct service evidence. Those sites emit
-`JAVA_NESTED_EXECUTABLE_BODY_SKIPPED` limitation findings. Malformed or unbalanced complete source
-emits `JAVA_SOURCE_PARTIAL_PARSE` and falls back to `java.frag` when available.
-
-Literal extraction and free-text metadata both default to `include` (set `redact` or `omit` in a
-config file; see `examples/wm-doc.yml`). The secret guard is evaluated first and still redacts
-secret-like literal and free-text contexts in every mode. Free-text policy is applied before canonical serialization, and raw attribute collections
-are filtered so they cannot bypass the configured policy.
-Malformed XML diagnostics are sanitized before JSON, Markdown, or CLI-visible findings are emitted:
-the parser reason remains, while the authoritative location stays in the relative
-`SourceReference.path` instead of the message.
-
-M3 keeps document parsing evidence-based. It preserves raw field types, raw dimensions, source
-references, and exact declared `rec_ref` targets; it does not validate mapping paths against document
-schemas or infer business meaning from field names.
-
-M3 hardening reports `MALFORMED_NESTED_RECORD` only for demonstrably malformed nested record
-containers, such as non-array `rec_fields` metadata or non-record children inside a `rec_fields`
-array. Empty record fields are allowed. `UNSUPPORTED_DOCUMENT_METADATA` reports structurally valid
-metadata that is preserved as policy-controlled evidence but not yet interpreted semantically.
-
-M6 keeps declared signatures and observed Java pipeline behavior separate. A real
-`IDataUtil.get(...)`, `put(...)`, or `remove(...)` access is retained as observed behavior even when
-the field is not declared in the service signature. The current fixture baseline has 24 FLOW
-Services, 11 Java Services, 0 opaque services, 108 FLOW call occurrences, 86 FLOW-derived unique
-dependencies, 73 Java pipeline accesses, 0 Java invocation occurrences, 0 declared processes by
-default, and 15 technical entrypoint candidates.
-
-Fully qualified type usages without imports, such as `java.nio.file.Path`, remain an explicit M4a
-limitation. The `java_type_references` count covers imported types referenced by the direct service
-method, not every possible fully qualified type expression.
-
-The tool works offline, treats analyzed packages as read-only, never connects to Integration Server,
-and never executes analyzed Java or FLOW code. M8c also does not compile Java source, load
-classes, perform broad Java external-effect classification, analyze helper method bodies as service
-behavior, or parse JDBC, SQL, database resources, connection aliases, UM/JMS, triggers, schedulers,
-native BPM/process-model definitions, Mermaid diagrams, JavaScript graph viewers, static-site
-frameworks, ZIP archives, CI publishing definitions, RAG, cloud provider defaults, arbitrary
-external documents, prompt editing, model fine-tuning, snapshot comparison, impact analysis,
-persistent analysis caching, or partial/lazy parsing.
-
-## Prototype: bottom-up AI service descriptions
-
-`wm-doc summarize` writes the same documentation set as `wm-doc analyze` and adds an
-`## AI Description` section to every service page, written by a local Ollama model:
-
-```powershell
-wm-doc summarize samples --output out\docs --model qwen3.5:4b
-```
-
-How it works:
-
-- Each service is turned into a short pseudo-code view of its signature, FLOW steps,
-  conditions, TRY/CATCH blocks, mapping literals, transformer calls, developer step comments
-  and Java pipeline fields.
-- Services are described one at a time in call-graph order, callees first. Each call line in a
-  caller's pseudo-code carries the one-line description already written for that callee.
-- Prompts are sized to the context window (`--num-ctx`, default 16384). A service too large
-  to fit loses mapping detail first, then trailing lines, and its page says so.
-- Every name the model uses must appear in the facts it was given. An answer that fails this
-  check or the disclosure scan gets one corrective retry and is otherwise rejected.
-- Validated descriptions are cached by a hash of the exact prompt and model, so re-runs only
-  regenerate services whose facts, or callee descriptions, changed. `--refresh` regenerates
-  everything; `--no-cache` disables the cache.
-
-Outputs: the AI section on each service page, `ai-summaries.md` (one line per service, linked
-from `index.md`) and `ai-summaries.json`. A later plain `wm-doc analyze` into the same
-directory removes them. This path is separate from `build-business-context` and
-`enrich-business`; the AI text is not reviewed and is labelled as such on every page.
+Architecture and format details: `docs/architecture.md`, `docs/format-behavior.md`,
+`docs/unsupported-constructs.md`.
 
 ## Development
-
-The project is configured for Python 3.12+, `uv`, `pytest`, `ruff`, and `mypy`.
 
 ```powershell
 uv run pytest
 uv run ruff check .
 uv run mypy
 ```
-
-If `uv` is not installed, install it first or run the equivalent tools in a Python environment with
-the dependencies from `pyproject.toml`.
