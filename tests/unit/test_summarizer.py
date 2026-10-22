@@ -177,7 +177,7 @@ def test_pseudocode_shows_try_catch_conditions_and_comments(
 
     assert "TRY:" in oa_text and "CATCH:" in oa_text
     assert "when %input/orderBatch/status% == $null:" in oa_text
-    assert "# outside this snapshot" in oa_text
+    assert "# outside the analysed packages" in oa_text
     assert "(stops at the first child that succeeds)  // Try / Catch" in test_text
     assert "// Sending a message from Alice to Bob" in test_text
 

@@ -72,6 +72,7 @@ from wm_doc.ir import (
     ServiceSummary,
     ServiceType,
     SignatureField,
+    SignatureOrigin,
     SourceReference,
     TechnicalEntrypointCandidate,
     TextDisclosure,
@@ -101,6 +102,8 @@ FLOW_NODE_TAGS = {
     "SEQUENCE": FlowNodeType.SEQUENCE,
     "BRANCH": FlowNodeType.BRANCH,
     "LOOP": FlowNodeType.LOOP,
+    # Designer's REPEAT step is serialized as <RETRY COUNT=.. BACK-OFF=.. LOOP-ON=..>.
+    "RETRY": FlowNodeType.REPEAT,
     "MAP": FlowNodeType.MAP,
     "EXIT": FlowNodeType.EXIT,
     "INVOKE": FlowNodeType.INVOKE,
@@ -155,6 +158,7 @@ FLOW_TECHNICAL_ATTRIBUTES: dict[str, set[str]] = {
     "SEQUENCE": {"EXIT-ON", "FORM", "TIMEOUT"},
     "BRANCH": {"LABELEXPRESSIONS", "SWITCH", "TIMEOUT"},
     "LOOP": {"IN-ARRAY", "OUT-ARRAY", "TIMEOUT"},
+    "RETRY": {"BACK-OFF", "COUNT", "LOOP-ON", "TIMEOUT"},
     "MAP": {"MODE", "TIMEOUT"},
     "INVOKE": {"INVOKE-ORDER", "SERVICE", "TIMEOUT", "VALIDATE-IN", "VALIDATE-OUT"},
     "MAPINVOKE": {"INVOKE-ORDER", "SERVICE", "TIMEOUT", "VALIDATE-IN", "VALIDATE-OUT"},
@@ -272,6 +276,8 @@ def analyze_path(
         explicit=processes_file_explicit or processes_file is not None,
     )
     service_index = _build_service_index(inventory.packages)
+    specification_nodes = _specification_node_paths(scan_root, inventory.packages)
+    specification_signatures: dict[str, ServiceSignature] = {}
     extraction_policy = _extraction_policy_snapshot(config)
     id_factory = StableIdFactory()
     service_classifications: dict[str, ClassificationResult] = {}
@@ -360,6 +366,9 @@ def analyze_path(
     all_mapping_operations: list[MappingOperation] = []
     all_transformer_bindings: list[TransformerBinding] = []
     for service in pending_services:
+        service = _with_specification_signature(
+            service, specification_nodes, specification_signatures, scan_root
+        )
         resolved_calls, unique_dependencies = _resolve_service_dependencies(
             service, service_index, service_classifications, config
         )
@@ -399,7 +408,7 @@ def analyze_path(
     document_index = {document.identity.full_name: document for document in all_document_types}
     all_document_reference_occurrences.extend(
         _parse_service_document_reference_occurrences(
-            scan_root, service_reference_inputs, id_factory
+            scan_root, service_reference_inputs, id_factory, specification_nodes
         )
     )
     all_document_reference_occurrences = _resolve_document_references(
@@ -917,10 +926,71 @@ def _parse_document_field(
     )
 
 
+def _specification_node_paths(
+    scan_root: Path, packages: Iterable[PackageInventory]
+) -> dict[str, Path]:
+    """Map each specification's full name to its node.ndf (first occurrence wins)."""
+    paths: dict[str, Path] = {}
+    for package in packages:
+        for artifact in package.artifacts:
+            if artifact.probable_type != "specification":
+                continue
+            if artifact.identity is None or artifact.identity.full_name is None:
+                continue
+            paths.setdefault(artifact.identity.full_name, _artifact_node_path(scan_root, artifact))
+    return paths
+
+
+def _specification_signature(
+    name: str,
+    nodes: dict[str, Path],
+    cache: dict[str, ServiceSignature],
+    scan_root: Path,
+) -> ServiceSignature | None:
+    if name in cache:
+        return cache[name]
+    path = nodes.get(name)
+    if path is None:
+        return None
+    try:
+        root = parse_xml_file(path)
+    except (XmlParseError, XmlSecurityError):
+        return None
+    signature = _parse_signature(root, path, scan_root)
+    cache[name] = signature
+    return signature
+
+
+def _with_specification_signature(
+    service: FlowService,
+    nodes: dict[str, Path],
+    cache: dict[str, ServiceSignature],
+    scan_root: Path,
+) -> FlowService:
+    """Use the declared specification's signature when the service declares none itself."""
+    if not service.specification or service.signature.inputs or service.signature.outputs:
+        return service
+    signature = _specification_signature(service.specification, nodes, cache, scan_root)
+    if signature is None or not (signature.inputs or signature.outputs):
+        return service
+    return service.model_copy(
+        update={"signature": signature, "signature_origin": SignatureOrigin.SPECIFICATION}
+    )
+
+
+def _signature_record_has_fields(svc_sig: etree._Element | None) -> bool:
+    for direction in ("sig_in", "sig_out"):
+        rec_fields = _array_child(_record_child(svc_sig, direction), "rec_fields")
+        if rec_fields is not None and _direct_children(rec_fields, "record"):
+            return True
+    return False
+
+
 def _parse_service_document_reference_occurrences(
     scan_root: Path,
     service_inputs: list[tuple[str, ArtifactCandidate]],
     id_factory: StableIdFactory,
+    specification_nodes: dict[str, Path] | None = None,
 ) -> list[DocumentReferenceOccurrence]:
     occurrences: list[DocumentReferenceOccurrence] = []
     for package_name, artifact in service_inputs:
@@ -933,6 +1003,15 @@ def _parse_service_document_reference_occurrences(
         except (XmlParseError, XmlSecurityError):
             continue
         svc_sig = _record_child(root, "svc_sig")
+        spec_name = _value_child(root, "svc_spec")
+        spec_path = (specification_nodes or {}).get((spec_name or "").strip())
+        if spec_path is not None and not _signature_record_has_fields(svc_sig):
+            # The signature comes from the specification; so do its document references.
+            try:
+                svc_sig = _record_child(parse_xml_file(spec_path), "svc_sig")
+                node_path = spec_path
+            except (XmlParseError, XmlSecurityError):
+                pass
         service_name = artifact.identity.full_name
         for direction, role in (
             ("sig_in", ServiceDocumentUsageRole.INPUT),
@@ -1058,10 +1137,12 @@ def _parse_flow_service(
     description: TextValue | None = None
     description_status = ServiceDescriptionStatus.NO_DESCRIPTION
     source_service_type = artifact.source_service_type
+    specification: str | None = None
 
     try:
         values = parse_values_file(node_path)
         source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
+        specification = _normalized_scalar_value(values, "svc_spec")
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1112,6 +1193,7 @@ def _parse_flow_service(
         description_status=description_status,
         description=description,
         signature=signature,
+        specification=specification,
         classification=classification,
         flow_tree=flow_tree,
         metrics=_metrics(
@@ -1147,10 +1229,12 @@ def _parse_java_service(
     description: TextValue | None = None
     description_status = ServiceDescriptionStatus.NO_DESCRIPTION
     source_service_type = artifact.source_service_type
+    specification: str | None = None
 
     try:
         values = parse_values_file(node_path)
         source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
+        specification = _normalized_scalar_value(values, "svc_spec")
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1179,6 +1263,7 @@ def _parse_java_service(
         description_status=description_status,
         description=description,
         signature=signature,
+        specification=specification,
         classification=classification,
         metrics=_metrics(java_calls, [], None, [], [], [], java_analysis),
         call_occurrences=java_calls,
@@ -1208,10 +1293,12 @@ def _parse_opaque_service(
     description: TextValue | None = None
     description_status = ServiceDescriptionStatus.NO_DESCRIPTION
     source_service_type = artifact.source_service_type
+    specification: str | None = None
 
     try:
         values = parse_values_file(node_path)
         source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
+        specification = _normalized_scalar_value(values, "svc_spec")
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1243,6 +1330,7 @@ def _parse_opaque_service(
         description_status=description_status,
         description=description,
         signature=signature,
+        specification=specification,
         classification=classification,
         metrics=AnalysisMetrics(),
         extraction_policy=extraction_policy,

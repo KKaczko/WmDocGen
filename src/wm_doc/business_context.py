@@ -29,6 +29,7 @@ from wm_doc.external_systems import (
     system_label,
 )
 from wm_doc.ir import (
+    ANALYSIS_SCHEMA_VERSION,
     AnalysisFinding,
     AnalysisResult,
     DocumentDependency,
@@ -161,7 +162,7 @@ def load_business_context_inputs(analysis_path: Path, scope_path: Path) -> Busin
     _require_schema(
         analysis_payload,
         "analysis.json",
-        expected="analysis.v8",
+        expected=ANALYSIS_SCHEMA_VERSION,
         code=BusinessContextErrorCode.SCHEMA_UNSUPPORTED,
     )
     _require_schema(
@@ -175,7 +176,7 @@ def load_business_context_inputs(analysis_path: Path, scope_path: Path) -> Busin
     except ValidationError as exc:
         raise BusinessContextError(
             BusinessContextErrorCode.INPUT_INVALID,
-            "analysis.json does not match the supported analysis.v8 structure.",
+            f"analysis.json does not match the supported {ANALYSIS_SCHEMA_VERSION} structure.",
         ) from exc
     try:
         scope = ScopeResult.model_validate(scope_payload)

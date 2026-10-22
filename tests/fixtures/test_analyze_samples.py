@@ -152,7 +152,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v8"
+    assert analysis.schema_version == "analysis.v9"
     assert analysis.metrics.call_occurrence_count == 108
     assert analysis.metrics.flow_call_occurrence_count == 108
     assert analysis.metrics.java_static_call_occurrence_count == 0
@@ -234,7 +234,7 @@ processes:
     analysis = analyze_path(_samples(), DEFAULT_CONFIG, processes_file)
     processes = {process.process_id: process for process in analysis.processes}
 
-    assert analysis.schema_version == "analysis.v8"
+    assert analysis.schema_version == "analysis.v9"
     assert set(processes) == {"order batch-validation", "pgp-key-lookup"}
     assert analysis.metrics.process_definition_count == 2
     assert analysis.metrics.declared_entrypoint_count == 3
@@ -243,7 +243,7 @@ processes:
     assert analysis.metrics.process_service_membership_count == 8
     assert analysis.metrics.process_dependency_edge_count == 7
     assert analysis.metrics.process_unresolved_call_count == 29
-    assert analysis.metrics.process_document_relationship_count == 12
+    assert analysis.metrics.process_document_relationship_count == 14  # + spec signatures
     assert analysis.metrics.services_in_multiple_processes_count == 0
 
     oa_memberships = [
@@ -482,11 +482,13 @@ def test_document_types_are_extracted_with_ordered_fields() -> None:
 def test_document_reference_dependencies_are_resolved_exactly() -> None:
     analysis = _analysis()
 
-    assert analysis.metrics.document_reference_occurrence_count == 12
-    assert analysis.metrics.resolved_document_reference_count == 10
+    # M12: readPrivateKeys/readPublicKeys take their signatures from specifications,
+    # which add one resolved document reference each.
+    assert analysis.metrics.document_reference_occurrence_count == 14
+    assert analysis.metrics.resolved_document_reference_count == 12
     assert analysis.metrics.unresolved_document_reference_count == 2
     assert analysis.metrics.unique_document_dependency_count == 5
-    assert analysis.metrics.service_document_dependency_count == 7
+    assert analysis.metrics.service_document_dependency_count == 9
 
     document_edges = {
         (dependency.source_document, dependency.target_document, dependency.resolved)
@@ -731,8 +733,8 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     assert "## Transformer Bindings" in markdown
     assert "Transformer input bindings | 112" in markdown
     assert "Transformer output bindings | 56" in markdown
-    assert "## Normal Service Dependencies" in markdown
-    assert "## Transformer Dependencies" in markdown
+    assert "## Calls" in markdown
+    assert "| transformer |" in markdown
     assert "## Call Occurrences" in markdown
     assert "## Transformer Call Occurrences" in markdown
     assert "<redacted:literal>" not in markdown
@@ -782,7 +784,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v8" in payload
+    assert "analysis.v9" in payload
     assert "## Disclosure Policies" in document_markdown
     assert "- Free text mode: include" in document_markdown
     assert "- Literal mode: include" in document_markdown

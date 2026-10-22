@@ -50,7 +50,7 @@ def test_build_business_context_from_service_scope(tmp_path) -> None:
     assert context["context_kind"] == "SERVICE"
     assert context["status"] == "COMPLETE"
     assert context["status_reasons"] == []
-    assert context["source"]["analysis_schema"] == "analysis.v8"
+    assert context["source"]["analysis_schema"] == "analysis.v9"
     assert context["source"]["scope_schema"] == "scope.v1"
     assert context["source"]["analysis_sha256"] == _sha256(published / "analysis.json")
     assert context["source"]["scope_sha256"] == _sha256(published / "scope.json")
