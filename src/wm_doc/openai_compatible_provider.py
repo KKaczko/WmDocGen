@@ -36,6 +36,7 @@ from wm_doc.ollama_provider import (
     _read_error_body,
     _safe_diagnostic,
     _safe_label,
+    require_token_transport,
     validate_ollama_url,
 )
 
@@ -68,16 +69,7 @@ class OpenAICompatibleProvider:
             allow_remote_provider=allow_remote_provider,
             allow_path=True,
         )
-        parsed = urllib.parse.urlparse(self.base_url)
-        loopback = (parsed.hostname or "").casefold() in {"localhost", "127.0.0.1", "::1"}
-        if api_key and parsed.scheme != "https" and not loopback:
-            # A token to loopback (an SSH tunnel, say) never leaves the machine; one to
-            # a remote host over plain HTTP is on the wire in clear.
-            raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE,
-                "Sending an API key to a remote host requires https. Use an https URL "
-                "or tunnel the endpoint to loopback.",
-            )
+        require_token_transport(self.base_url, api_key)
         self._api_key = api_key
         self.connect_timeout_seconds = connect_timeout_seconds
         self.timeout_seconds = timeout_seconds
