@@ -867,14 +867,15 @@ def test_graph_render_modes_publish_expected_files_and_links(tmp_path, monkeypat
     processes_file = tmp_path / "processes.yml"
     _write_fixture_process_catalog(processes_file)
 
+    # Counts include artifacts.md (M12). Requesting images also writes and renders one call
+    # graph per service: 35 extra DOT files and 35 extra images per format.
     cases = [
-        # Counts include artifacts.md (M12).
-        ("none", 55, 0, 0),
-        ("svg", 59, 4, 0),
-        ("png", 59, 0, 4),
-        ("both", 63, 4, 4),
+        ("none", 55, 4, 0, 0),
+        ("svg", 129, 39, 39, 0),
+        ("png", 129, 39, 0, 39),
+        ("both", 168, 39, 39, 39),
     ]
-    for mode, expected_count, expected_svg, expected_png in cases:
+    for mode, expected_count, expected_dot, expected_svg, expected_png in cases:
         output = tmp_path / f"fixture-{mode}"
         graphviz_dot = "dot" if mode != "none" else None
 
@@ -886,7 +887,7 @@ def test_graph_render_modes_publish_expected_files_and_links(tmp_path, monkeypat
             graphviz_dot=graphviz_dot,
         )
 
-        assert "- DOT graphs generated: 4" in cli_output
+        assert f"- DOT graphs generated: {expected_dot}" in cli_output
         assert f"- SVG graphs rendered: {expected_svg}" in cli_output
         assert f"- PNG graphs rendered: {expected_png}" in cli_output
         assert "- Graph render failures: 0" in cli_output
@@ -916,12 +917,13 @@ def test_graph_render_modes_without_process_catalog(tmp_path, monkeypatch) -> No
     fake_runner = FakeGraphvizRunner()
     monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
 
+    # Counts include artifacts.md (M12) and, when images are requested, 35 service call
+    # graphs (DOT plus one image per format).
     cases = [
-        # Counts include artifacts.md (M12).
         ("none", 50, 0, 0),
-        ("svg", 52, 2, 0),
-        ("png", 52, 0, 2),
-        ("both", 54, 2, 2),
+        ("svg", 122, 37, 0),
+        ("png", 122, 0, 37),
+        ("both", 159, 37, 37),
     ]
     for mode, expected_count, expected_svg, expected_png in cases:
         output = tmp_path / f"no-process-{mode}"
@@ -1198,7 +1200,9 @@ def test_requested_graph_render_failure_exits_nonzero_without_broken_links(
 
     assert result.exit_code == 1
     assert "Graph rendering failed:" in result.output
-    assert "- Graph render failures: 2" in result.output
+    # 2 global graphs plus 35 service call graphs.
+    assert "- Graph render failures: 37" in result.output
+    assert "- ... and 17 more failed render(s)" in result.output
     for secret in ("AnotherSecret", "private-token", "bearer-secret"):
         assert secret not in result.output
     assert (output / "analysis.json").exists()
