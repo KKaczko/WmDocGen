@@ -3,8 +3,9 @@
 `wm-doc` is an offline, deterministic static-analysis tool for Software AG / IBM webMethods
 Integration Server package snapshots.
 
-The current implemented milestone is **M8c for structured Ollama business enrichment** on top of
-the M6 process documentation and M5-lite opaque service inventory baselines. It discovers package and namespace artifacts, parses
+The current milestone is **M12: per-service documentation for a production server** (in
+progress; see `AGENTS.md`), on top of M9-M11 and the M6 process documentation and M5-lite opaque
+service inventory baselines. It discovers package and namespace artifacts, parses
 observed FLOW Service signatures, extracts ordered FLOW and mapping evidence, extracts observed
 Document Types with ordered field trees, resolves local document references by exact full name,
 performs source-first Java Service analysis, and preserves parseable unsupported service artifacts
@@ -240,9 +241,9 @@ class bodies as direct service evidence. Those sites emit
 `JAVA_NESTED_EXECUTABLE_BODY_SKIPPED` limitation findings. Malformed or unbalanced complete source
 emits `JAVA_SOURCE_PARTIAL_PARSE` and falls back to `java.frag` when available.
 
-Literal extraction defaults to `redact`, while free-text metadata defaults to `include`. The secret
-guard still redacts secret-like literal and free-text contexts even when inclusion is explicitly
-enabled. Free-text policy is applied before canonical serialization, and raw attribute collections
+Literal extraction and free-text metadata both default to `include` (set `redact` or `omit` in a
+config file; see `examples/wm-doc.yml`). The secret guard is evaluated first and still redacts
+secret-like literal and free-text contexts in every mode. Free-text policy is applied before canonical serialization, and raw attribute collections
 are filtered so they cannot bypass the configured policy.
 Malformed XML diagnostics are sanitized before JSON, Markdown, or CLI-visible findings are emitted:
 the parser reason remains, while the authoritative location stays in the relative

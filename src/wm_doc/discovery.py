@@ -131,19 +131,6 @@ def _scan_package(package_root: Path, scan_root: Path) -> PackageInventory:
         artifacts.append(_unsupported_file_artifact(unsupported, package_root, scan_root))
 
     aliases.discard(package_name)
-    if package_name == "PGP":
-        findings.append(
-            AnalysisFinding(
-                status=FindingStatus.UNKNOWN,
-                code="PGP_PROVENANCE_UNKNOWN",
-                message=(
-                    "The public PGP fixture is used as-is; upstream URL, exact commit SHA, "
-                    "and documented webMethods version are not available in the repository."
-                ),
-                source=source_for(package_root, scan_root, "package"),
-            )
-        )
-
     if aliases:
         findings.append(
             AnalysisFinding(

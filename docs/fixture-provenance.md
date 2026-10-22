@@ -97,8 +97,9 @@ Unavailable in the local fixture:
 - Standalone LICENSE file: not present.
 - Documented webMethods product version: unknown.
 
-The scanner reports this as `PGP_PROVENANCE_UNKNOWN`. PGP remains a compatibility corpus only; it is
-not proof of full webMethods 10.15 compatibility.
+This is recorded here only; the scanner no longer emits a fixture-specific finding for a package
+named `PGP`, because production code must not special-case test fixtures. PGP remains a
+compatibility corpus only; it is not proof of full webMethods 10.15 compatibility.
 
 ## Sensitive Fixture Categories
 

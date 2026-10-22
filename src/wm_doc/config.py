@@ -52,11 +52,12 @@ class AppConfig(BaseModel):
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
 
 
+# Generic defaults only. Project-specific namespace rules belong in a config file
+# (see examples/wm-doc.yml) passed with --config.
 DEFAULT_CONFIG = AppConfig(
     classification=ClassificationConfig(
         importance=ImportanceRules(
             important=ImportanceRuleSet(
-                fullName=["oa.*.channel:*", "di.*.adapter:*"],
                 serviceName=["*Service", "process*"],
             ),
             neverImportant=ImportanceRuleSet(
