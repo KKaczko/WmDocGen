@@ -719,7 +719,8 @@ def narrative_from_payload(payload: Any) -> Narrative | None:
     steps = tuple(
         _clean(step, MAX_STEP_CHARS) for step in steps_value[:MAX_STEPS] if isinstance(step, str)
     )
-    steps = tuple(step for step in steps if step)
+    # Small models sometimes emit punctuation-only items such as ",".
+    steps = tuple(step for step in steps if sum(char.isalpha() for char in step) >= 3)
     if not texts["purpose"]:
         return None
     return Narrative(
