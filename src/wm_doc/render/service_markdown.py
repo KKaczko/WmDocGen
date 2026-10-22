@@ -38,6 +38,7 @@ from wm_doc.render.document_markdown import document_markdown_filename
 from wm_doc.render.service_summary import derived_layer, render_service_summary
 
 if TYPE_CHECKING:
+    from wm_doc.effects import ServiceFacts
     from wm_doc.summarizer import AiServiceSummary
 
 IMPORTANCE_ORDER = {"IMPORTANT": 0, "NORMAL": 1, "LOW": 2}
@@ -228,6 +229,12 @@ Signature from specification `{{ service.specification }}`.
 
 {{ render_calls_table(service) }}
 
+{% if facts %}
+## Data and Systems Touched
+
+{{ render_effects(facts) }}
+
+{% endif %}
 ## Called By
 
 {{ render_incoming_dependencies(incoming_dependencies) }}
@@ -236,6 +243,12 @@ Signature from specification `{{ service.specification }}`.
 
 {{ render_process_memberships(process_memberships, process_definitions) }}
 
+{% if facts %}
+## Entry Points
+
+{{ render_entry_points(facts) }}
+
+{% endif %}
 {% if verbose %}
 ## Call Occurrences
 
@@ -293,6 +306,7 @@ def render_service_markdown(
     verbose: bool = False,
     ai_summary: AiServiceSummary | None = None,
     ai_model: str | None = None,
+    facts: ServiceFacts | None = None,
 ) -> str:
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
@@ -330,6 +344,9 @@ def render_service_markdown(
         ai_summary=ai_summary,
         ai_model=ai_model or "unknown model",
         ai_text=_ai_text,
+        facts=facts,
+        render_effects=render_effects_table,
+        render_entry_points=render_entry_points_table,
         summary_text=render_service_summary(service),
         layer_text=derived_layer(service) or service.classification.layer,
         description_text=description_text,
@@ -389,6 +406,45 @@ def service_markdown_filenames(services: list[FlowService]) -> dict[str, str]:
             filename = f"{stem}__{digest}.md"
         filenames[full_name] = filename
     return filenames
+
+
+def _chain(names: tuple[str, ...]) -> str:
+    return " → ".join(f"`{name}`" for name in names)
+
+
+def render_effects_table(facts: ServiceFacts) -> str:
+    """Data objects and systems this service touches, itself or through local callees."""
+    if not facts.effects:
+        return "No data objects or external systems were found for this service.\n"
+    lines = [
+        "| Object | Action | Where | Via | Known from |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for effect in facts.effects:
+        via = _chain(effect.via) if effect.via else "this service"
+        lines.append(
+            f"| {_escape_table(effect.object)} | {_escape_table(effect.action)} "
+            f"| {_escape_table(effect.where)} | {via} | {effect.known_from} |"
+        )
+    if facts.hidden_effects:
+        lines.append(f"| ... {facts.hidden_effects} more | | | | |")
+    return "\n".join(lines) + "\n"
+
+
+def render_entry_points_table(facts: ServiceFacts) -> str:
+    """What reaches this service: artifacts naming a caller, processes, uncalled callers."""
+    if not facts.entry_points:
+        if facts.callers:
+            return "No entry point was found within the depth limit.\n"
+        return (
+            "Nothing in the analysed packages calls or references this service. It may be "
+            "invoked from outside them (for example over HTTP, by a scheduler, or by a trigger "
+            "in a package that was not analysed).\n"
+        )
+    lines = ["| Entry point | Kind | Path |", "| --- | --- | --- |"]
+    for entry in facts.entry_points:
+        lines.append(f"| {entry.name} | {_escape_table(entry.kind)} | {_chain(entry.path)} |")
+    return "\n".join(lines) + "\n"
 
 
 def _ai_text(text: str | None) -> str:
@@ -913,6 +969,7 @@ def write_service_markdown(
     verbose: bool = False,
     ai_summaries: Mapping[str, AiServiceSummary] | None = None,
     ai_model: str | None = None,
+    service_facts: Mapping[str, ServiceFacts] | None = None,
 ) -> list[Path]:
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
@@ -933,6 +990,7 @@ def write_service_markdown(
                 verbose=verbose,
                 ai_summary=ai_summaries.get(service.identity.full_name),
                 ai_model=ai_model,
+                facts=(service_facts or {}).get(service.identity.full_name),
             ),
             encoding="utf-8",
         )

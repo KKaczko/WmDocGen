@@ -68,8 +68,15 @@ def render_pseudocode(
     *,
     comments: Mapping[str, str] | None = None,
     detail: PseudocodeDetail = FULL_DETAIL,
+    facts_text: str | None = None,
+    external_note: CalleeNotes | None = None,
 ) -> str:
-    """Render one service as indented pseudo-code lines."""
+    """Render one service as indented pseudo-code lines.
+
+    `facts_text` is the deterministic usage and data-effects block (see
+    :mod:`wm_doc.effects`); `external_note` names the declared external system of a call
+    target outside the analysed packages.
+    """
     comments = comments if detail.include_comments and comments else {}
     lines = [f"service {service.identity.full_name}  [{service.service_type.value}]"]
     description = _text(service.description)
@@ -79,14 +86,16 @@ def render_pseudocode(
         lines.append(f"signature: from specification {service.specification}")
     lines.extend(_signature_lines("inputs", service.signature.inputs))
     lines.extend(_signature_lines("outputs", service.signature.outputs))
+    if facts_text:
+        lines.append(facts_text)
     if service.service_type is ServiceType.FLOW and service.flow_tree is not None:
         lines.append("steps:")
-        renderer = _FlowRenderer(service, callee_note, comments, detail)
+        renderer = _FlowRenderer(service, callee_note, comments, detail, external_note)
         for child in service.flow_tree.children:
             renderer.visit(child, 1, None)
         lines.extend(renderer.lines or ["  (no steps)"])
     elif service.service_type is ServiceType.JAVA:
-        lines.extend(_java_lines(service, callee_note))
+        lines.extend(_java_lines(service, callee_note, external_note))
     elif service.service_type is ServiceType.OPAQUE:
         source_type = service.source_service_type or "unknown"
         lines.append(
@@ -96,7 +105,12 @@ def render_pseudocode(
     return "\n".join(lines)
 
 
-def call_annotation(target: str, resolved: bool, callee_note: CalleeNotes) -> str:
+def call_annotation(
+    target: str,
+    resolved: bool,
+    callee_note: CalleeNotes,
+    external_note: CalleeNotes | None = None,
+) -> str:
     """Describe a call target for the model without guessing."""
     effect = builtin_effect(target)
     if effect is not None:
@@ -104,6 +118,9 @@ def call_annotation(target: str, resolved: bool, callee_note: CalleeNotes) -> st
     if is_builtin_name(target):
         return "platform service"
     if not resolved:
+        system = external_note(target) if external_note is not None else None
+        if system:
+            return f"outside the analysed packages; declared external system {system}"
         return "outside the analysed packages"
     note = callee_note(target)
     return note if note else "no description available"
@@ -150,9 +167,11 @@ class _FlowRenderer:
         callee_note: CalleeNotes,
         comments: Mapping[str, str],
         detail: PseudocodeDetail,
+        external_note: CalleeNotes | None = None,
     ) -> None:
         self.service = service
         self.callee_note = callee_note
+        self.external_note = external_note
         self.comments = comments
         self.detail = detail
         self.lines: list[str] = []
@@ -254,7 +273,9 @@ class _FlowRenderer:
     def _call(self, node: FlowNode, depth: int) -> None:
         target = node.target or "?"
         verb = "CALL" if node.type is FlowNodeType.INVOKE else "TRANSFORM via"
-        note = call_annotation(target, self.resolved.get(target, False), self.callee_note)
+        note = call_annotation(
+            target, self.resolved.get(target, False), self.callee_note, self.external_note
+        )
         self.emit(depth, f"{verb} {target}  # {note}", node)
         for child in node.children:
             if child.type is FlowNodeType.MAP:
@@ -322,7 +343,9 @@ def _field_text(field: SignatureField) -> str:
     return f"{field.name}: {kind}{optional}"
 
 
-def _java_lines(service: FlowService, callee_note: CalleeNotes) -> list[str]:
+def _java_lines(
+    service: FlowService, callee_note: CalleeNotes, external_note: CalleeNotes | None = None
+) -> list[str]:
     analysis = service.java_analysis
     if analysis is None:
         return ["implementation: Java (no source evidence available)"]
@@ -339,7 +362,7 @@ def _java_lines(service: FlowService, callee_note: CalleeNotes) -> list[str]:
     for invocation in analysis.invocation_occurrences:
         target = invocation.canonical_target or invocation.declared_target
         if target:
-            note = call_annotation(target, invocation.resolved, callee_note)
+            note = call_annotation(target, invocation.resolved, callee_note, external_note)
             lines.append(f"  CALL {target}  # {note}")
         else:
             lines.append("  CALL (target computed at runtime)")
@@ -408,6 +431,16 @@ def _text(value: TextValue | None) -> str | None:
 
 def _quote(value: str | None) -> str:
     return f'"{value}"' if value is not None else '""'
+
+
+def clean_pipeline_path(raw: str | None) -> str | None:
+    """Public form of the path cleaner, shared with the effects analysis."""
+    return _path(raw)
+
+
+def literal_display(operation: MappingOperation) -> str:
+    """Public form of the literal display, shared with the effects analysis."""
+    return _literal(operation)
 
 
 def _one_line(text: str, limit: int) -> str:

@@ -1008,6 +1008,30 @@ class NamespaceArtifact(BaseModel):
     source: SourceReference
 
 
+class ReferenceTargetKind(StrEnum):
+    SERVICE = "SERVICE"
+    DOCUMENT = "DOCUMENT"
+    ARTIFACT = "ARTIFACT"
+
+
+class ArtifactReference(BaseModel):
+    """A value inside an artifact's node.ndf that exactly names a known node.
+
+    Found without knowing the artifact's schema: any string value equal to the full name
+    of an analysed service, document type or other namespace node counts. The key path
+    (names only, no values) shows where in node.ndf the reference sits.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_name: str
+    source_kind: str
+    target_name: str
+    target_kind: ReferenceTargetKind
+    key_path: str
+    source: SourceReference
+
+
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -1041,6 +1065,7 @@ class AnalysisResult(BaseModel):
     )
     excluded_packages: list[ExcludedPackage] = Field(default_factory=list)
     namespace_artifacts: list[NamespaceArtifact] = Field(default_factory=list)
+    artifact_references: list[ArtifactReference] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
 

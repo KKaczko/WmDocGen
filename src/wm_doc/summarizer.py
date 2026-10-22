@@ -26,7 +26,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -35,7 +35,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from wm_doc.business_enrichment import BusinessEnrichmentError, assert_business_result_text_safe
+from wm_doc.callgraph import summary_order
 from wm_doc.config import AppConfig
+from wm_doc.effects import compute_service_facts
+from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
 from wm_doc.ir import AnalysisResult, FlowService
 from wm_doc.ollama_provider import (
     HTTP_TIMEOUT_SECONDS,
@@ -153,6 +156,7 @@ class SummarizeOptions:
     refresh: bool = False
     num_ctx: int = DEFAULT_NUM_CTX
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS
+    external_systems: ExternalSystemCatalog = EMPTY_CATALOG
 
 
 @dataclass
@@ -185,74 +189,6 @@ def default_summary_cache_dir() -> Path:
     return Path.home() / ".cache" / "wm-doc" / "service-summaries"
 
 
-def summary_order(services: Iterable[FlowService]) -> list[str]:
-    """Order services so that every local callee comes before its callers.
-
-    Uses Tarjan's strongly-connected-components algorithm, which emits components in
-    reverse topological order of the call graph: callees first. Services in a call cycle
-    share a component and are ordered by name; inside a cycle some callee descriptions
-    are necessarily unavailable.
-    """
-    by_name = {service.identity.full_name: service for service in services}
-    graph: dict[str, list[str]] = {}
-    for name, service in by_name.items():
-        targets = {
-            dependency.target_service
-            for dependency in service.unique_dependencies
-            if dependency.resolved
-            and dependency.target_service in by_name
-            and dependency.target_service != name
-        }
-        graph[name] = sorted(targets, key=str.casefold)
-
-    index_of: dict[str, int] = {}
-    lowlink: dict[str, int] = {}
-    on_stack: set[str] = set()
-    stack: list[str] = []
-    order: list[str] = []
-    counter = 0
-
-    for root in sorted(graph, key=str.casefold):
-        if root in index_of:
-            continue
-        # Iterative DFS: each frame is (node, iterator position over its neighbours).
-        work: list[tuple[str, int]] = [(root, 0)]
-        while work:
-            node, position = work.pop()
-            if position == 0:
-                index_of[node] = lowlink[node] = counter
-                counter += 1
-                stack.append(node)
-                on_stack.add(node)
-            neighbours = graph[node]
-            descended = False
-            while position < len(neighbours):
-                neighbour = neighbours[position]
-                position += 1
-                if neighbour not in index_of:
-                    work.append((node, position))
-                    work.append((neighbour, 0))
-                    descended = True
-                    break
-                if neighbour in on_stack:
-                    lowlink[node] = min(lowlink[node], index_of[neighbour])
-            if descended:
-                continue
-            if lowlink[node] == index_of[node]:
-                component: list[str] = []
-                while True:
-                    member = stack.pop()
-                    on_stack.discard(member)
-                    component.append(member)
-                    if member == node:
-                        break
-                order.extend(sorted(component, key=str.casefold))
-            if work:
-                parent = work[-1][0]
-                lowlink[parent] = min(lowlink[parent], lowlink[node])
-    return order
-
-
 def build_summary_messages(facts: str) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -265,6 +201,9 @@ def fit_facts(
     callee_note: Callable[[str], str | None],
     comments: Mapping[str, str],
     num_ctx: int,
+    *,
+    facts_text: str | None = None,
+    external_note: Callable[[str], str | None] | None = None,
 ) -> tuple[str, bool]:
     """Render the richest pseudo-code that fits the context window.
 
@@ -274,10 +213,24 @@ def fit_facts(
     budget_tokens = num_ctx - SUMMARY_NUM_PREDICT - PROMPT_MARGIN_TOKENS
     budget_chars = max(budget_tokens * CHARS_PER_TOKEN - overhead, 1000)
     for detail in DETAIL_LADDER:
-        facts = render_pseudocode(service, callee_note, comments=comments, detail=detail)
+        facts = render_pseudocode(
+            service,
+            callee_note,
+            comments=comments,
+            detail=detail,
+            facts_text=facts_text,
+            external_note=external_note,
+        )
         if len(facts) <= budget_chars:
             return facts, detail is not FULL_DETAIL
-    facts = render_pseudocode(service, callee_note, comments=comments, detail=MINIMAL_DETAIL)
+    facts = render_pseudocode(
+        service,
+        callee_note,
+        comments=comments,
+        detail=MINIMAL_DETAIL,
+        facts_text=facts_text,
+        external_note=external_note,
+    )
     lines = facts.splitlines()
     kept: list[str] = []
     used = 0
@@ -364,12 +317,20 @@ def summarize_analysis(
         return None
 
     cache_dir = None if options.no_cache else options.cache_dir
+    service_facts = compute_service_facts(analysis, options.external_systems)
+
+    def external_note(target: str) -> str | None:
+        system = options.external_systems.match(target)
+        return system_label(system) if system is not None else None
+
     for position, name in enumerate(order, start=1):
         result, from_cache = _summarize_one(
             services[name],
             provider,
             options,
             check.model_digest,
+            service_facts[name].text(),
+            external_note,
             callee_note,
             cache_dir,
             stats,
@@ -408,13 +369,22 @@ def _summarize_one(
     provider: BusinessEnrichmentProvider,
     options: SummarizeOptions,
     model_digest: str | None,
+    facts_text: str,
+    external_note: Callable[[str], str | None],
     callee_note: Callable[[str], str | None],
     cache_dir: Path | None,
     stats: SummarizeStats,
 ) -> tuple[AiServiceSummary, bool]:
     name = service.identity.full_name
     comments = load_flow_comments(options.scan_root, service, options.config)
-    facts, shortened = fit_facts(service, callee_note, comments, options.num_ctx)
+    facts, shortened = fit_facts(
+        service,
+        callee_note,
+        comments,
+        options.num_ctx,
+        facts_text=facts_text,
+        external_note=external_note,
+    )
     messages = build_summary_messages(facts)
     key = summary_cache_key(messages, options.model, model_digest, options.num_ctx)
 
