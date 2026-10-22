@@ -12,7 +12,7 @@ from wm_doc.config import load_config
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import ExternalSystem, ExternalSystemCatalog
 from wm_doc.ir import AnalysisResult, ReferenceTargetKind
-from wm_doc.render.service_markdown import render_entry_points_table, render_effects_table
+from wm_doc.render.service_markdown import render_effects_table, render_entry_points_table
 from wm_doc.shapes import render_shapes
 
 FLOW_NODE = """<Values version="2.0">

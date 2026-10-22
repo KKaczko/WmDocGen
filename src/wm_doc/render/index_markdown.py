@@ -10,7 +10,7 @@ def render_documentation_index(
     analysis: AnalysisResult,
     graph_assets: list[GraphAsset] | None = None,
     *,
-    ai_summaries_path: str | None = None,
+    catalogue_path: str | None = None,
 ) -> str:
     graph_assets = graph_assets or []
     lines = [
@@ -45,8 +45,8 @@ def render_documentation_index(
         "- [Document Types](documents/)",
         "- [Other artifacts and skipped packages](artifacts.md)",
     ]
-    if ai_summaries_path:
-        lines.append(f"- [AI service descriptions (not reviewed)]({ai_summaries_path})")
+    if catalogue_path:
+        lines.append(f"- [Service catalogue (descriptions and review status)]({catalogue_path})")
     if analysis.processes:
         lines.append("- [Process catalog](processes/index.md)")
         lines.append("- [Process graphs](graphs/processes/)")
@@ -109,12 +109,12 @@ def write_documentation_index(
     analysis: AnalysisResult,
     graph_assets: list[GraphAsset] | None = None,
     *,
-    ai_summaries_path: str | None = None,
+    catalogue_path: str | None = None,
 ) -> Path:
     path = output_dir / "index.md"
     path.write_text(
         render_documentation_index(
-            analysis, graph_assets, ai_summaries_path=ai_summaries_path
+            analysis, graph_assets, catalogue_path=catalogue_path
         ),
         encoding="utf-8",
     )

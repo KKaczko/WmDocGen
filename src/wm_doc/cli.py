@@ -20,6 +20,19 @@ from wm_doc.business_enrichment import (
 )
 from wm_doc.business_result_schema import BusinessResultLanguage
 from wm_doc.config import AppConfig, load_config
+from wm_doc.describer import (
+    STATE_ORDER,
+    DescribeError,
+    DescribeOptions,
+    DescribeOutcome,
+    DescribeResult,
+    approve_docs,
+    collect_states,
+    current_facts_hashes,
+    describe_services,
+    export_designer_comments,
+    render_status,
+)
 from wm_doc.discovery import scan_path
 from wm_doc.effects import compute_service_facts
 from wm_doc.external_systems import (
@@ -41,7 +54,7 @@ from wm_doc.graph_publish import (
     rendered_count,
     run_subprocess,
 )
-from wm_doc.ir import AnalysisResult
+from wm_doc.ir import AnalysisResult, FlowService
 from wm_doc.ollama_provider import (
     HTTP_CONNECT_TIMEOUT_SECONDS,
     HTTP_TIMEOUT_SECONDS,
@@ -54,15 +67,11 @@ from wm_doc.openai_compatible_provider import (
     OpenAICompatibleProvider,
     resolve_api_key,
 )
-from wm_doc.render.ai_summary_markdown import (
-    AI_SUMMARIES_JSON,
-    AI_SUMMARIES_MARKDOWN,
-    write_ai_summary_outputs,
-)
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.artifact_markdown import write_artifact_inventory
 from wm_doc.render.business_context_markdown import write_business_context_outputs
 from wm_doc.render.business_result_markdown import write_business_result_outputs
+from wm_doc.render.catalogue_markdown import SERVICE_CATALOGUE, write_service_catalogue
 from wm_doc.render.document_markdown import write_document_markdown
 from wm_doc.render.dot import (
     write_dependency_dot,
@@ -101,17 +110,17 @@ from wm_doc.scope_analysis import (
     services_for_scope,
     validate_scope_request,
 )
+from wm_doc.service_docs import (
+    DocState,
+    ServiceDoc,
+    doc_path,
+    iter_docs,
+    read_doc,
+)
 from wm_doc.shapes import render_shapes
 from wm_doc.stats import render_stats
-from wm_doc.summarizer import (
-    DEFAULT_NUM_CTX,
-    AiServiceSummary,
-    ServiceSummaryBundle,
-    SummarizeOptions,
-    SummarizerError,
-    default_summary_cache_dir,
-    summarize_analysis,
-)
+from wm_doc.summarizer import DEFAULT_NUM_CTX
+from wm_doc.summarizer import default_cache_dir as default_describe_cache_dir
 
 app = typer.Typer(
     help="Offline deterministic static inventory for webMethods Integration Server packages."
@@ -185,9 +194,11 @@ MANAGED_ROOT_FILES = (
     "scope.json",
     "scope.md",
     "LIMITATIONS.md",
+    # Outputs of the summarize prototype; still cleaned so old directories do not keep them.
     "ai-summaries.json",
     "ai-summaries.md",
     "artifacts.md",
+    "service-catalogue.md",
 )
 MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
 
@@ -220,7 +231,7 @@ def _default_business_enrichment_provider_factory(
 
 
 BUSINESS_ENRICHMENT_PROVIDER_FACTORY = _default_business_enrichment_provider_factory
-SUMMARY_PROVIDER_FACTORY = _default_business_enrichment_provider_factory
+DESCRIBE_PROVIDER_FACTORY = _default_business_enrichment_provider_factory
 
 
 @app.callback()
@@ -679,6 +690,14 @@ def analyze(
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
     external_systems_file: ExternalSystemsOption = None,
+    docs_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--docs-dir",
+            help="Show the per-service descriptions from this directory on service pages and "
+            "write service-catalogue.md.",
+        ),
+    ] = None,
 ) -> None:
     """Analyze supported services and emit deterministic technical outputs."""
     try:
@@ -741,6 +760,7 @@ def analyze(
         render_graphs_mode,
         graphviz_dot,
         verbose=verbose,
+        docs_dir=docs_dir,
         external_systems=external_catalog,
     )
     typer.echo(report)
@@ -749,55 +769,64 @@ def analyze(
         raise typer.Exit(code=1)
 
 
+DocsDirOption = Annotated[
+    Path,
+    typer.Option("--docs-dir", help="Directory of per-service description files."),
+]
+
+
 @app.command()
-def summarize(
+def describe(
     packages_path: Annotated[
         Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
     ],
-    output: Annotated[
-        Path, typer.Option("--output", "-o", help="Directory for documentation outputs.")
-    ],
-    model: Annotated[
-        str,
-        typer.Option("--model", help="Installed Ollama model to use."),
-    ],
+    model: Annotated[str, typer.Option("--model", help="Installed Ollama model to use.")],
+    docs_dir: DocsDirOption = Path("service-docs"),
+    service: Annotated[
+        list[str] | None,
+        typer.Option("--service", help="Describe this service (repeatable)."),
+    ] = None,
+    namespace: Annotated[
+        str | None,
+        typer.Option("--namespace", help="Describe every service under this namespace."),
+    ] = None,
+    package: Annotated[
+        str | None, typer.Option("--package", help="Describe every service in this package.")
+    ] = None,
+    all_services: Annotated[
+        bool, typer.Option("--all", help="Describe every analysed service.")
+    ] = False,
+    with_callees: Annotated[
+        bool,
+        typer.Option(
+            "--with-callees",
+            help="Also describe the services the selection calls (callees are done first).",
+        ),
+    ] = False,
+    redo_drafts: Annotated[
+        bool,
+        typer.Option(
+            "--redo-drafts",
+            help="Regenerate unedited drafts even when their facts did not change.",
+        ),
+    ] = False,
     config: Annotated[
         Path | None,
         typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
     ] = None,
     processes_file: Annotated[
         Path | None,
-        typer.Option(
-            "--processes-file",
-            help="Optional processes.yml catalog for user-authored process entrypoints.",
-        ),
+        typer.Option("--processes-file", help="Optional processes.yml catalog."),
     ] = None,
-    render_graphs_mode: Annotated[
-        GraphRenderMode,
-        typer.Option("--render-graphs", help="Render generated DOT graphs with Graphviz."),
-    ] = GraphRenderMode.NONE,
-    graphviz_dot: Annotated[
-        Path | None,
-        typer.Option("--graphviz-dot", help="Optional path to the Graphviz dot executable."),
-    ] = None,
-    verbose: Annotated[
-        bool,
-        typer.Option(
-            "--verbose",
-            help="Include full mapping, FLOW outline, call and source-evidence detail.",
-        ),
-    ] = False,
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
     external_systems_file: ExternalSystemsOption = None,
     ollama_url: Annotated[
-        str,
-        typer.Option("--ollama-url", help="Ollama provider URL."),
+        str, typer.Option("--ollama-url", help="Ollama provider URL.")
     ] = "http://localhost:11434",
     timeout_seconds: Annotated[
-        int,
-        typer.Option("--timeout-seconds", help="Per-service request timeout in seconds."),
+        int, typer.Option("--timeout-seconds", help="Per-service request timeout in seconds.")
     ] = HTTP_TIMEOUT_SECONDS,
     allow_remote_provider: Annotated[
         bool,
@@ -813,21 +842,29 @@ def summarize(
         ),
     ] = DEFAULT_NUM_CTX,
     no_cache: Annotated[
-        bool,
-        typer.Option("--no-cache", help="Disable summary cache reads and writes."),
+        bool, typer.Option("--no-cache", help="Disable cache reads and writes.")
     ] = False,
     refresh: Annotated[
-        bool,
-        typer.Option("--refresh", help="Regenerate every summary and replace cache entries."),
+        bool, typer.Option("--refresh", help="Ignore cached drafts and ask the model again.")
     ] = False,
     cache_dir: Annotated[
-        Path | None,
-        typer.Option("--cache-dir", help="Summary cache directory."),
+        Path | None, typer.Option("--cache-dir", help="Cache directory for validated drafts.")
     ] = None,
 ) -> None:
-    """Prototype: analyze, then describe each service with a local model, callees first."""
+    """Write or refresh per-service description files with a local model, callees first."""
     if not model.strip():
-        typer.echo("SUMMARIZE_INPUT_INVALID: --model must not be blank.", err=True)
+        typer.echo("DESCRIBE_INPUT_INVALID: --model must not be blank.", err=True)
+        raise typer.Exit(code=2)
+    selectors = sum(
+        1 for chosen in (bool(service), namespace is not None, package is not None, all_services)
+        if chosen
+    )
+    if selectors != 1:
+        typer.echo(
+            "DESCRIBE_INPUT_INVALID: choose exactly one of --service, --namespace, --package "
+            "or --all.",
+            err=True,
+        )
         raise typer.Exit(code=2)
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
@@ -839,30 +876,41 @@ def summarize(
         processes_file,
         processes_file_explicit=processes_file is not None,
     )
+    selected = _describe_selection(
+        analysis,
+        packages_path,
+        processes_file,
+        services=service or [],
+        namespace=namespace,
+        package=package,
+        all_services=all_services,
+        with_callees=with_callees,
+    )
 
-    def report_progress(
-        position: int, total: int, result: AiServiceSummary, from_cache: bool
-    ) -> None:
-        state = "cached" if from_cache else result.status.value.lower()
-        typer.echo(f"[{position}/{total}] {result.service}: {state}")
+    def report_progress(position: int, total: int, result: DescribeResult) -> None:
+        note = f" ({result.note})" if result.note else ""
+        typer.echo(f"[{position}/{total}] {result.service}: {result.outcome.value}{note}")
 
     try:
-        provider = SUMMARY_PROVIDER_FACTORY(
+        provider = DESCRIBE_PROVIDER_FACTORY(
             ollama_url,
             allow_remote_provider=allow_remote_provider,
             connect_timeout_seconds=HTTP_CONNECT_TIMEOUT_SECONDS,
             timeout_seconds=timeout_seconds,
         )
-        bundle, stats = summarize_analysis(
+        _results, describe_stats = describe_services(
             analysis,
+            selected,
             provider,
-            SummarizeOptions(
+            DescribeOptions(
                 model=model.strip(),
                 scan_root=packages_path,
                 config=app_config,
-                cache_dir=None if no_cache else (cache_dir or default_summary_cache_dir()),
+                docs_dir=docs_dir,
+                cache_dir=None if no_cache else (cache_dir or default_describe_cache_dir()),
                 no_cache=no_cache,
                 refresh=refresh,
+                redo_drafts=redo_drafts,
                 num_ctx=num_ctx,
                 timeout_seconds=timeout_seconds,
                 external_systems=external_catalog,
@@ -872,35 +920,172 @@ def summarize(
     except OllamaProviderError as exc:
         typer.echo(f"{exc.code.value}: {exc.safe_message}", err=True)
         raise typer.Exit(code=1) from exc
-    except SummarizerError as exc:
-        typer.echo(f"SUMMARIZE_FAILED: {exc.safe_message}", err=True)
+    except DescribeError as exc:
+        typer.echo(f"DESCRIBE_FAILED: {exc.safe_message}", err=True)
         raise typer.Exit(code=1) from exc
-
-    report, graph_failures = _write_full_outputs(
-        output,
-        analysis,
-        render_graphs_mode,
-        graphviz_dot,
-        verbose=verbose,
-        ai_bundle=bundle,
-        external_systems=external_catalog,
-    )
-    tokens = stats.prompt_tokens
-    typer.echo(report)
+    counts = describe_stats.counts
+    tokens = describe_stats.prompt_tokens
     typer.echo(
-        "AI service descriptions:\n"
-        f"- described: {stats.generated + stats.cached} "
-        f"({stats.generated} generated, {stats.cached} from cache)\n"
-        f"- rejected by validation: {stats.rejected}\n"
-        f"- generation failed: {stats.failed}\n"
-        f"- corrective retries: {stats.retried}\n"
-        f"- facts shortened to fit: {stats.shortened}\n"
+        f"Described {len(selected)} service(s) into {docs_dir}:\n"
+        f"- new drafts: {counts.get(DescribeOutcome.GENERATED, 0)} generated, "
+        f"{counts.get(DescribeOutcome.CACHED, 0)} from cache\n"
+        f"- drafts kept (facts unchanged): {counts.get(DescribeOutcome.UNCHANGED, 0)}\n"
+        f"- approved or edited, kept: {counts.get(DescribeOutcome.PROTECTED, 0)}\n"
+        f"- rejected by validation: {counts.get(DescribeOutcome.REJECTED, 0)}\n"
+        f"- generation failed: {counts.get(DescribeOutcome.FAILED, 0)}\n"
+        f"- corrective retries: {describe_stats.retried}\n"
+        f"- facts shortened to fit: {describe_stats.shortened}\n"
         f"- largest prompt: {max(tokens) if tokens else 'n/a'} tokens of {num_ctx}\n"
-        f"- wrote {AI_SUMMARIES_MARKDOWN} and {AI_SUMMARIES_JSON}"
+        "Next: review the drafts, approve them with `wm-doc approve`, and publish with "
+        "`wm-doc analyze ... --docs-dir`."
     )
-    if graph_failures:
-        _echo_graph_failures(graph_failures)
+
+
+def _describe_selection(
+    analysis: AnalysisResult,
+    packages_path: Path,
+    processes_file: Path | None,
+    *,
+    services: list[str],
+    namespace: str | None,
+    package: str | None,
+    all_services: bool,
+    with_callees: bool,
+) -> list[str]:
+    known = {s.identity.full_name for p in analysis.packages for s in p.services}
+    if all_services:
+        return sorted(known, key=str.casefold)
+    requests: list[ScopeRequest] = []
+    depth = None if with_callees else 0
+    if services:
+        missing = [name for name in services if name not in known]
+        if missing:
+            typer.echo(
+                f"DESCRIBE_INPUT_INVALID: unknown service(s): {', '.join(missing)}", err=True
+            )
+            raise typer.Exit(code=2)
+        if not with_callees:
+            return services
+        requests = [ScopeRequest(ScopeSelectorType.SERVICE, name, depth) for name in services]
+    elif namespace is not None:
+        requests = [ScopeRequest(ScopeSelectorType.NAMESPACE, namespace, depth)]
+    elif package is not None:
+        requests = [ScopeRequest(ScopeSelectorType.PACKAGE, package, depth)]
+    selected: set[str] = set()
+    catalog_available = _process_catalog_available(packages_path, processes_file)
+    for request in requests:
+        output = build_focused_scope(
+            analysis, request, process_catalog_available=catalog_available
+        )
+        if output.scope is None:
+            typer.echo(
+                f"DESCRIBE_INPUT_INVALID: {output.message or 'selection could not be resolved'}",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        selected.update(
+            service.identity.full_name for service in services_for_scope(analysis, output.scope)
+        )
+    return sorted(selected, key=str.casefold)
+
+
+@app.command()
+def approve(
+    docs_dir: DocsDirOption = Path("service-docs"),
+    service: Annotated[
+        list[str] | None, typer.Option("--service", help="Approve this service (repeatable).")
+    ] = None,
+    package: Annotated[
+        str | None, typer.Option("--package", help="Approve every draft in this package.")
+    ] = None,
+    all_drafts: Annotated[
+        bool, typer.Option("--all-drafts", help="Approve every draft in the directory.")
+    ] = False,
+) -> None:
+    """Mark reviewed descriptions as approved; they are never overwritten afterwards."""
+    if sum(1 for chosen in (bool(service), package is not None, all_drafts) if chosen) != 1:
+        typer.echo(
+            "APPROVE_INPUT_INVALID: choose exactly one of --service, --package or --all-drafts.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    approved, missing = approve_docs(
+        docs_dir, services=service or [], package=package, all_drafts=all_drafts
+    )
+    for name in approved:
+        typer.echo(f"approved: {name}")
+    for name in missing:
+        typer.echo(f"no description file: {name}", err=True)
+    typer.echo(f"Approved {len(approved)} description(s) in {docs_dir}.")
+    if missing:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def status(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    docs_dir: DocsDirOption = Path("service-docs"),
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ] = None,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
+    external_systems_file: ExternalSystemsOption = None,
+) -> None:
+    """Report which services have no, draft, edited, approved or outdated descriptions."""
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
+    external_catalog = _load_external_systems_or_exit(external_systems_file)
+    analysis = analyze_path(packages_path, app_config, None)
+    hashes = current_facts_hashes(analysis, packages_path, app_config, external_catalog)
+    states = collect_states(analysis, docs_dir, hashes)
+    orphans = sorted(
+        (doc.service for _path, doc in iter_docs(docs_dir) if doc.service not in states),
+        key=str.casefold,
+    )
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "STATUS.md").write_text(render_status(states, orphans), encoding="utf-8")
+    totals: dict[DocState, int] = {}
+    for _package, state in states.values():
+        totals[state] = totals.get(state, 0) + 1
+    typer.echo(f"Services: {len(states)}")
+    for state in STATE_ORDER:
+        typer.echo(f"- {state.value}: {totals.get(state, 0)}")
+    if orphans:
+        typer.echo(f"- description files without a service: {len(orphans)}")
+    typer.echo(f"Wrote {docs_dir / 'STATUS.md'}.")
+
+
+@app.command("export-comments")
+def export_comments(
+    docs_dir: DocsDirOption = Path("service-docs"),
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Directory for <Package>.txt files.")
+    ] = Path("designer-comments"),
+    include_drafts: Annotated[
+        bool, typer.Option("--include-drafts", help="Also export unapproved drafts.")
+    ] = False,
+) -> None:
+    """Write Designer comment texts per package; packages themselves are never edited."""
+    written = export_designer_comments(docs_dir, output, include_drafts=include_drafts)
+    for package, count in written.items():
+        typer.echo(f"{output / (package + '.txt')}: {count} comment(s)")
+    typer.echo(f"Exported comments for {sum(written.values())} service(s).")
+
+
+def _load_service_docs(docs_dir: Path, services: list[FlowService]) -> dict[str, ServiceDoc]:
+    docs: dict[str, ServiceDoc] = {}
+    for service in services:
+        name = service.identity.full_name
+        doc = read_doc(doc_path(docs_dir, service.identity.package, name))
+        if doc is not None:
+            docs[name] = doc
+    return docs
 
 
 def _write_full_outputs(
@@ -910,7 +1095,7 @@ def _write_full_outputs(
     graphviz_dot: Path | None,
     *,
     verbose: bool,
-    ai_bundle: ServiceSummaryBundle | None = None,
+    docs_dir: Path | None = None,
     external_systems: ExternalSystemCatalog = EMPTY_CATALOG,
 ) -> tuple[str, list[GraphRenderResult]]:
     """Write the complete (unscoped) documentation set; return the report and failures."""
@@ -923,20 +1108,22 @@ def _write_full_outputs(
     (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
     services = [service for package in analysis.packages for service in package.services]
     documents = [document for package in analysis.packages for document in package.document_types]
+    service_docs = _load_service_docs(docs_dir, services) if docs_dir is not None else {}
     service_paths = write_service_markdown(
         output,
         services,
         analysis.process_service_memberships,
         analysis.processes,
         verbose=verbose,
-        ai_summaries=ai_bundle.by_service() if ai_bundle else None,
-        ai_model=ai_bundle.model if ai_bundle else None,
+        service_docs=service_docs,
         service_facts=compute_service_facts(analysis, external_systems),
     )
-    ai_summaries_path: str | None = None
-    if ai_bundle is not None:
-        write_ai_summary_outputs(output, ai_bundle, service_markdown_filenames(services))
-        ai_summaries_path = AI_SUMMARIES_MARKDOWN
+    catalogue_path: str | None = None
+    if docs_dir is not None:
+        write_service_catalogue(
+            output, services, service_docs, service_markdown_filenames(services)
+        )
+        catalogue_path = SERVICE_CATALOGUE
     document_paths = write_document_markdown(
         output,
         documents,
@@ -966,7 +1153,7 @@ def _write_full_outputs(
     write_analysis_limitations(output)
     write_artifact_inventory(output, analysis)
     index_path = write_documentation_index(
-        output, analysis, graph_assets, ai_summaries_path=ai_summaries_path
+        output, analysis, graph_assets, catalogue_path=catalogue_path
     )
     process_paths = write_process_markdown(output, analysis, graph_assets)
     flow_count = sum(1 for service in services if service.service_type.value == "FLOW")
