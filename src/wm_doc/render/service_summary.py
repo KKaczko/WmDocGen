@@ -1,18 +1,28 @@
 """Deterministic one-paragraph summary of what a service does.
 
-Everything here is derived from facts already in ``analysis.v8`` -- the signature,
+Everything here is derived from facts already in ``analysis.v9`` -- the signature,
 the ordered call occurrences, the resolved dependencies and the platform effect
 catalog in :mod:`wm_doc.builtins`. No model is involved, so a summary can restate
 the analysis but can never invent a fact that the analysis does not contain.
 
-``analysis.json`` stays frozen at ``analysis.v8``; summaries are produced at render
+``analysis.json`` never stores summaries; they are produced at render
 time and are not written back into the canonical snapshot.
 """
 
 from __future__ import annotations
 
-from wm_doc.builtins import BuiltinFamily, builtin_effect, is_builtin_name
-from wm_doc.ir import FlowService, SignatureField
+from wm_doc.builtins import FAMILY_RANK, BuiltinFamily, builtin_effect, is_builtin_name
+from wm_doc.ir import FlowNode, FlowNodeType, FlowService, ServiceType, SignatureField
+
+# Families that describe how a service copes with failure or traces itself, not what it does.
+_NOT_EFFECTS = {BuiltinFamily.ERROR_HANDLING, BuiltinFamily.LOGGING}
+
+_MECHANISM_TEXT: dict[str, str] = {
+    "try": "TRY/CATCH blocks",
+    "exit-on-success": "a try/catch sequence (exit on first success)",
+    "repeat": "REPEAT on failure",
+    "exit-failure": "EXIT with a failure signal",
+}
 
 # Families that describe what a service does to the outside world, ranked by how
 # much they matter to a reader deciding whether this service is business-critical.
@@ -57,14 +67,15 @@ def _sentence_case(text: str) -> str:
 
 
 def _effect_sentence(service: FlowService) -> str | None:
-    """Describe the platform effects in the order the FLOW performs them."""
-    labels: list[str] = []
-    for call in service.call_occurrences:
+    """Describe the platform effects, most significant family first, then call order."""
+    first_seen: dict[str, tuple[int, int]] = {}
+    for position, call in enumerate(service.call_occurrences):
         effect = builtin_effect(call.target)
-        if effect is None or effect.family is BuiltinFamily.ERROR_HANDLING:
+        if effect is None or effect.family in _NOT_EFFECTS:
             continue
-        if effect.label not in labels:
-            labels.append(effect.label)
+        if effect.label not in first_seen:
+            first_seen[effect.label] = (FAMILY_RANK.get(effect.family, 99), position)
+    labels = sorted(first_seen, key=lambda label: first_seen[label])
     if not labels:
         return None
     shown = labels[:4]
@@ -91,34 +102,73 @@ def _signature_sentence(service: FlowService) -> str | None:
     return _sentence_case(_join(clauses)) + "."
 
 
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
 def _dependency_sentence(service: FlowService) -> str | None:
-    local = [
-        dependency
-        for dependency in service.unique_dependencies
-        if not is_builtin_name(dependency.target_service)
-    ]
-    platform = [
-        dependency
-        for dependency in service.unique_dependencies
-        if is_builtin_name(dependency.target_service)
-    ]
-    if not local and not platform:
+    if service.service_type is ServiceType.OPAQUE:
+        return None  # calls are not analysed for opaque services
+    inside = outside = platform = 0
+    for dependency in service.unique_dependencies:
+        if is_builtin_name(dependency.target_service):
+            platform += 1
+        elif dependency.resolved:
+            inside += 1
+        else:
+            outside += 1
+    if not (inside or outside or platform):
+        if service.service_type is ServiceType.JAVA:
+            return "No statically confirmed service calls."
         return "Calls no other service."
     clauses: list[str] = []
-    if local:
-        clauses.append(f"{len(local)} local service(s)")
+    if inside:
+        clauses.append(f"{_count(inside, 'service')} in the analysed packages")
+    if outside:
+        clauses.append(f"{_count(outside, 'service')} outside the analysed packages")
     if platform:
-        clauses.append(f"{len(platform)} platform service(s)")
+        clauses.append(_count(platform, "platform service"))
     return "Calls " + _join(clauses) + "."
 
 
+def error_handling_mechanisms(service: FlowService) -> list[str]:
+    """Error-handling constructs observed in a FLOW service, in a fixed order."""
+    found: set[str] = set()
+
+    def visit(node: FlowNode) -> None:
+        form = (node.form or "").upper()
+        if node.type is FlowNodeType.SEQUENCE and form in {"TRY", "CATCH", "FINALLY"}:
+            found.add("try")
+        elif node.type is FlowNodeType.SEQUENCE and (node.exit_on or "").upper() == "SUCCESS":
+            found.add("exit-on-success")
+        elif node.type is FlowNodeType.REPEAT:
+            if (node.attributes.get("LOOP-ON") or "FAILURE").upper() == "FAILURE":
+                found.add("repeat")
+        elif node.type is FlowNodeType.EXIT and (node.signal or "").upper() == "FAILURE":
+            found.add("exit-failure")
+        for child in node.children:
+            visit(child)
+
+    if service.flow_tree is not None:
+        visit(service.flow_tree)
+    for call in service.call_occurrences:
+        effect = builtin_effect(call.target)
+        if effect is not None and effect.family is BuiltinFamily.ERROR_HANDLING:
+            found.add(f"call:{call.target}")
+    ordered = [key for key in _MECHANISM_TEXT if key in found]
+    ordered.extend(sorted(key for key in found if key.startswith("call:")))
+    return [_MECHANISM_TEXT.get(key) or f"`{key.removeprefix('call:')}`" for key in ordered]
+
+
 def _error_sentence(service: FlowService) -> str:
-    handles = any(
-        (effect := builtin_effect(call.target)) is not None
-        and effect.family is BuiltinFamily.ERROR_HANDLING
-        for call in service.call_occurrences
-    )
-    return "Handles errors explicitly." if handles else "No explicit error handling."
+    if service.service_type is ServiceType.JAVA:
+        return "Error handling is not analysed for Java services."
+    if service.service_type is not ServiceType.FLOW:
+        return "Error handling is not analysed for this service type."
+    mechanisms = error_handling_mechanisms(service)
+    if not mechanisms:
+        return "No error-handling steps found."
+    return "Handles errors with " + _join(mechanisms) + "."
 
 
 def service_effect_families(service: FlowService) -> list[BuiltinFamily]:

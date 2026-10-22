@@ -1,10 +1,10 @@
 """Compact pseudo-code view of one analysed service, written for a language model.
 
-The view restates facts already in ``analysis.v8`` -- the signature, the ordered FLOW
+The view restates facts already in ``analysis.v9`` -- the signature, the ordered FLOW
 tree, mapping literals and copies, transformer calls, Java pipeline accesses -- in a
 short indented form that a small local model reads far more reliably than JSON
 evidence records. Each call line can carry an annotation: a platform effect label,
-"outside this snapshot", or the one-line AI summary already produced for the callee.
+"outside the analysed packages", or the one-line AI summary already produced for the callee.
 
 Developer step comments (``<COMMENT>`` children in ``flow.xml``) are not part of the
 canonical snapshot. They are read here directly from the package file, matched to
@@ -30,6 +30,7 @@ from wm_doc.ir import (
     MappingOperationType,
     ServiceType,
     SignatureField,
+    SignatureOrigin,
     SourceReference,
     TextDisclosure,
     TextValue,
@@ -74,6 +75,8 @@ def render_pseudocode(
     description = _text(service.description)
     if description:
         lines.append(f"developer description: {_one_line(description, 400)}")
+    if service.signature_origin is SignatureOrigin.SPECIFICATION:
+        lines.append(f"signature: from specification {service.specification}")
     lines.extend(_signature_lines("inputs", service.signature.inputs))
     lines.extend(_signature_lines("outputs", service.signature.outputs))
     if service.service_type is ServiceType.FLOW and service.flow_tree is not None:
@@ -101,7 +104,7 @@ def call_annotation(target: str, resolved: bool, callee_note: CalleeNotes) -> st
     if is_builtin_name(target):
         return "platform service"
     if not resolved:
-        return "outside this snapshot"
+        return "outside the analysed packages"
     note = callee_note(target)
     return note if note else "no description available"
 
@@ -181,6 +184,9 @@ class _FlowRenderer:
             if node.out_array:
                 text += f" collecting {_path(node.out_array)}"
             self.emit(depth, text, node)
+            self._children(node, depth + 1)
+        elif kind is FlowNodeType.REPEAT:
+            self.emit(depth, _repeat_text(node), node)
             self._children(node, depth + 1)
         elif kind is FlowNodeType.EXIT:
             self.emit(depth, _exit_text(node), node)
@@ -344,6 +350,17 @@ def _java_lines(service: FlowService, callee_note: CalleeNotes) -> list[str]:
         lines.append(f"  uses Java types: {shown}" + (f" and {extra} more" if extra else ""))
     lines.append("  (Java control flow and error handling are not analysed)")
     return lines
+
+
+def _repeat_text(node: FlowNode) -> str:
+    count = (node.attributes.get("COUNT") or "").strip()
+    loop_on = (node.attributes.get("LOOP-ON") or "FAILURE").strip().lower()
+    back_off = (node.attributes.get("BACK-OFF") or "").strip()
+    times = "repeatedly" if count in {"", "-1"} else f"up to {count} more time(s)"
+    text = f"REPEAT {times} on {loop_on}"
+    if back_off and back_off != "0":
+        text += f", waiting {back_off}s between attempts"
+    return text + ":"
 
 
 def _exit_text(node: FlowNode) -> str:

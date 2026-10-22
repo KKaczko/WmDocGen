@@ -96,6 +96,16 @@ class DependencyKind(StrEnum):
     USES_TRANSFORMER = "USES_TRANSFORMER"
 
 
+ANALYSIS_SCHEMA_VERSION = "analysis.v9"
+
+
+class SignatureOrigin(StrEnum):
+    """Where a service's signature came from."""
+
+    SERVICE = "SERVICE"
+    SPECIFICATION = "SPECIFICATION"
+
+
 class DocumentDependencyKind(StrEnum):
     REFERENCES_DOCUMENT = "REFERENCES_DOCUMENT"
     USES_DOCUMENT = "USES_DOCUMENT"
@@ -198,6 +208,8 @@ class FlowNodeType(StrEnum):
     BRANCH = "BRANCH"
     BRANCH_CASE = "BRANCH_CASE"
     LOOP = "LOOP"
+    # Designer's REPEAT step, serialized as <RETRY> in flow.xml.
+    REPEAT = "REPEAT"
     MAP = "MAP"
     INVOKE = "INVOKE"
     MAPINVOKE = "MAPINVOKE"
@@ -939,6 +951,9 @@ class FlowService(BaseModel):
     description_status: ServiceDescriptionStatus = ServiceDescriptionStatus.NO_DESCRIPTION
     description: TextValue | None = None
     signature: ServiceSignature
+    # `svc_spec` from node.ndf: the specification the service declares it implements.
+    specification: str | None = None
+    signature_origin: SignatureOrigin = SignatureOrigin.SERVICE
     classification: ClassificationResult
     flow_tree: FlowNode | None = None
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
@@ -970,7 +985,7 @@ class AnalyzedPackage(BaseModel):
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "analysis.v8"
+    schema_version: str = ANALYSIS_SCHEMA_VERSION
     tool_version: str
     packages: list[AnalyzedPackage] = Field(default_factory=list)
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)

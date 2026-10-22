@@ -36,9 +36,40 @@ class BuiltinFamily(StrEnum):
     NUMERIC = "NUMERIC"
     LIST = "LIST"
     ERROR_HANDLING = "ERROR_HANDLING"
+    LOGGING = "LOGGING"
     FLOW_CONTROL = "FLOW_CONTROL"
     SECURITY = "SECURITY"
     SCHEMA = "SCHEMA"
+
+
+# How much each family matters to a reader deciding what a service does, most first.
+# Summaries list effects in this order instead of call order, so a publish is not
+# crowded out by list or string helpers that happen to run earlier.
+FAMILY_RANK: dict[BuiltinFamily, int] = {
+    family: rank
+    for rank, family in enumerate(
+        (
+            BuiltinFamily.TRANSACTION,
+            BuiltinFamily.MESSAGING,
+            BuiltinFamily.REMOTE,
+            BuiltinFamily.FILE,
+            BuiltinFamily.SECURITY,
+            BuiltinFamily.SCHEMA,
+            BuiltinFamily.FLAT_FILE,
+            BuiltinFamily.XML,
+            BuiltinFamily.JSON,
+            BuiltinFamily.DOCUMENT,
+            BuiltinFamily.IO,
+            BuiltinFamily.DATE,
+            BuiltinFamily.NUMERIC,
+            BuiltinFamily.STRING,
+            BuiltinFamily.LIST,
+            BuiltinFamily.FLOW_CONTROL,
+            BuiltinFamily.LOGGING,
+            BuiltinFamily.ERROR_HANDLING,
+        )
+    )
+}
 
 
 @dataclass(frozen=True)
@@ -111,7 +142,7 @@ _CATALOG: tuple[tuple[str, str, BuiltinFamily], ...] = (
     ("pub.list:stringListToDocumentList", "converts a string list to documents", _T.LIST),
     ("pub.flow:getLastError", "captures the last error", _T.ERROR_HANDLING),
     ("pub.flow:throwExceptionForRetry", "raises a retryable exception", _T.ERROR_HANDLING),
-    ("pub.flow:debugLog", "writes a log entry", _T.ERROR_HANDLING),
+    ("pub.flow:debugLog", "writes a log entry", _T.LOGGING),
     ("pub.flow:clearPipeline", "clears the pipeline", _T.FLOW_CONTROL),
     ("pub.flow:savePipeline", "saves the pipeline", _T.FLOW_CONTROL),
     ("pub.flow:restorePipeline", "restores a saved pipeline", _T.FLOW_CONTROL),

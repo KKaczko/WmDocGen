@@ -27,6 +27,7 @@ from wm_doc.ir import (
     ProcessDefinition,
     ProcessServiceMembership,
     ServiceDocumentDependency,
+    ServiceType,
     SignatureField,
     SourceReference,
     TextValue,
@@ -85,6 +86,9 @@ No AI description is shown: {{ ai_text(ai_summary.note or "no reason was recorde
 | Importance | `{{ service.classification.importance }}` |
 | Layer | `{{ layer_text }}` |
 | Identity basis | `{{ service.identity.basis }}` |
+{% if service.specification %}
+| Specification | `{{ service.specification }}` |
+{% endif %}
 
 ## Analysis Support
 
@@ -110,6 +114,10 @@ No description was declared in supported metadata.
 
 ## Input Signature
 
+{% if service.signature_origin.value == "SPECIFICATION" %}
+Signature from specification `{{ service.specification }}`.
+
+{% endif %}
 {{ render_fields(service.signature.inputs) }}
 
 ## Output Signature
@@ -216,16 +224,10 @@ No description was declared in supported metadata.
 {{ render_transformer_bindings(service.transformer_bindings) }}
 
 {% endif %}
-## Normal Service Dependencies
+## Calls
 
-{{ render_dependencies(normal_dependencies) }}
+{{ render_calls_table(service) }}
 
-{% if verbose %}
-## Transformer Dependencies
-
-{{ render_dependencies(transformer_dependencies) }}
-
-{% endif %}
 ## Called By
 
 {{ render_incoming_dependencies(incoming_dependencies) }}
@@ -295,8 +297,6 @@ def render_service_markdown(
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
     process_definitions = process_definitions or {}
-    normal_dependencies = _dependencies_for_kind(service, DependencyKind.INVOKES)
-    transformer_dependencies = _dependencies_for_kind(service, DependencyKind.USES_TRANSFORMER)
     service_calls = _calls_for_type(service, "INVOKE")
     transformer_calls = _calls_for_type(service, "MAPINVOKE")
     input_document_dependencies = [
@@ -334,8 +334,6 @@ def render_service_markdown(
         layer_text=derived_layer(service) or service.classification.layer,
         description_text=description_text,
         source_service_type=service.source_service_type or "<not declared>",
-        normal_dependencies=normal_dependencies,
-        transformer_dependencies=transformer_dependencies,
         incoming_dependencies=incoming_dependencies,
         process_memberships=process_memberships,
         process_definitions=process_definitions,
@@ -360,7 +358,7 @@ def render_service_markdown(
             name, 0
         ),
         render_fields=_render_fields,
-        render_dependencies=_render_dependencies,
+        render_calls_table=_render_calls_table,
         render_incoming_dependencies=_render_incoming_dependencies,
         render_process_memberships=_render_process_memberships,
         render_document_usage=_render_document_usage,
@@ -404,22 +402,57 @@ def service_markdown_filename(full_name: str) -> str:
     return f"{slug}.md"
 
 
-def _dependencies_for_kind(
-    service: FlowService, dependency_kind: DependencyKind
-) -> list[UniqueDependency]:
-    dependencies = [
-        dependency
-        for dependency in service.unique_dependencies
-        if dependency.dependency_kind == dependency_kind
-    ]
+def _sorted_dependencies(service: FlowService) -> list[UniqueDependency]:
     return sorted(
-        dependencies,
+        service.unique_dependencies,
         key=lambda dependency: (
             IMPORTANCE_ORDER.get(dependency.target_classification.importance.value, 99),
             dependency.target_service.casefold(),
+            dependency.dependency_kind.value,
             dependency.id,
         ),
     )
+
+
+def _call_how(service: FlowService, dependency: UniqueDependency) -> str:
+    if dependency.dependency_kind is DependencyKind.USES_TRANSFORMER:
+        return "transformer"
+    if service.service_type is ServiceType.JAVA:
+        return "Java call"
+    return "step"
+
+
+def _render_calls_table(service: FlowService) -> str:
+    """Every service this one calls, whether from a FLOW step, a transformer or Java."""
+    dependencies = _sorted_dependencies(service)
+    if not dependencies:
+        if service.service_type is ServiceType.JAVA:
+            return "No statically confirmed service calls were found in the Java source.\n"
+        if service.service_type is ServiceType.OPAQUE:
+            return "Calls are not analysed for this service type.\n"
+        return "This service calls no other service.\n"
+    lines = [
+        "| Occurrences | Target | How | Kind | Effect |",
+        "| ---: | --- | --- | --- | --- |",
+    ]
+    for dependency in dependencies:
+        target = dependency.target_service
+        effect = builtin_effect(target)
+        if effect is not None:
+            kind, description = "PLATFORM", effect.label
+        elif is_builtin_name(target):
+            # A platform service outside the catalog: say so rather than guess.
+            kind, description = "PLATFORM", "uncatalogued platform service"
+        elif dependency.resolved:
+            kind = str(dependency.target_type or "UNKNOWN")
+            description = f"in analysed packages ({dependency.target_analysis_status or 'UNKNOWN'})"
+        else:
+            kind, description = "EXTERNAL", "outside the analysed packages"
+        lines.append(
+            f"| {dependency.occurrence_count} | `{target}` | {_call_how(service, dependency)} "
+            f"| `{kind}` | {description} |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _calls_for_type(service: FlowService, call_type: str) -> list[CallOccurrence]:
@@ -456,32 +489,6 @@ def _java_invocations_for_static(
         for invocation in java_analysis.invocation_occurrences
         if (invocation.target_status.value == "STATIC_TARGET") == static
     ]
-
-
-def _render_dependencies(dependencies: list[UniqueDependency]) -> str:
-    if not dependencies:
-        return "No static targets were extracted for this dependency kind.\n"
-    lines = [
-        "| Occurrences | Target | Kind | Effect |",
-        "| ---: | --- | --- | --- |",
-    ]
-    for dependency in dependencies:
-        target = dependency.target_service
-        effect = builtin_effect(target)
-        if effect is not None:
-            kind, description = "PLATFORM", effect.label
-        elif is_builtin_name(target):
-            # A platform service outside the catalog: say so rather than guess.
-            kind, description = "PLATFORM", "uncatalogued platform service"
-        elif dependency.resolved:
-            kind = str(dependency.target_type or "UNKNOWN")
-            description = f"in this snapshot ({dependency.target_analysis_status or 'UNKNOWN'})"
-        else:
-            kind, description = "EXTERNAL", "not in this snapshot"
-        lines.append(
-            f"| {dependency.occurrence_count} | `{target}` | `{kind}` | {description} |"
-        )
-    return "\n".join(lines) + "\n"
 
 
 def _render_incoming_dependencies(dependencies: list[UniqueDependency]) -> str:
@@ -876,10 +883,15 @@ def _append_field(lines: list[str], field: SignatureField, depth: int) -> None:
         f"`{field.data_type or ''}` | "
         f"{field.dimensions if field.dimensions is not None else ''} | "
         f"{field.optional if field.optional is not None else ''} | "
-        f"`{field.document_reference or ''}` |"
+        f"{_code(field.document_reference)} |"
     )
     for child in field.children:
         _append_field(lines, child, depth + 1)
+
+
+def _code(value: str | None) -> str:
+    """Inline code for a value, or an empty cell (an empty code span renders as ``)."""
+    return f"`{value}`" if value else ""
 
 
 def _text_display(text: TextValue | None) -> str | None:
