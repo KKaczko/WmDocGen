@@ -30,16 +30,16 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from wm_doc.business_enrichment import BusinessEnrichmentError, assert_business_result_text_safe
 from wm_doc.callgraph import summary_order
 from wm_doc.config import AppConfig
+from wm_doc.disclosure import unsafe_disclosure_label
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
 from wm_doc.ir import AnalysisResult, FlowService, SignatureField
 from wm_doc.ollama_provider import (
     HTTP_TIMEOUT_SECONDS,
     TEMPERATURE,
-    BusinessEnrichmentProvider,
+    ModelProvider,
     OllamaProviderError,
     ProviderGenerationRequest,
 )
@@ -185,7 +185,7 @@ class DescribeError(Exception):
 def describe_services(
     analysis: AnalysisResult,
     selected: Iterable[str],
-    provider: BusinessEnrichmentProvider,
+    provider: ModelProvider,
     options: DescribeOptions,
     progress: ProgressCallback | None = None,
 ) -> tuple[list[DescribeResult], DescribeStats]:
@@ -468,7 +468,7 @@ class _Run:
         self,
         services: dict[str, FlowService],
         facts: dict[str, ServiceFacts],
-        provider: BusinessEnrichmentProvider,
+        provider: ModelProvider,
         options: DescribeOptions,
         model_digest: str | None,
         order: list[str],
@@ -655,10 +655,12 @@ class _Run:
                     "the model did not return the expected JSON",
                 )
             text = narrative_text(narrative)
-            try:
-                assert_business_result_text_safe(text)
-            except BusinessEnrichmentError as exc:
-                return None, (DescribeOutcome.REJECTED, exc.safe_message)
+            label = unsafe_disclosure_label(text)
+            if label is not None:
+                return None, (
+                    DescribeOutcome.REJECTED,
+                    f"the answer failed the disclosure scan: {label}",
+                )
             unknown = unknown_names(text, prompt_facts)
             if not unknown:
                 return narrative, (DescribeOutcome.GENERATED, "")

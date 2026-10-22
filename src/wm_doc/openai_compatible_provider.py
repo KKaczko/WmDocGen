@@ -21,7 +21,6 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from wm_doc.business_result_schema import BusinessEnrichmentErrorCode
 from wm_doc.ollama_provider import (
     HTTP_CONNECT_TIMEOUT_SECONDS,
     HTTP_TIMEOUT_SECONDS,
@@ -30,6 +29,7 @@ from wm_doc.ollama_provider import (
     TEMPERATURE,
     OllamaProviderError,
     ProviderCheckResult,
+    ProviderErrorCode,
     ProviderGenerationRequest,
     ProviderGenerationResult,
     _NoRedirectHandler,
@@ -53,7 +53,7 @@ def resolve_api_key(api_key_env: str | None) -> str | None:
 
 
 class OpenAICompatibleProvider:
-    """Satisfies the BusinessEnrichmentProvider protocol over an OpenAI-style API."""
+    """Satisfies the ModelProvider protocol over an OpenAI-style API."""
 
     def __init__(
         self,
@@ -78,12 +78,12 @@ class OpenAICompatibleProvider:
             _NoRedirectHandler(),
         )
 
-    def check(self, model: str, *, structured_probe: bool = False) -> ProviderCheckResult:
+    def check(self, model: str) -> ProviderCheckResult:
         models = self._request("/models", None, timeout=self.connect_timeout_seconds)
         available = _model_ids(models)
         if available and model not in available:
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.MODEL_NOT_FOUND,
+                ProviderErrorCode.MODEL_NOT_FOUND,
                 f"Requested model `{_safe_label(model)}` was not offered by the endpoint.",
             )
         return ProviderCheckResult(
@@ -92,7 +92,6 @@ class OpenAICompatibleProvider:
             model_found=True,
             model_digest=None,
             ollama_version=None,
-            structured_output_ok=True,
         )
 
     def generate(self, request: ProviderGenerationRequest) -> ProviderGenerationResult:
@@ -118,7 +117,7 @@ class OpenAICompatibleProvider:
         content = _message_content(data)
         if content is None:
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.RESPONSE_INVALID,
+                ProviderErrorCode.RESPONSE_INVALID,
                 "Endpoint response did not contain choices[].message.content.",
             )
         usage = data.get("usage") if isinstance(data, dict) else None
@@ -166,14 +165,14 @@ class OpenAICompatibleProvider:
                 raw = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
         except TimeoutError as exc:
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.TIMEOUT,
+                ProviderErrorCode.TIMEOUT,
                 "Provider request timed out.",
             ) from exc
         except urllib.error.HTTPError as exc:
             code = (
-                BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE
+                ProviderErrorCode.PROVIDER_UNAVAILABLE
                 if exc.code in {401, 403, 404, 429, 500, 502, 503, 504}
-                else BusinessEnrichmentErrorCode.PROVIDER_FAILED
+                else ProviderErrorCode.PROVIDER_FAILED
             )
             hint = " Check the API key environment variable." if exc.code in {401, 403} else ""
             raise OllamaProviderError(
@@ -183,29 +182,29 @@ class OpenAICompatibleProvider:
             ) from exc
         except urllib.error.URLError as exc:
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE,
+                ProviderErrorCode.PROVIDER_UNAVAILABLE,
                 f"Provider was unavailable. Diagnostic: {_safe_diagnostic(str(exc.reason))}",
             ) from exc
         except OSError as exc:
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE,
+                ProviderErrorCode.PROVIDER_UNAVAILABLE,
                 f"Provider request failed. Diagnostic: {_safe_diagnostic(str(exc))}",
             ) from exc
         if len(raw) > MAX_PROVIDER_RESPONSE_BYTES:
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.PROVIDER_FAILED,
+                ProviderErrorCode.PROVIDER_FAILED,
                 "Provider response exceeded the supported byte limit.",
             )
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.RESPONSE_INVALID,
+                ProviderErrorCode.RESPONSE_INVALID,
                 "Provider returned a non-JSON response.",
             ) from exc
         if not isinstance(decoded, dict):
             raise OllamaProviderError(
-                BusinessEnrichmentErrorCode.RESPONSE_INVALID,
+                ProviderErrorCode.RESPONSE_INVALID,
                 "Provider returned an unexpected JSON payload.",
             )
         return decoded

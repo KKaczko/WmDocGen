@@ -16,7 +16,7 @@ from wm_doc.analysis import analyze_path
 from wm_doc.config import load_config
 from wm_doc.describer import DescribeOptions, DescribeOutcome, describe_services
 from wm_doc.ollama_provider import (
-    OllamaBusinessEnrichmentProvider,
+    OllamaProvider,
     OllamaProviderError,
     ProviderGenerationRequest,
     ProviderGenerationResult,
@@ -91,7 +91,7 @@ def proxy() -> Iterator[str]:
 
 
 def test_native_client_reaches_a_proxied_server_with_a_token(proxy: str) -> None:
-    provider = OllamaBusinessEnrichmentProvider(proxy, api_key=TOKEN)
+    provider = OllamaProvider(proxy, api_key=TOKEN)
 
     check = provider.check("m")
     result = provider.generate(
@@ -109,14 +109,14 @@ def test_native_client_reaches_a_proxied_server_with_a_token(proxy: str) -> None
 
 def test_native_client_refuses_token_over_plain_http_to_a_remote_host() -> None:
     with pytest.raises(OllamaProviderError, match="requires https"):
-        OllamaBusinessEnrichmentProvider(
+        OllamaProvider(
             "http://ollama.example.com/ollama", allow_remote_provider=True, api_key=TOKEN
         )
 
 
 def test_default_loopback_client_still_requires_the_root_url() -> None:
     with pytest.raises(OllamaProviderError, match="provider root"):
-        OllamaBusinessEnrichmentProvider("http://localhost:11434/ollama")
+        OllamaProvider("http://localhost:11434/ollama")
 
 
 def test_probe_recommends_native_api_when_forwarded(proxy: str) -> None:
