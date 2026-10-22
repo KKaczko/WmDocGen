@@ -110,8 +110,8 @@ def unknown_names(text: str, facts: str) -> list[str]:
         folded = candidate.casefold()
         if not candidate or folded in _COMMON_ABBREVIATIONS or not _is_identifier(candidate):
             continue
-        if folded in full_names:
-            continue
+        if folded in full_names or _is_part_of_a_fact_name(folded, full_names):
+            continue  # e.g. config.xml from ./packages/PGP/config/config.xml
         pieces = [piece for piece in _SPLIT_RE.split(folded) if piece]
         if "/" in candidate and all(piece in parts for piece in pieces):
             continue  # a pipeline path whose segments all occur in the facts
@@ -120,6 +120,28 @@ def unknown_names(text: str, facts: str) -> list[str]:
         if candidate not in unknown:
             unknown.append(candidate)
     return unknown
+
+
+def _is_part_of_a_fact_name(candidate: str, full_names: set[str]) -> bool:
+    """True when *candidate* is a run of whole segments inside a name from the facts."""
+    for name in full_names:
+        start = name.find(candidate)
+        while start >= 0:
+            end = start + len(candidate)
+            before_ok = start == 0 or name[start - 1] in ".:/"
+            after_ok = end == len(name) or name[end] in ".:/"
+            if before_ok and after_ok:
+                return True
+            start = name.find(candidate, start + 1)
+    return False
+
+
+def _is_prose_alternatives(token: str) -> bool:
+    """`public/private` or `encryption/decryption`: plain words joined by a slash."""
+    if "/" not in token or any(separator in token for separator in ".:"):
+        return False
+    pieces = [piece for piece in token.split("/") if piece]
+    return len(pieces) > 1 and all(piece.isalpha() and piece.islower() for piece in pieces)
 
 
 def _is_acronym(token: str) -> bool:
@@ -134,6 +156,8 @@ def _is_identifier(token: str) -> bool:
     pieces = [piece for piece in _SPLIT_RE.split(token) if piece]
     if pieces and all(_is_acronym(piece) for piece in pieces):
         return False  # including joined forms such as I/O
+    if _is_prose_alternatives(token):
+        return False
     if any(separator in token for separator in ".:/"):
         return True
     if "_" in token or "$" in token or any(char.isdigit() for char in token):

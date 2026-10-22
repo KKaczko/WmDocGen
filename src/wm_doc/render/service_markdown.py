@@ -91,14 +91,14 @@ service-level findings describe unavailable or malformed evidence.
 The artifact was analyzed by the supported parser for its service type.
 {% endif %}
 
-## Description
+## Designer Comment
 
 {% if description_text -%}
-Extracted description:
+The service's Comments field in Designer (`node_comment`):
 
 {{ description_text }}
 {% else -%}
-No description was declared in supported metadata.
+The service's Comments field in Designer is empty.
 {% endif %}
 
 ## Input Signature

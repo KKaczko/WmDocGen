@@ -24,6 +24,7 @@ from wm_doc.describer import (
     current_facts_hashes,
     describe_services,
     export_designer_comments,
+    narrative_from_payload,
 )
 from wm_doc.ir import AnalysisResult
 from wm_doc.ollama_provider import (
@@ -148,6 +149,16 @@ def test_describe_writes_a_draft_file_with_narrative_and_facts(
     assert doc.designer_comment() == f"Service {READ_CONFIG}: performs its documented steps."
     assert "filename `./packages/PGP/config/config.xml`" in doc.facts_markdown
     assert stats.counts[DescribeOutcome.GENERATED] == 1
+
+
+def test_punctuation_only_steps_are_dropped() -> None:
+    payload = grounded(READ_CONFIG, None)  # type: ignore[arg-type]
+    payload["steps"] = ["Reads the input.", ",", " - ", "Calls the listed services."]
+
+    narrative = narrative_from_payload(payload)
+
+    assert narrative is not None
+    assert narrative.steps == ("Reads the input.", "Calls the listed services.")
 
 
 def test_with_callees_describes_callees_first_and_passes_their_purpose(
@@ -412,6 +423,8 @@ def test_cli_workflow_describe_approve_status_and_publish(
     site = tmp_path / "site"
     page = (site / "services" / "pgp.services.common_readConfig.md").read_text(encoding="utf-8")
     assert "## Description\n\n> **Approved.**" in page
+    assert page.count("## Description") == 1
+    assert "## Designer Comment" in page
     assert "### Purpose" in page
     callee_page = (site / "services" / "pgp.services.common_selectFromConfig.md").read_text(
         encoding="utf-8"
