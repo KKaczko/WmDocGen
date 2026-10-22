@@ -1,0 +1,35 @@
+# Example wm-doc configuration. Pass it with `--config examples/wm-doc.yml`.
+# Every section is optional; omitted sections use the built-in defaults.
+
+classification:
+  importance:
+    important:
+      # Full-name globs (`namespace:service`), matched case-insensitively.
+      fullName:
+        - "acme.*.channel:*"
+        - "acme.*.adapter:*"
+      serviceName:
+        - "*Service"
+        - "process*"
+    neverImportant:
+      fullName:
+        - "*utils*"
+        - "*common.helpers*"
+        - "pub.*"
+        - "wm.*"
+      serviceName:
+        - "convert*"
+        - "format*"
+        - "log*"
+  layers:
+    CHANNEL: ["*.channel:*"]
+    CORE: ["*.core:*"]
+    ADAPTER: ["*.adapter:*"]
+    UTILITY: ["*.utils:*", "*.util:*"]
+
+extraction:
+  # include | redact | omit. Secret-like values are blocked in every mode.
+  literals:
+    mode: include
+  freeText:
+    mode: include
