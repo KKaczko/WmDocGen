@@ -818,7 +818,7 @@ def test_generated_markdown_links_are_valid_without_process_catalog(tmp_path) ->
 
     _run_cli_analyze(_samples(), output)
 
-    assert _generated_file_count(output) == 49
+    assert _generated_file_count(output) == 50  # + artifacts.md
     assert (output / "graphs" / "index.md").exists()
     assert not (output / "processes").exists()
     _assert_generated_markdown_links_valid(output)
@@ -837,7 +837,7 @@ def test_generated_markdown_links_are_valid_for_fixture_catalog_modes(tmp_path) 
             free_text_mode=mode,
         )
 
-        assert _generated_file_count(output) == 54
+        assert _generated_file_count(output) == 55  # + artifacts.md
         assert (output / "graphs" / "index.md").exists()
         assert len(list((output / "processes").glob("*.md"))) == 3
         assert len(list((output / "graphs" / "processes").glob("*.dot"))) == 2
@@ -868,10 +868,11 @@ def test_graph_render_modes_publish_expected_files_and_links(tmp_path, monkeypat
     _write_fixture_process_catalog(processes_file)
 
     cases = [
-        ("none", 54, 0, 0),
-        ("svg", 58, 4, 0),
-        ("png", 58, 0, 4),
-        ("both", 62, 4, 4),
+        # Counts include artifacts.md (M12).
+        ("none", 55, 0, 0),
+        ("svg", 59, 4, 0),
+        ("png", 59, 0, 4),
+        ("both", 63, 4, 4),
     ]
     for mode, expected_count, expected_svg, expected_png in cases:
         output = tmp_path / f"fixture-{mode}"
@@ -916,10 +917,11 @@ def test_graph_render_modes_without_process_catalog(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(cli_module, "GRAPHVIZ_RUNNER", fake_runner)
 
     cases = [
-        ("none", 49, 0, 0),
-        ("svg", 51, 2, 0),
-        ("png", 51, 0, 2),
-        ("both", 53, 2, 2),
+        # Counts include artifacts.md (M12).
+        ("none", 50, 0, 0),
+        ("svg", 52, 2, 0),
+        ("png", 52, 0, 2),
+        ("both", 54, 2, 2),
     ]
     for mode, expected_count, expected_svg, expected_png in cases:
         output = tmp_path / f"no-process-{mode}"

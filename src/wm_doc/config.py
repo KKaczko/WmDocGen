@@ -47,9 +47,38 @@ class ExtractionConfig(BaseModel):
     freeText: FreeTextExtractionConfig = Field(default_factory=FreeTextExtractionConfig)
 
 
+DEFAULT_PACKAGE_EXCLUDES = ("Wm*", "Default")
+
+
+class PackageSelectionConfig(BaseModel):
+    """Which package roots are analysed. Globs match the package directory name."""
+
+    # When non-empty, only packages matching one of these globs are analysed.
+    include: list[str] = Field(default_factory=list)
+    # Software AG / IBM product packages and the Default package are skipped by default.
+    exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_PACKAGE_EXCLUDES))
+    # Skip packages whose manifest.v3 declares system_package=yes.
+    skipSystemPackages: bool = True
+
+    def exclusion_reason(self, name: str, system_package: bool) -> str | None:
+        """Return why a package is excluded, or None when it is analysed."""
+        if self.include and not any(_glob_match(pattern, name) for pattern in self.include):
+            return "not matched by the include patterns"
+        for pattern in self.exclude:
+            if _glob_match(pattern, name):
+                return f"matches exclude pattern `{pattern}`"
+        if self.skipSystemPackages and system_package:
+            return "system package (manifest.v3 system_package=yes)"
+        return None
+
+
+ANALYZE_ALL_PACKAGES = PackageSelectionConfig(exclude=[], skipSystemPackages=False)
+
+
 class AppConfig(BaseModel):
     classification: ClassificationConfig = Field(default_factory=ClassificationConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    packages: PackageSelectionConfig = Field(default_factory=PackageSelectionConfig)
 
 
 # Generic defaults only. Project-specific namespace rules belong in a config file

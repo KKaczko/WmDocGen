@@ -53,6 +53,7 @@ from wm_doc.ir import (
     MappingOperation,
     MappingOperationType,
     MapSchemaMetadata,
+    NamespaceArtifact,
     PackageInventory,
     PipelinePath,
     ProcessDefinition,
@@ -268,7 +269,7 @@ def analyze_path(
     processes_file_explicit: bool = False,
 ) -> AnalysisResult:
     scan_root = path.resolve()
-    inventory = scan_path(scan_root)
+    inventory = scan_path(scan_root, config.packages)
     process_catalog_path = processes_file or scan_root / "processes.yml"
     process_catalog = load_process_catalog(
         process_catalog_path,
@@ -352,8 +353,15 @@ def analyze_path(
                 services=[],
                 java_service_analyses=[],
                 document_types=[],
+                # Only this package's own services: listing every service in every package
+                # grew analysis.json with packages x services.
                 service_index=sorted(
-                    service_index.values(), key=lambda item: item.identity.full_name.casefold()
+                    (
+                        item
+                        for item in service_index.values()
+                        if item.identity.package == package.name
+                    ),
+                    key=lambda item: item.identity.full_name.casefold(),
                 ),
                 findings=package_findings,
             )
@@ -556,7 +564,52 @@ def analyze_path(
         process_unresolved_calls=process_output.process_unresolved_calls,
         process_document_relationships=process_output.process_document_relationships,
         technical_entrypoint_candidates=process_output.technical_entrypoint_candidates,
+        excluded_packages=inventory.excluded_packages,
+        namespace_artifacts=_namespace_artifacts(inventory.packages),
         findings=_aggregate_findings(all_findings),
+    )
+
+
+# Inventory types that are analysed elsewhere, or are not namespace nodes at all.
+_NOT_LISTED_ARTIFACTS = (
+    SERVICE_INDEX_ARTIFACTS
+    | DOCUMENT_ARTIFACTS
+    | {
+        "namespace_folder",
+        "package_manifest",
+        "helper_backup_file",
+        "unsupported_file",
+    }
+)
+
+
+def _namespace_artifacts(packages: Iterable[PackageInventory]) -> list[NamespaceArtifact]:
+    """Non-service namespace nodes (triggers, descriptors, connections, ...), listed only."""
+    artifacts: list[NamespaceArtifact] = []
+    for package in packages:
+        for artifact in package.artifacts:
+            if artifact.probable_type in _NOT_LISTED_ARTIFACTS:
+                continue
+            full_name = (
+                artifact.identity.full_name
+                if artifact.identity is not None and artifact.identity.full_name
+                else artifact.relative_path
+            )
+            artifacts.append(
+                NamespaceArtifact(
+                    full_name=full_name,
+                    package=package.name,
+                    probable_type=artifact.probable_type,
+                    node_type=artifact.node_type,
+                    source=artifact.source,
+                )
+            )
+    return sorted(
+        artifacts,
+        key=lambda item: (
+            (item.node_type or item.probable_type).casefold(),
+            item.full_name.casefold(),
+        ),
     )
 
 
