@@ -96,7 +96,7 @@ class DependencyKind(StrEnum):
     USES_TRANSFORMER = "USES_TRANSFORMER"
 
 
-ANALYSIS_SCHEMA_VERSION = "analysis.v9"
+ANALYSIS_SCHEMA_VERSION = "analysis.v10"
 
 
 class SignatureOrigin(StrEnum):
@@ -976,10 +976,17 @@ class AnalyzedPackage(BaseModel):
     name: str
     root: str
     services: list[FlowService] = Field(default_factory=list)
-    java_service_analyses: list[JavaServiceAnalysis] = Field(default_factory=list)
     document_types: list[DocumentType] = Field(default_factory=list)
     service_index: list[ServiceSummary] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
+
+    @property
+    def java_service_analyses(self) -> list[JavaServiceAnalysis]:
+        """Derived from the services; stored once, on each Java service."""
+        return sorted(
+            (service.java_analysis for service in self.services if service.java_analysis),
+            key=java_service_analysis_sort_key,
+        )
 
 
 class ExcludedPackage(BaseModel):
@@ -1040,20 +1047,9 @@ class AnalysisResult(BaseModel):
     packages: list[AnalyzedPackage] = Field(default_factory=list)
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
     extraction_policy: ExtractionPolicySnapshot = Field(default_factory=ExtractionPolicySnapshot)
-    call_occurrences: list[CallOccurrence] = Field(default_factory=list)
-    unique_dependencies: list[UniqueDependency] = Field(default_factory=list)
-    flow_maps: list[FlowMap] = Field(default_factory=list)
-    mapping_operations: list[MappingOperation] = Field(default_factory=list)
-    transformer_bindings: list[TransformerBinding] = Field(default_factory=list)
-    document_types: list[DocumentType] = Field(default_factory=list)
     document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
     document_dependencies: list[DocumentDependency] = Field(default_factory=list)
     service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
-    java_service_analyses: list[JavaServiceAnalysis] = Field(default_factory=list)
-    java_imports: list[JavaImport] = Field(default_factory=list)
-    java_type_references: list[JavaTypeReference] = Field(default_factory=list)
-    java_pipeline_accesses: list[JavaPipelineAccess] = Field(default_factory=list)
-    java_invocation_occurrences: list[JavaInvocationOccurrence] = Field(default_factory=list)
     processes: list[ProcessDefinition] = Field(default_factory=list)
     process_entrypoints: list[ProcessEntrypoint] = Field(default_factory=list)
     process_service_memberships: list[ProcessServiceMembership] = Field(default_factory=list)
@@ -1067,6 +1063,128 @@ class AnalysisResult(BaseModel):
     namespace_artifacts: list[NamespaceArtifact] = Field(default_factory=list)
     artifact_references: list[ArtifactReference] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
+
+    # Server-wide views. Each item is stored once in analysis.json, on the service or
+    # package it belongs to; these properties rebuild the sorted cross-service lists.
+
+    @property
+    def services(self) -> list[FlowService]:
+        return [service for package in self.packages for service in package.services]
+
+    @property
+    def call_occurrences(self) -> list[CallOccurrence]:
+        items = [item for service in self.services for item in service.call_occurrences]
+        return sorted(items, key=call_sort_key)
+
+    @property
+    def unique_dependencies(self) -> list[UniqueDependency]:
+        items = [item for service in self.services for item in service.unique_dependencies]
+        return sorted(items, key=unique_dependency_sort_key)
+
+    @property
+    def flow_maps(self) -> list[FlowMap]:
+        items = [item for service in self.services for item in service.flow_maps]
+        return sorted(items, key=flow_map_sort_key)
+
+    @property
+    def mapping_operations(self) -> list[MappingOperation]:
+        items = [item for service in self.services for item in service.mapping_operations]
+        return sorted(items, key=mapping_operation_sort_key)
+
+    @property
+    def transformer_bindings(self) -> list[TransformerBinding]:
+        items = [item for service in self.services for item in service.transformer_bindings]
+        return sorted(items, key=transformer_binding_sort_key)
+
+    @property
+    def document_types(self) -> list[DocumentType]:
+        items = [item for package in self.packages for item in package.document_types]
+        return sorted(items, key=document_type_sort_key)
+
+    @property
+    def java_service_analyses(self) -> list[JavaServiceAnalysis]:
+        items = [item for package in self.packages for item in package.java_service_analyses]
+        return sorted(items, key=java_service_analysis_sort_key)
+
+    @property
+    def java_imports(self) -> list[JavaImport]:
+        items = [item for analysis in self.java_service_analyses for item in analysis.imports]
+        return sorted(items, key=java_import_sort_key)
+
+    @property
+    def java_type_references(self) -> list[JavaTypeReference]:
+        items = [
+            item for analysis in self.java_service_analyses for item in analysis.referenced_types
+        ]
+        return sorted(items, key=java_type_reference_sort_key)
+
+    @property
+    def java_pipeline_accesses(self) -> list[JavaPipelineAccess]:
+        items = [
+            item for analysis in self.java_service_analyses for item in analysis.pipeline_accesses
+        ]
+        return sorted(items, key=java_pipeline_access_sort_key)
+
+    @property
+    def java_invocation_occurrences(self) -> list[JavaInvocationOccurrence]:
+        items = [
+            item
+            for analysis in self.java_service_analyses
+            for item in analysis.invocation_occurrences
+        ]
+        return sorted(items, key=java_invocation_sort_key)
+
+
+def call_sort_key(call: CallOccurrence) -> tuple[str, int, str, str]:
+    return (call.caller.casefold(), call.order, call.id, call.target.casefold())
+
+
+def unique_dependency_sort_key(dependency: UniqueDependency) -> tuple[str, str, str]:
+    return (
+        dependency.source_service.casefold(),
+        dependency.dependency_kind.value,
+        dependency.target_service.casefold(),
+    )
+
+
+def flow_map_sort_key(flow_map: FlowMap) -> tuple[str, int, str, str]:
+    return (flow_map.service.casefold(), flow_map.order, flow_map.structural_path, flow_map.id)
+
+
+def mapping_operation_sort_key(operation: MappingOperation) -> tuple[str, int, str, str]:
+    return (operation.service.casefold(), operation.order, operation.structural_path, operation.id)
+
+
+def transformer_binding_sort_key(binding: TransformerBinding) -> tuple[str, int, str, str]:
+    return (binding.service.casefold(), binding.order, binding.structural_path, binding.id)
+
+
+def document_type_sort_key(document: DocumentType) -> tuple[str, str]:
+    return (document.identity.full_name.casefold(), document.id)
+
+
+def java_service_analysis_sort_key(analysis: JavaServiceAnalysis) -> tuple[str, str]:
+    return (analysis.identity.full_name.casefold(), analysis.id)
+
+
+def java_import_sort_key(java_import: JavaImport) -> tuple[str, int, str]:
+    return (
+        java_import.service.casefold(),
+        java_import.declaration_order,
+        java_import.declaration.casefold(),
+    )
+
+
+def java_type_reference_sort_key(reference: JavaTypeReference) -> tuple[str, int, str]:
+    return (reference.service.casefold(), reference.token_ordinal, reference.type_name.casefold())
+
+
+def java_pipeline_access_sort_key(access: JavaPipelineAccess) -> tuple[str, int, str]:
+    return (access.service.casefold(), access.token_ordinal, access.id)
+
+
+def java_invocation_sort_key(invocation: JavaInvocationOccurrence) -> tuple[str, int, str]:
+    return (invocation.caller.casefold(), invocation.token_ordinal, invocation.id)
 
 
 class ArtifactFile(BaseModel):
