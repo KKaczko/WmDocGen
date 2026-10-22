@@ -6,7 +6,7 @@ from typing import Annotated
 
 import typer
 
-from wm_doc.analysis import analyze_path
+from wm_doc.analysis_cache import analyze_cached, default_analysis_cache_dir
 from wm_doc.config import AppConfig, load_config
 from wm_doc.describer import (
     STATE_ORDER,
@@ -31,6 +31,7 @@ from wm_doc.external_systems import (
 )
 from wm_doc.graph_publish import (
     GRAPH_RENDER_TIMEOUT_SECONDS,
+    GraphAsset,
     GraphRenderFormat,
     GraphRenderMode,
     GraphRenderResult,
@@ -87,6 +88,7 @@ from wm_doc.render.scope_markdown import (
     write_scoped_process_markdown,
     write_scoped_service_markdown,
 )
+from wm_doc.render.service_graph import ServiceGraphContext, write_service_graphs
 from wm_doc.render.service_markdown import service_markdown_filenames, write_service_markdown
 from wm_doc.scope_analysis import (
     ScopeRequest,
@@ -154,6 +156,36 @@ def _load_external_systems_or_exit(path: Path | None) -> ExternalSystemCatalog:
     except ExternalSystemsError as exc:
         typer.echo(f"EXTERNAL_SYSTEMS_INVALID: {exc}", err=True)
         raise typer.Exit(code=2) from exc
+
+
+NoAnalysisCacheOption = Annotated[
+    bool,
+    typer.Option(
+        "--no-analysis-cache",
+        help="Analyse from scratch instead of reusing the last analysis of unchanged packages.",
+    ),
+]
+
+
+def _analyze(
+    packages_path: Path,
+    config: AppConfig,
+    processes_file: Path | None = None,
+    *,
+    no_cache: bool = False,
+) -> AnalysisResult:
+    analysis, reused = analyze_cached(
+        packages_path,
+        config,
+        processes_file,
+        processes_file_explicit=processes_file is not None,
+        cache_dir=None if no_cache else default_analysis_cache_dir(),
+    )
+    if reused:
+        typer.echo(
+            "Reused the cached analysis: no package file changed since the last run.", err=True
+        )
+    return analysis
 
 
 def _with_package_selection(
@@ -275,12 +307,13 @@ def stats(
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
+    no_analysis_cache: NoAnalysisCacheOption = False,
 ) -> None:
     """Print counts and names (no code or values) to plan documentation of a server."""
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
-    report = render_stats(analyze_path(packages_path, app_config, None))
+    report = render_stats(_analyze(packages_path, app_config, no_cache=no_analysis_cache))
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(report, encoding="utf-8")
@@ -303,12 +336,13 @@ def probe_shapes(
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
+    no_analysis_cache: NoAnalysisCacheOption = False,
 ) -> None:
     """Print node.ndf key paths of triggers, descriptors and adapters (no values)."""
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
-    analysis = analyze_path(packages_path, app_config, None)
+    analysis = _analyze(packages_path, app_config, no_cache=no_analysis_cache)
     report = render_shapes(analysis, packages_path)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -436,6 +470,7 @@ def analyze(
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
+    no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
     docs_dir: Annotated[
         Path | None,
@@ -462,11 +497,8 @@ def analyze(
         load_config(config), include_package, exclude_package, all_packages
     )
     external_catalog = _load_external_systems_or_exit(external_systems_file)
-    analysis = analyze_path(
-        packages_path,
-        app_config,
-        processes_file,
-        processes_file_explicit=processes_file is not None,
+    analysis = _analyze(
+        packages_path, app_config, processes_file, no_cache=no_analysis_cache
     )
     if scope_request is not None:
         process_catalog_available = _process_catalog_available(packages_path, processes_file)
@@ -568,6 +600,7 @@ def describe(
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
+    no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
     ollama_url: Annotated[
         str, typer.Option("--ollama-url", help="Ollama provider URL.")
@@ -643,11 +676,8 @@ def describe(
         load_config(config), include_package, exclude_package, all_packages
     )
     external_catalog = _load_external_systems_or_exit(external_systems_file)
-    analysis = analyze_path(
-        packages_path,
-        app_config,
-        processes_file,
-        processes_file_explicit=processes_file is not None,
+    analysis = _analyze(
+        packages_path, app_config, processes_file, no_cache=no_analysis_cache
     )
     selected = _describe_selection(
         analysis,
@@ -810,6 +840,7 @@ def status(
     include_package: IncludePackageOption = None,
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
+    no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
 ) -> None:
     """Report which services have no, draft, edited, approved or outdated descriptions."""
@@ -817,7 +848,7 @@ def status(
         load_config(config), include_package, exclude_package, all_packages
     )
     external_catalog = _load_external_systems_or_exit(external_systems_file)
-    analysis = analyze_path(packages_path, app_config, None)
+    analysis = _analyze(packages_path, app_config, no_cache=no_analysis_cache)
     hashes = current_facts_hashes(analysis, packages_path, app_config, external_catalog)
     states = collect_states(analysis, docs_dir, hashes)
     orphans = sorted(
@@ -854,6 +885,23 @@ def export_comments(
     typer.echo(f"Exported comments for {sum(written.values())} service(s).")
 
 
+def _service_graph_links(
+    output: Path, graph_paths: dict[str, Path], assets: list[GraphAsset]
+) -> dict[str, tuple[str, str]]:
+    """service -> (image path, DOT path), relative to a service page, for rendered graphs."""
+    by_dot = {asset.dot_path: asset for asset in assets}
+    links: dict[str, tuple[str, str]] = {}
+    for name, path in graph_paths.items():
+        relative = path.resolve().relative_to(output.resolve()).as_posix()
+        asset = by_dot.get(relative)
+        if asset is None:
+            continue
+        image = asset.rendered_paths.get("svg") or asset.rendered_paths.get("png")
+        if image:
+            links[name] = (f"../{image}", f"../{relative}")
+    return links
+
+
 def _load_service_docs(docs_dir: Path, services: list[FlowService]) -> dict[str, ServiceDoc]:
     docs: dict[str, ServiceDoc] = {}
     for service in services:
@@ -885,15 +933,8 @@ def _write_full_outputs(
     services = [service for package in analysis.packages for service in package.services]
     documents = [document for package in analysis.packages for document in package.document_types]
     service_docs = _load_service_docs(docs_dir, services) if docs_dir is not None else {}
-    service_paths = write_service_markdown(
-        output,
-        services,
-        analysis.process_service_memberships,
-        analysis.processes,
-        verbose=verbose,
-        service_docs=service_docs,
-        service_facts=compute_service_facts(analysis, external_systems),
-    )
+    service_facts = compute_service_facts(analysis, external_systems)
+    page_filenames = service_markdown_filenames(services)
     catalogue_path: str | None = None
     if docs_dir is not None:
         write_service_catalogue(
@@ -914,7 +955,18 @@ def _write_full_outputs(
     dot_path = write_dependency_dot(output, analysis)
     document_dot_path = write_document_dot(output, analysis)
     process_dot_paths = write_process_dots(output, analysis)
-    dot_paths = [dot_path, document_dot_path, *process_dot_paths]
+    # Per-service call graphs are only useful as images, so they are written when rendering
+    # is requested; the default output stays DOT-only and unchanged.
+    service_graph_paths: dict[str, Path] = {}
+    if render_graphs_mode is not GraphRenderMode.NONE:
+        service_graph_paths = write_service_graphs(
+            output,
+            services,
+            service_facts,
+            ServiceGraphContext(analysis, external_systems),
+            page_filenames,
+        )
+    dot_paths = [dot_path, document_dot_path, *process_dot_paths, *service_graph_paths.values()]
     graph_assets = build_graph_assets(output, dot_paths)
     graph_results = render_graphs(
         output,
@@ -925,6 +977,16 @@ def _write_full_outputs(
         timeout=GRAPH_RENDER_TIMEOUT_SECONDS,
     )
     graph_failures = graph_render_failures(graph_results)
+    service_paths = write_service_markdown(
+        output,
+        services,
+        analysis.process_service_memberships,
+        analysis.processes,
+        verbose=verbose,
+        service_docs=service_docs,
+        service_facts=service_facts,
+        service_graphs=_service_graph_links(output, service_graph_paths, graph_assets),
+    )
     graph_index_path = write_graph_index(output, graph_assets)
     write_analysis_limitations(output)
     write_artifact_inventory(output, analysis)
@@ -1083,15 +1145,22 @@ def _write_scoped_outputs(
     return graph_failures
 
 
+MAX_LISTED_GRAPH_FAILURES = 20
+
+
 def _echo_graph_failures(graph_failures: list[GraphRenderResult]) -> None:
     typer.echo("Graph rendering failed:", err=True)
-    for failure in graph_failures:
+    # With per-service graphs a missing Graphviz fails thousands of renders; list a few.
+    for failure in graph_failures[:MAX_LISTED_GRAPH_FAILURES]:
         typer.echo(
             "- "
             f"{failure.dot_path} {failure.requested_format.value}: "
             f"{failure.failure_reason or 'render failed'}",
             err=True,
         )
+    hidden = len(graph_failures) - min(len(graph_failures), MAX_LISTED_GRAPH_FAILURES)
+    if hidden:
+        typer.echo(f"- ... and {hidden} more failed render(s)", err=True)
 
 
 def _scope_request_from_cli(

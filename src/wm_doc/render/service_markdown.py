@@ -217,6 +217,14 @@ Signature from specification `{{ service.specification }}`.
 
 {{ render_calls_table(service) }}
 
+{% if call_graph %}
+## Call Graph
+
+![Call graph of {{ service.identity.full_name }}]({{ call_graph[0] }})
+
+[DOT source]({{ call_graph[1] }})
+
+{% endif %}
 {% if facts %}
 ## Data and Systems Touched
 
@@ -294,6 +302,7 @@ def render_service_markdown(
     verbose: bool = False,
     doc: ServiceDoc | None = None,
     facts: ServiceFacts | None = None,
+    call_graph: tuple[str, str] | None = None,
 ) -> str:
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
@@ -332,6 +341,7 @@ def render_service_markdown(
         doc_badge=_doc_badge(doc) if doc is not None else "",
         doc_body=_doc_body(doc) if doc is not None else "",
         facts=facts,
+        call_graph=call_graph,
         render_effects=render_effects_table,
         render_entry_points=render_entry_points_table,
         summary_text=render_service_summary(service),
@@ -984,6 +994,7 @@ def write_service_markdown(
     verbose: bool = False,
     service_docs: Mapping[str, ServiceDoc] | None = None,
     service_facts: Mapping[str, ServiceFacts] | None = None,
+    service_graphs: Mapping[str, tuple[str, str]] | None = None,
 ) -> list[Path]:
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
@@ -1004,6 +1015,7 @@ def write_service_markdown(
                 verbose=verbose,
                 doc=service_docs.get(service.identity.full_name),
                 facts=(service_facts or {}).get(service.identity.full_name),
+                call_graph=(service_graphs or {}).get(service.identity.full_name),
             ),
             encoding="utf-8",
         )

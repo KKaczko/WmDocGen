@@ -14,7 +14,9 @@ def render_graph_index(assets: list[GraphAsset]) -> str:
         "| Graph | Scope | DOT | SVG | PNG |",
         "| --- | --- | --- | --- | --- |",
     ]
-    for asset in sorted(assets, key=lambda item: item.dot_path.casefold()):
+    service_graphs = [asset for asset in assets if asset.scope == "Service"]
+    listed = [asset for asset in assets if asset.scope != "Service"]
+    for asset in sorted(listed, key=lambda item: item.dot_path.casefold()):
         lines.append(
             "| "
             f"{asset.title} | "
@@ -25,6 +27,13 @@ def render_graph_index(assets: list[GraphAsset]) -> str:
         )
     if not assets:
         lines.append("| No graphs generated |  |  |  |  |")
+    if service_graphs:
+        rendered = sum(1 for asset in service_graphs if asset.rendered_paths)
+        lines += [
+            "",
+            f"Per-service call graphs: {len(service_graphs)} DOT files in `services/`, "
+            f"{rendered} rendered. Each is shown on its service page.",
+        ]
     lines.append("")
     return "\n".join(lines)
 
