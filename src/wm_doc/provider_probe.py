@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from wm_doc.ollama_provider import OllamaBusinessEnrichmentProvider, OllamaProviderError
+from wm_doc.ollama_provider import OllamaProvider, OllamaProviderError
 from wm_doc.openai_compatible_provider import OpenAICompatibleProvider
 
 
@@ -45,7 +45,7 @@ def probe_provider(
     native_url = _native_url(url)
     openai_url = _v1_url(url)
     try:
-        native = OllamaBusinessEnrichmentProvider(
+        native = OllamaProvider(
             native_url,
             allow_remote_provider=allow_remote_provider,
             connect_timeout_seconds=timeout_seconds,

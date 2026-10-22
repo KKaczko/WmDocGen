@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from wm_doc.business_result_schema import BusinessEnrichmentErrorCode
 from wm_doc.ollama_provider import (
     OllamaProviderError,
+    ProviderErrorCode,
     ProviderGenerationRequest,
 )
 from wm_doc.openai_compatible_provider import (
@@ -102,7 +102,7 @@ def test_rejected_token_does_not_leak(endpoint: str, monkeypatch: pytest.MonkeyP
     with pytest.raises(OllamaProviderError) as caught:
         provider.check("test-model")
 
-    assert caught.value.code is BusinessEnrichmentErrorCode.PROVIDER_UNAVAILABLE
+    assert caught.value.code is ProviderErrorCode.PROVIDER_UNAVAILABLE
     assert "wrong-token" not in caught.value.safe_message
     assert "API key environment variable" in caught.value.safe_message
 

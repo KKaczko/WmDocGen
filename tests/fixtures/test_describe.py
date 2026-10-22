@@ -13,7 +13,6 @@ import pytest
 from typer.testing import CliRunner
 
 from wm_doc.analysis import analyze_path
-from wm_doc.business_result_schema import BusinessEnrichmentErrorCode
 from wm_doc.cli import app
 from wm_doc.config import load_config
 from wm_doc.describer import (
@@ -30,6 +29,7 @@ from wm_doc.ir import AnalysisResult
 from wm_doc.ollama_provider import (
     OllamaProviderError,
     ProviderCheckResult,
+    ProviderErrorCode,
     ProviderGenerationRequest,
     ProviderGenerationResult,
 )
@@ -59,14 +59,13 @@ class FakeProvider:
         self.answer = answer
         self.requests: list[ProviderGenerationRequest] = []
 
-    def check(self, model: str, *, structured_probe: bool = False) -> ProviderCheckResult:
+    def check(self, model: str) -> ProviderCheckResult:
         return ProviderCheckResult(
             provider_kind="ollama",
             model=model,
             ollama_version="test",
             model_digest="sha256:test",
             model_found=True,
-            structured_output_ok=True,
         )
 
     def generate(self, request: ProviderGenerationRequest) -> ProviderGenerationResult:
@@ -285,7 +284,7 @@ def test_provider_failure_is_reported_per_service(
 ) -> None:
     def fails(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
         if name == SELECT_FROM_CONFIG:
-            raise OllamaProviderError(BusinessEnrichmentErrorCode.TIMEOUT, "Timed out.")
+            raise OllamaProviderError(ProviderErrorCode.TIMEOUT, "Timed out.")
         return grounded(name, request)
 
     results, _ = describe_services(
