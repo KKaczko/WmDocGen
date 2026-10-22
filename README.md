@@ -277,6 +277,35 @@ frameworks, ZIP archives, CI publishing definitions, RAG, cloud provider default
 external documents, prompt editing, model fine-tuning, snapshot comparison, impact analysis,
 persistent analysis caching, or partial/lazy parsing.
 
+## Prototype: bottom-up AI service descriptions
+
+`wm-doc summarize` writes the same documentation set as `wm-doc analyze` and adds an
+`## AI Description` section to every service page, written by a local Ollama model:
+
+```powershell
+wm-doc summarize samples --output out\docs --model qwen3.5:4b
+```
+
+How it works:
+
+- Each service is turned into a short pseudo-code view of its signature, FLOW steps,
+  conditions, TRY/CATCH blocks, mapping literals, transformer calls, developer step comments
+  and Java pipeline fields.
+- Services are described one at a time in call-graph order, callees first. Each call line in a
+  caller's pseudo-code carries the one-line description already written for that callee.
+- Prompts are sized to the context window (`--num-ctx`, default 16384). A service too large
+  to fit loses mapping detail first, then trailing lines, and its page says so.
+- Every name the model uses must appear in the facts it was given. An answer that fails this
+  check or the disclosure scan gets one corrective retry and is otherwise rejected.
+- Validated descriptions are cached by a hash of the exact prompt and model, so re-runs only
+  regenerate services whose facts, or callee descriptions, changed. `--refresh` regenerates
+  everything; `--no-cache` disables the cache.
+
+Outputs: the AI section on each service page, `ai-summaries.md` (one line per service, linked
+from `index.md`) and `ai-summaries.json`. A later plain `wm-doc analyze` into the same
+directory removes them. This path is separate from `build-business-context` and
+`enrich-business`; the AI text is not reviewed and is labelled as such on every page.
+
 ## Development
 
 The project is configured for Python 3.12+, `uv`, `pytest`, `ruff`, and `mypy`.

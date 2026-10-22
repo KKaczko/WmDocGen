@@ -62,6 +62,9 @@ class ProviderGenerationRequest:
     messages: list[dict[str, str]]
     schema: dict[str, Any]
     timeout_seconds: int
+    # Optional per-request overrides; None keeps the provider defaults (NUM_CTX/NUM_PREDICT).
+    num_ctx: int | None = None
+    num_predict: int | None = None
 
 
 @dataclass(frozen=True)
@@ -159,8 +162,8 @@ class OllamaBusinessEnrichmentProvider:
             "think": False,
             "options": {
                 "temperature": TEMPERATURE,
-                "num_predict": NUM_PREDICT,
-                "num_ctx": NUM_CTX,
+                "num_predict": request.num_predict or NUM_PREDICT,
+                "num_ctx": request.num_ctx or NUM_CTX,
             },
         }
         attempts = 0

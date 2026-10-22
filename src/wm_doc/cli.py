@@ -48,6 +48,11 @@ from wm_doc.openai_compatible_provider import (
     OpenAICompatibleProvider,
     resolve_api_key,
 )
+from wm_doc.render.ai_summary_markdown import (
+    AI_SUMMARIES_JSON,
+    AI_SUMMARIES_MARKDOWN,
+    write_ai_summary_outputs,
+)
 from wm_doc.render.analysis_json import render_analysis_json
 from wm_doc.render.business_context_markdown import write_business_context_outputs
 from wm_doc.render.business_result_markdown import write_business_result_outputs
@@ -80,7 +85,7 @@ from wm_doc.render.scope_markdown import (
     write_scoped_process_markdown,
     write_scoped_service_markdown,
 )
-from wm_doc.render.service_markdown import write_service_markdown
+from wm_doc.render.service_markdown import service_markdown_filenames, write_service_markdown
 from wm_doc.scope_analysis import (
     ScopeRequest,
     ScopeResult,
@@ -88,6 +93,15 @@ from wm_doc.scope_analysis import (
     build_focused_scope,
     services_for_scope,
     validate_scope_request,
+)
+from wm_doc.summarizer import (
+    DEFAULT_NUM_CTX,
+    AiServiceSummary,
+    ServiceSummaryBundle,
+    SummarizeOptions,
+    SummarizerError,
+    default_summary_cache_dir,
+    summarize_analysis,
 )
 
 app = typer.Typer(
@@ -102,6 +116,8 @@ MANAGED_ROOT_FILES = (
     "scope.json",
     "scope.md",
     "LIMITATIONS.md",
+    "ai-summaries.json",
+    "ai-summaries.md",
 )
 MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs")
 
@@ -134,6 +150,7 @@ def _default_business_enrichment_provider_factory(
 
 
 BUSINESS_ENRICHMENT_PROVIDER_FACTORY = _default_business_enrichment_provider_factory
+SUMMARY_PROVIDER_FACTORY = _default_business_enrichment_provider_factory
 
 
 @app.callback()
@@ -574,6 +591,170 @@ def analyze(
             )
             raise typer.Exit(code=scope_output.exit_code)
         return
+    report, graph_failures = _write_full_outputs(
+        output, analysis, render_graphs_mode, graphviz_dot, verbose=verbose
+    )
+    typer.echo(report)
+    if graph_failures:
+        _echo_graph_failures(graph_failures)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def summarize(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Directory for documentation outputs.")
+    ],
+    model: Annotated[
+        str,
+        typer.Option("--model", help="Installed Ollama model to use."),
+    ],
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ] = None,
+    processes_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--processes-file",
+            help="Optional processes.yml catalog for user-authored process entrypoints.",
+        ),
+    ] = None,
+    render_graphs_mode: Annotated[
+        GraphRenderMode,
+        typer.Option("--render-graphs", help="Render generated DOT graphs with Graphviz."),
+    ] = GraphRenderMode.NONE,
+    graphviz_dot: Annotated[
+        Path | None,
+        typer.Option("--graphviz-dot", help="Optional path to the Graphviz dot executable."),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            help="Include full mapping, FLOW outline, call and source-evidence detail.",
+        ),
+    ] = False,
+    ollama_url: Annotated[
+        str,
+        typer.Option("--ollama-url", help="Ollama provider URL."),
+    ] = "http://localhost:11434",
+    timeout_seconds: Annotated[
+        int,
+        typer.Option("--timeout-seconds", help="Per-service request timeout in seconds."),
+    ] = HTTP_TIMEOUT_SECONDS,
+    allow_remote_provider: Annotated[
+        bool,
+        typer.Option("--allow-remote-provider", help="Allow non-loopback Ollama provider URLs."),
+    ] = False,
+    num_ctx: Annotated[
+        int,
+        typer.Option(
+            "--num-ctx",
+            min=4096,
+            help="Model context window in tokens. Larger fits bigger services but uses more "
+            "memory on the Ollama host.",
+        ),
+    ] = DEFAULT_NUM_CTX,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Disable summary cache reads and writes."),
+    ] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Regenerate every summary and replace cache entries."),
+    ] = False,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="Summary cache directory."),
+    ] = None,
+) -> None:
+    """Prototype: analyze, then describe each service with a local model, callees first."""
+    if not model.strip():
+        typer.echo("SUMMARIZE_INPUT_INVALID: --model must not be blank.", err=True)
+        raise typer.Exit(code=2)
+    app_config = load_config(config)
+    analysis = analyze_path(
+        packages_path,
+        app_config,
+        processes_file,
+        processes_file_explicit=processes_file is not None,
+    )
+
+    def report_progress(
+        position: int, total: int, result: AiServiceSummary, from_cache: bool
+    ) -> None:
+        state = "cached" if from_cache else result.status.value.lower()
+        typer.echo(f"[{position}/{total}] {result.service}: {state}")
+
+    try:
+        provider = SUMMARY_PROVIDER_FACTORY(
+            ollama_url,
+            allow_remote_provider=allow_remote_provider,
+            connect_timeout_seconds=HTTP_CONNECT_TIMEOUT_SECONDS,
+            timeout_seconds=timeout_seconds,
+        )
+        bundle, stats = summarize_analysis(
+            analysis,
+            provider,
+            SummarizeOptions(
+                model=model.strip(),
+                scan_root=packages_path,
+                config=app_config,
+                cache_dir=None if no_cache else (cache_dir or default_summary_cache_dir()),
+                no_cache=no_cache,
+                refresh=refresh,
+                num_ctx=num_ctx,
+                timeout_seconds=timeout_seconds,
+            ),
+            progress=report_progress,
+        )
+    except OllamaProviderError as exc:
+        typer.echo(f"{exc.code.value}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+    except SummarizerError as exc:
+        typer.echo(f"SUMMARIZE_FAILED: {exc.safe_message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    report, graph_failures = _write_full_outputs(
+        output,
+        analysis,
+        render_graphs_mode,
+        graphviz_dot,
+        verbose=verbose,
+        ai_bundle=bundle,
+    )
+    tokens = stats.prompt_tokens
+    typer.echo(report)
+    typer.echo(
+        "AI service descriptions:\n"
+        f"- described: {stats.generated + stats.cached} "
+        f"({stats.generated} generated, {stats.cached} from cache)\n"
+        f"- rejected by validation: {stats.rejected}\n"
+        f"- generation failed: {stats.failed}\n"
+        f"- corrective retries: {stats.retried}\n"
+        f"- facts shortened to fit: {stats.shortened}\n"
+        f"- largest prompt: {max(tokens) if tokens else 'n/a'} tokens of {num_ctx}\n"
+        f"- wrote {AI_SUMMARIES_MARKDOWN} and {AI_SUMMARIES_JSON}"
+    )
+    if graph_failures:
+        _echo_graph_failures(graph_failures)
+        raise typer.Exit(code=1)
+
+
+def _write_full_outputs(
+    output: Path,
+    analysis: AnalysisResult,
+    render_graphs_mode: GraphRenderMode,
+    graphviz_dot: Path | None,
+    *,
+    verbose: bool,
+    ai_bundle: ServiceSummaryBundle | None = None,
+) -> tuple[str, list[GraphRenderResult]]:
+    """Write the complete (unscoped) documentation set; return the report and failures."""
     output.mkdir(parents=True, exist_ok=True)
     try:
         _clean_generated_output(output)
@@ -589,7 +770,13 @@ def analyze(
         analysis.process_service_memberships,
         analysis.processes,
         verbose=verbose,
+        ai_summaries=ai_bundle.by_service() if ai_bundle else None,
+        ai_model=ai_bundle.model if ai_bundle else None,
     )
+    ai_summaries_path: str | None = None
+    if ai_bundle is not None:
+        write_ai_summary_outputs(output, ai_bundle, service_markdown_filenames(services))
+        ai_summaries_path = AI_SUMMARIES_MARKDOWN
     document_paths = write_document_markdown(
         output,
         documents,
@@ -617,13 +804,15 @@ def analyze(
     graph_failures = graph_render_failures(graph_results)
     graph_index_path = write_graph_index(output, graph_assets)
     write_analysis_limitations(output)
-    index_path = write_documentation_index(output, analysis, graph_assets)
+    index_path = write_documentation_index(
+        output, analysis, graph_assets, ai_summaries_path=ai_summaries_path
+    )
     process_paths = write_process_markdown(output, analysis, graph_assets)
     flow_count = sum(1 for service in services if service.service_type.value == "FLOW")
     java_count = sum(1 for service in services if service.service_type.value == "JAVA")
     opaque_count = sum(1 for service in services if service.service_type.value == "OPAQUE")
     metrics = analysis.metrics
-    typer.echo(
+    report = (
         "Analyzed services:\n"
         f"- FLOW: {flow_count}\n"
         f"- Java: {java_count}\n"
@@ -674,9 +863,7 @@ def analyze(
         f"- Graph render failures: {len(graph_failures)}\n"
         f"- Graph index generated: {'yes' if graph_index_path.exists() else 'no'}"
     )
-    if graph_failures:
-        _echo_graph_failures(graph_failures)
-        raise typer.Exit(code=1)
+    return report, graph_failures
 
 
 def _write_scoped_outputs(

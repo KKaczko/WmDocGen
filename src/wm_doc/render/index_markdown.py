@@ -7,7 +7,10 @@ from wm_doc.ir import AnalysisResult
 
 
 def render_documentation_index(
-    analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
+    analysis: AnalysisResult,
+    graph_assets: list[GraphAsset] | None = None,
+    *,
+    ai_summaries_path: str | None = None,
 ) -> str:
     graph_assets = graph_assets or []
     lines = [
@@ -39,6 +42,8 @@ def render_documentation_index(
         "- [Services](services/)",
         "- [Document Types](documents/)",
     ]
+    if ai_summaries_path:
+        lines.append(f"- [AI service descriptions (not reviewed)]({ai_summaries_path})")
     if analysis.processes:
         lines.append("- [Process catalog](processes/index.md)")
         lines.append("- [Process graphs](graphs/processes/)")
@@ -97,10 +102,19 @@ def write_analysis_limitations(output_dir: Path) -> Path:
 
 
 def write_documentation_index(
-    output_dir: Path, analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
+    output_dir: Path,
+    analysis: AnalysisResult,
+    graph_assets: list[GraphAsset] | None = None,
+    *,
+    ai_summaries_path: str | None = None,
 ) -> Path:
     path = output_dir / "index.md"
-    path.write_text(render_documentation_index(analysis, graph_assets), encoding="utf-8")
+    path.write_text(
+        render_documentation_index(
+            analysis, graph_assets, ai_summaries_path=ai_summaries_path
+        ),
+        encoding="utf-8",
+    )
     return path
 
 

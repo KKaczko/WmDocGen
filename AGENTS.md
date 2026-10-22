@@ -23,6 +23,15 @@ the filenames and flags a reader needs; the secret guard is evaluated before the
 still blocks secret-like literals in every mode. Business enrichment output language defaults to
 `en`, because generating Polish caused a local model to translate identifiers it must copy verbatim.
 
+A user-approved prototype adds `wm-doc summarize`, `src/wm_doc/pseudocode.py`,
+`src/wm_doc/summarizer.py` and `src/wm_doc/render/ai_summary_markdown.py`: per-service AI
+descriptions generated bottom-up in call-graph order from a pseudo-code view, with callee
+descriptions as context, a content-hash cache of validated summaries only, and an
+`## AI Description` section on service pages. It is separate from `enrich-business`, never
+persists raw prompts or responses, and leaves `analysis.v8` and plain `analyze` output
+byte-identical. Developer `<COMMENT>` text is read from `flow.xml` for prompts only, through
+the free-text policy, and is not added to the canonical snapshot.
+
 M11 adds `src/wm_doc/openai_compatible_provider.py` and `--provider openai-compatible`, reaching an
 Ollama server through its OpenAI-compatible endpoint. This is still Ollama: it exists because a
 shared server has no authentication of its own and is fronted by a proxy that terminates TLS and
