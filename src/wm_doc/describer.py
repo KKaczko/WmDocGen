@@ -145,6 +145,11 @@ RETRY_PROMPT_TEMPLATE = (
     "Your answer used names that do not appear in the facts: {names}. "
     "Answer again, using only names that appear in the facts."
 )
+DISCLOSURE_RETRY_PROMPT_TEMPLATE = (
+    "Your answer contained text that cannot be published ({label}). Answer again without "
+    "connection strings, credentials, file paths, links, HTML or code; name connections, "
+    "services and tables only as they appear in the facts."
+)
 
 
 class DescribeOutcome(StrEnum):
@@ -563,26 +568,27 @@ class AnswerSpec[T]:
             label = unsafe_disclosure_label(answer_text)
             if label is not None:
                 note = f"the answer failed the disclosure scan: {label}"
+                correction = DISCLOSURE_RETRY_PROMPT_TEMPLATE.format(label=label)
+            else:
+                unknown = unknown_names(answer_text, prompt_facts)
+                if not unknown:
+                    if session.cache_dir is not None:
+                        _write_cached_payload(
+                            session.cache_dir, key, self.prompt_version, self.to_payload(value)
+                        )
+                    return value, False, (DescribeOutcome.GENERATED, "")
+                names = ", ".join(f"`{name}`" for name in unknown[:6])
+                note = f"the model's answer named things that are not in the facts: {names}"
+                correction = RETRY_PROMPT_TEMPLATE.format(names=names)
+            if attempt == 1:
                 return None, False, (DescribeOutcome.REJECTED, note)
-            unknown = unknown_names(answer_text, prompt_facts)
-            if not unknown:
-                if session.cache_dir is not None:
-                    _write_cached_payload(
-                        session.cache_dir, key, self.prompt_version, self.to_payload(value)
-                    )
-                return value, False, (DescribeOutcome.GENERATED, "")
-            names = ", ".join(f"`{name}`" for name in unknown[:6])
-            if attempt == 0:
-                with session.lock:
-                    session.stats.retried += 1
-                conversation = [
-                    *messages,
-                    {"role": "assistant", "content": content},
-                    {"role": "user", "content": RETRY_PROMPT_TEMPLATE.format(names=names)},
-                ]
-                continue
-            note = f"the model's answer named things that are not in the facts: {names}"
-            return None, False, (DescribeOutcome.REJECTED, note)
+            with session.lock:
+                session.stats.retried += 1
+            conversation = [
+                *messages,
+                {"role": "assistant", "content": content},
+                {"role": "user", "content": correction},
+            ]
         raise AssertionError("unreachable")
 
 

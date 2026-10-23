@@ -279,6 +279,43 @@ def test_rejected_answer_writes_no_file_and_keeps_existing_one(
     assert not _doc_file(tmp_path, READ_CONFIG).exists()
 
 
+def test_unsafe_answer_gets_one_corrective_retry(samples: AnalysisResult, tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def leaks_once(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
+        calls.append(name)
+        answer = grounded(name, request)
+        if len(calls) == 1:
+            answer["data_effects"] = "Reads jdbc:oracle:thin:@dbhost:1521:ORCL."
+        return answer
+
+    provider = FakeProvider(leaks_once)
+    results, stats = describe_services(samples, [READ_CONFIG], provider, _options(tmp_path))
+
+    assert results[0].outcome is DescribeOutcome.GENERATED
+    assert stats.retried == 1
+    assert "cannot be published (connection string)" in provider.requests[1].messages[-1][
+        "content"
+    ]
+    assert "jdbc:oracle" not in _doc_file(tmp_path, READ_CONFIG).read_text(encoding="utf-8")
+
+
+def test_answer_that_stays_unsafe_is_rejected(samples: AnalysisResult, tmp_path: Path) -> None:
+    def leaks(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
+        answer = grounded(name, request)
+        answer["data_effects"] = "Reads jdbc:mysql://dbhost/orders."
+        return answer
+
+    results, stats = describe_services(
+        samples, [READ_CONFIG], FakeProvider(leaks), _options(tmp_path)
+    )
+
+    assert results[0].outcome is DescribeOutcome.REJECTED
+    assert results[0].note == "the answer failed the disclosure scan: connection string"
+    assert stats.retried == 1
+    assert not _doc_file(tmp_path, READ_CONFIG).exists()
+
+
 def test_provider_failure_is_reported_per_service(
     samples: AnalysisResult, tmp_path: Path
 ) -> None:
