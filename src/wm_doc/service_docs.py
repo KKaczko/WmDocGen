@@ -77,15 +77,22 @@ class Narrative:
     steps: tuple[str, ...]
     error_handling: str
     designer_comment: str
+    # The whole flow in order: each call, its system, its inputs and their origin, and
+    # what it returns to later steps. Empty for adapter and other opaque services.
+    detailed_steps: tuple[str, ...] = ()
 
     def markdown(self) -> str:
         steps = "\n".join(f"{index}. {step}" for index, step in enumerate(self.steps, 1))
+        detailed = "\n".join(
+            f"{index}. {step}" for index, step in enumerate(self.detailed_steps, 1)
+        )
         return (
             f"{PURPOSE_HEADING}\n\n{self.purpose}\n\n"
             f"## Usage\n\n{self.usage}\n\n"
             f"## What it does to data\n\n{self.data_effects}\n\n"
             f"## Main steps\n\n{steps or '-'}\n\n"
-            f"## Error handling\n\n{self.error_handling}\n\n"
+            + (f"## Detailed flow\n\n{detailed}\n\n" if detailed else "")
+            + f"## Error handling\n\n{self.error_handling}\n\n"
             f"{COMMENT_HEADING}\n\n```text\n{self.designer_comment}\n```\n"
         )
 

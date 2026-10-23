@@ -519,3 +519,129 @@ def test_connection_in_a_jdbc_folder_is_not_mistaken_for_a_jdbc_url(tmp_path: Pa
     assert "orders.jdbc:ordersConn" in where
     assert unsafe_disclosure_label(f"It reads ORDERS through {where}.") is None
     assert unsafe_disclosure_label("It uses jdbc:oracle:thin:@db:1521:X.") == "connection string"
+
+
+# --- Detailed flow -------------------------------------------------------------------------
+
+NODE_WITH_OUTPUT = """<Values version="2.0">
+  <value name="svc_type">flow</value>
+  <record name="svc_sig">
+    <record name="sig_in"><array name="rec_fields" type="record" depth="1" /></record>
+    <record name="sig_out">
+      <array name="rec_fields" type="record" depth="1">
+        <record>
+          <value name="node_type">record</value>
+          <value name="field_name">links</value>
+          <value name="field_type">string</value>
+          <value name="field_dim">1</value>
+        </record>
+      </array>
+    </record>
+  </record>
+</Values>"""
+
+
+def _flow_with_output(root: Path, namespace: str, name: str, body: str) -> None:
+    node_dir = _node_dir(root, namespace, name)
+    (node_dir / "node.ndf").write_text(NODE_WITH_OUTPUT, encoding="utf-8")
+    (node_dir / "flow.xml").write_text(
+        f'<FLOW VERSION="3.0" CLEANUP="true">{body}</FLOW>', encoding="utf-8"
+    )
+
+
+def _flow_server(root: Path) -> Path:
+    _flow_with_output(root, "orders.links", "findLinks", "")
+    _flow(
+        root,
+        "orders.api",
+        "getContracts",
+        '<INVOKE SERVICE="orders.links:findLinks"/>'
+        '<INVOKE SERVICE="orders.db:selectOrders">'
+        '<MAP MODE="INPUT"><MAPCOPY FROM="/links;1;1" TO="/ids;1;1"/></MAP></INVOKE>',
+    )
+    _adapter_service(
+        root,
+        "orders.db",
+        "selectOrders",
+        _blob(
+            [
+                ("serviceTemplateName", "com.wm.adapter.wmjdbc.services.Select"),
+                ("connectionName", "orders.jdbc:ordersConn"),
+                ("adapterType", "JDBCAdapter"),
+            ],
+            tables=["ORDERS"],
+        ),
+    )
+    return root
+
+
+def test_calls_show_what_the_called_service_returns(tmp_path: Path) -> None:
+    from wm_doc.pseudocode import callee_outputs_lookup
+
+    analysis = _analysis(_flow_server(tmp_path))
+    services = {service.identity.full_name: service for service in analysis.services}
+
+    pseudo = render_pseudocode(
+        services["orders.api:getContracts"],
+        lambda _target: None,
+        callee_outputs=callee_outputs_lookup(services),
+    )
+
+    lines = pseudo.splitlines()
+    call = next(i for i, line in enumerate(lines) if "CALL orders.links:findLinks" in line)
+    assert lines[call + 1].strip() == "returns: links: string list"
+
+
+class _FlowProvider(_InventingProvider):
+    """Answers with a detailed flow; the first answer names a field that is not in the facts."""
+
+    def generate(self, request: ProviderGenerationRequest) -> ProviderGenerationResult:
+        self.prompts.append(request.messages[1]["content"])
+        unknown = "`customerIds`" if len(self.prompts) == 1 else "`ids`"
+        payload = {
+            "purpose": "Returns orders for `orders.api:getContracts` callers.",
+            "usage": "Used by the callers listed in the facts.",
+            "data_effects": "Reads table `ORDERS`.",
+            "steps": ["Finds links.", "Selects orders."],
+            "detailed_steps": [
+                "Calls `orders.links:findLinks`, which returns `links`.",
+                f"Calls `orders.db:selectOrders` with {unknown} copied from `links`; it "
+                "selects rows from table `ORDERS` through connection `orders.jdbc:ordersConn`.",
+            ],
+            "error_handling": "Not shown in the facts.",
+            "designer_comment": "Returns orders.",
+        }
+        return ProviderGenerationResult(
+            content=json.dumps(payload),
+            provider_kind="ollama",
+            model=request.model,
+            ollama_version="test",
+            model_digest="sha256:test",
+            metrics={"prompt_eval_count": 400},
+        )
+
+
+def test_description_gets_a_detailed_flow_checked_like_the_rest(tmp_path: Path) -> None:
+    root = _flow_server(tmp_path / "packages")
+    provider = _FlowProvider()
+    options = DescribeOptions(
+        model="fake-model",
+        scan_root=root,
+        config=load_config(None),
+        docs_dir=tmp_path / "service-docs",
+        cache_dir=tmp_path / "cache",
+    )
+
+    describe_services(_analysis(root), ["orders.api:getContracts"], provider, options)
+
+    prompt = provider.prompts[0]
+    assert "returns: links: string list" in prompt
+    assert "JDBC adapter service (template `Select`): selects rows from table `ORDERS`" in prompt
+    assert "detailed_steps" in prompt
+    # The first answer named `customerIds`, which is not in the facts: one retry fixed it.
+    assert len(provider.prompts) == 2
+    text = doc_path(tmp_path / "service-docs", "Orders", "orders.api:getContracts").read_text(
+        encoding="utf-8"
+    )
+    assert "## Detailed flow\n\n1. Calls `orders.links:findLinks`, which returns `links`." in text
+    assert "2. Calls `orders.db:selectOrders` with `ids` copied from `links`" in text
