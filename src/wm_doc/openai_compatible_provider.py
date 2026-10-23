@@ -99,7 +99,7 @@ class OpenAICompatibleProvider:
             "model": request.model,
             "messages": request.messages,
             "temperature": TEMPERATURE,
-            "max_tokens": NUM_PREDICT,
+            "max_tokens": request.num_predict or NUM_PREDICT,
             "stream": False,
             "response_format": {
                 "type": "json_schema",

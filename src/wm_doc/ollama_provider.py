@@ -63,6 +63,9 @@ class ProviderGenerationRequest:
     # Optional per-request overrides; None keeps the provider defaults (NUM_CTX/NUM_PREDICT).
     num_ctx: int | None = None
     num_predict: int | None = None
+    # Let the model reason before answering (`describe --detail deep`). Only the final
+    # answer is read; the reasoning text is never kept.
+    think: bool = False
 
 
 @dataclass(frozen=True)
@@ -165,7 +168,7 @@ class OllamaProvider:
             "messages": request.messages,
             "format": request.schema,
             "stream": False,
-            "think": False,
+            "think": request.think,
             "options": {
                 "temperature": TEMPERATURE,
                 "num_predict": request.num_predict or NUM_PREDICT,

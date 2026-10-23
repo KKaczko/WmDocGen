@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -10,12 +11,14 @@ from wm_doc.analysis_cache import analyze_cached, default_analysis_cache_dir
 from wm_doc.builtins import PlatformServicesError, use_platform_catalog
 from wm_doc.config import AppConfig, load_config
 from wm_doc.describer import (
+    MAX_INSTRUCTIONS_CHARS,
     STATE_ORDER,
     DescribeError,
     DescribeOptions,
     DescribeOutcome,
     DescribeResult,
     DescribeStats,
+    DetailLevel,
     approve_docs,
     collect_states,
     current_facts_hashes,
@@ -607,6 +610,73 @@ ProcessesFileOption = Annotated[
     Path | None,
     typer.Option("--processes-file", help="Optional processes.yml catalog."),
 ]
+DetailOption = Annotated[
+    DetailLevel,
+    typer.Option(
+        "--detail",
+        case_sensitive=False,
+        help=(
+            "How much each description says: brief (main steps only, fastest), standard "
+            "(adds the detailed flow) or deep (the detailed flow, written after the model "
+            "reasons about the facts; thinking-capable models only, several times slower; "
+            "use --num-ctx 32768)."
+        ),
+    ),
+]
+InstructionsOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--instructions",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help=(
+            "Text file with your own extra instructions for the model (style, audience, "
+            f"terms to use), at most {MAX_INSTRUCTIONS_CHARS} characters. They never "
+            "override the rules: only the facts, names copied exactly."
+        ),
+    ),
+]
+
+
+def _read_instructions_or_exit(path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        typer.echo("INSTRUCTIONS_INVALID: the file could not be read as UTF-8 text.", err=True)
+        raise typer.Exit(code=2) from exc
+    if not text:
+        typer.echo("INSTRUCTIONS_INVALID: the file is empty.", err=True)
+        raise typer.Exit(code=2)
+    if len(text) > MAX_INSTRUCTIONS_CHARS:
+        typer.echo(
+            f"INSTRUCTIONS_INVALID: the file has {len(text)} characters; the limit is "
+            f"{MAX_INSTRUCTIONS_CHARS}.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return text
+
+
+def _duration(seconds: float) -> str:
+    """42 s, 3 min 05 s, 2 h 07 min."""
+    whole = int(round(seconds))
+    if whole < 60:
+        return f"{whole} s"
+    if whole < 3600:
+        return f"{whole // 60} min {whole % 60:02d} s"
+    return f"{whole // 3600} h {whole % 3600 // 60:02d} min"
+
+
+def _progress_line(position: int, total: int, label: str, result: DescribeResult) -> str:
+    note = f" ({result.note})" if result.note else ""
+    took = f" [{_duration(result.seconds)}]" if result.seconds is not None else ""
+    return f"[{position}/{total}] {label}: {result.outcome.value}{note}{took}"
+
+
 KeepUnverifiedOption = Annotated[
     bool,
     typer.Option(
@@ -707,6 +777,8 @@ def describe(
     ] = False,
     redo_drafts: RedoDraftsOption = False,
     keep_unverified: KeepUnverifiedOption = False,
+    detail: DetailOption = DetailLevel.STANDARD,
+    instructions_file: InstructionsOption = None,
     config: ConfigOption = None,
     processes_file: ProcessesFileOption = None,
     include_package: IncludePackageOption = None,
@@ -760,15 +832,18 @@ def describe(
         with_callees=with_callees,
     )
 
+    instructions = _read_instructions_or_exit(instructions_file)
+
     def report_progress(position: int, total: int, result: DescribeResult) -> None:
-        note = f" ({result.note})" if result.note else ""
-        typer.echo(f"[{position}/{total}] {result.service}: {result.outcome.value}{note}")
+        typer.echo(_progress_line(position, total, result.service, result))
+
+    started = time.perf_counter()
 
     try:
         provider = _model_provider(
             ollama_url, allow_remote_provider, timeout_seconds, provider_kind, api_key_env
         )
-        _results, describe_stats = describe_services(
+        results, describe_stats = describe_services(
             analysis,
             selected,
             provider,
@@ -782,6 +857,8 @@ def describe(
                 refresh=refresh,
                 redo_drafts=redo_drafts,
                 keep_unverified=keep_unverified,
+                detail=detail,
+                instructions=instructions,
                 num_ctx=num_ctx,
                 timeout_seconds=timeout_seconds,
                 external_systems=external_catalog,
@@ -796,12 +873,20 @@ def describe(
         typer.echo(f"DESCRIBE_FAILED: {exc.safe_message}", err=True)
         raise typer.Exit(code=1) from exc
     _echo_generation_summary(
-        f"Described {len(selected)} service(s) into {docs_dir}:",
+        f"Described {len(selected)} service(s) into {docs_dir} (detail: {detail.value}):",
         describe_stats,
         num_ctx,
         "Next: review the drafts, approve them with `wm-doc approve`, and publish with "
         "`wm-doc analyze ... --docs-dir`.",
+        run_seconds=time.perf_counter() - started,
+        noun="services",
     )
+    if any("timed out" in (result.note or "") for result in results):
+        typer.echo(
+            "Hint: some requests timed out. Long answers (and --detail deep, where the model "
+            "thinks first) need more time: raise --timeout-seconds (for example 1800) or use "
+            "a lower --detail."
+        )
 
 
 def _model_provider(
@@ -822,10 +907,43 @@ def _model_provider(
 
 
 def _echo_generation_summary(
-    header: str, stats: DescribeStats, num_ctx: int, next_step: str
+    header: str,
+    stats: DescribeStats,
+    num_ctx: int,
+    next_step: str,
+    *,
+    run_seconds: float | None = None,
+    noun: str = "items",
 ) -> None:
     counts = stats.counts
     tokens = stats.prompt_tokens
+    timing = ""
+    if stats.model_calls:
+        average = stats.model_seconds / stats.model_calls
+        speed = (
+            f", {stats.answer_tokens / stats.model_seconds:.0f} answer tokens/s"
+            if stats.answer_tokens and stats.model_seconds
+            else ""
+        )
+        timing = (
+            f"- model time: {_duration(stats.model_seconds)} for {stats.model_calls} "
+            f"request(s), {_duration(average)} each on average{speed}\n"
+        )
+        asked = sum(
+            counts.get(outcome, 0)
+            for outcome in (
+                DescribeOutcome.GENERATED,
+                DescribeOutcome.UNVERIFIED,
+                DescribeOutcome.REJECTED,
+                DescribeOutcome.FAILED,
+            )
+        )
+        if run_seconds and asked:
+            per_hour = asked / run_seconds * 3600
+            timing += (
+                f"- run time: {_duration(run_seconds)}; at this pace about "
+                f"{per_hour:.0f} {noun} per hour\n"
+            )
     typer.echo(
         f"{header}\n"
         f"- new drafts: {counts.get(DescribeOutcome.GENERATED, 0)} generated, "
@@ -838,6 +956,7 @@ def _echo_generation_summary(
         f"- corrective retries: {stats.retried}\n"
         f"- facts shortened to fit: {stats.shortened}\n"
         f"- largest prompt: {max(tokens) if tokens else 'n/a'} tokens of {num_ctx}\n"
+        f"{timing}"
         f"{next_step}"
     )
 
@@ -865,6 +984,7 @@ def overview(
         ),
     ] = False,
     redo_drafts: RedoDraftsOption = False,
+    instructions_file: InstructionsOption = None,
     config: ConfigOption = None,
     processes_file: ProcessesFileOption = None,
     include_package: IncludePackageOption = None,
@@ -909,9 +1029,12 @@ def overview(
         )
         raise typer.Exit(code=2)
 
+    instructions = _read_instructions_or_exit(instructions_file)
+
     def report_progress(position: int, total: int, result: DescribeResult) -> None:
-        note = f" ({result.note})" if result.note else ""
-        typer.echo(f"[{position}/{total}] {progress_label(result)}: {result.outcome.value}{note}")
+        typer.echo(_progress_line(position, total, progress_label(result), result))
+
+    started = time.perf_counter()
 
     try:
         provider = _model_provider(
@@ -930,6 +1053,7 @@ def overview(
                 no_cache=no_cache,
                 refresh=refresh,
                 redo_drafts=redo_drafts,
+                instructions=instructions,
                 num_ctx=num_ctx,
                 timeout_seconds=timeout_seconds,
                 external_systems=external_catalog,
@@ -950,6 +1074,8 @@ def overview(
         num_ctx,
         "Next: review the drafts, approve them with `wm-doc approve --service package:<Package>` "
         "or `--service server`, and publish with `wm-doc analyze ... --docs-dir`.",
+        run_seconds=time.perf_counter() - started,
+        noun="overviews",
     )
 
 def _describe_selection(
