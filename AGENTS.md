@@ -16,17 +16,23 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
   `Default` and `system_package=yes` skipped by default) and records excluded packages with a
   reason. Non-service namespace nodes keep their declared `node_type`.
 - Analysis (`analysis.py`, `java_analysis.py`, `values.py`, `xmlsafe.py`): FLOW services (ordered
-  FLOW tree incl. TRY/CATCH via `SEQUENCE FORM`, REPEAT via `<RETRY>`, maps, transformers),
+  FLOW tree incl. TRY/CATCH via `SEQUENCE FORM`, REPEAT via `<RETRY>`, maps, transformers;
+  `DISABLED="true"` steps and mapping lines are left out and counted in `disabled_steps`),
   Java services (source-first, checked against `java.frag`; only statically confirmed
-  `Service.doInvoke` calls become dependencies), opaque services (explicit unsupported `svc_type`,
-  e.g. adapter services: identity, signature and description only), document types, and
-  specification signatures through `svc_spec`.
+  `Service.doInvoke` calls become dependencies), opaque services (explicit unsupported `svc_type`:
+  identity, signature and description; JDBC adapter services also their decoded
+  configuration), document types, and specification signatures through `svc_spec`.
+- Readers (`adapters.py`, `triggers.py`): the approved JDBC adapter decoder and trigger reader
+  (see "Approved readers"); their results sit on `FlowService.adapter` and
+  `NamespaceArtifact.adapter` / `.trigger`.
 - Facts (`effects.py`, `references.py`, `builtins.py`, `external_systems.py`): per service, the
   direct callers, entry points (artifacts whose node.ndf contains a service's exact name,
   `processes.yml`, uncalled callers), and data and systems touched (signature documents; platform
-  calls with object and location read from the literal or mapped documented input field; opaque
-  callees with the connections their node.ndf names; calls leaving the analysed packages, named by
-  `external-systems.yml`). Effects of local callees are included with the call chain.
+  calls with object and location read from the literal or mapped documented input field; JDBC
+  adapter services with operation, tables and connection; other opaque callees with the
+  connections their node.ndf names; calls leaving the analysed packages, named by
+  `external-systems.yml`). Effects of local callees are included with the call chain. Entry
+  points also include trigger details and legacy REST v1 handlers.
 - Prompts (`pseudocode.py`, `callgraph.py`, `summarizer.py`): a per-service pseudo-code view,
   callee-first ordering (Tarjan SCC), context fitting and the name-grounding check.
 - Descriptions (`service_docs.py`, `describer.py`, `disclosure.py`): description files, the
@@ -44,7 +50,7 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
 
 ## Contracts
 
-- `analysis.json` is schema `analysis.v10`: each fact is stored once, on the service, package or
+- `analysis.json` is schema `analysis.v11`: each fact is stored once, on the service, package or
   document it belongs to. Server-wide lists (`AnalysisResult.call_occurrences`,
   `unique_dependencies`, `mapping_operations`, Java lists, `document_types`, ...) are derived
   properties, not serialized. Each package's `service_index` lists only its own services.
@@ -64,15 +70,30 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
   prompt, sized to `--num-ctx`; every
   identifier-shaped name in the answer must occur in the facts sent; the disclosure scan must pass;
   one corrective retry; otherwise the answer is rejected. Only validated drafts are cached.
+  For adapter and other opaque services the tool, not the model, writes Main steps and Error
+  handling.
 - Facts are never inferred from names. Every data-effect row states how it is known. Artifact
   references are exact full-name matches only; no other value from those files is kept.
 - Defaults: literal and free-text disclosure `include`, with the secret guard evaluated first in
   every mode; description language English.
 
+## Approved readers (owner approval, M12, after checking real public 10.x packages)
+
+- JDBC adapter decoder (`adapters.py`): decodes the binary `IRTNODE_PROPERTY` value of
+  `AdapterService` services, `ConnectionData` connections and adapter notifications and keeps
+  only an allow-list of fields: operation template, connection name, tables, adapter type, and
+  for connections the datasource class (database product), database name and transaction type;
+  for notifications the notification type, connection, table and published document. Server,
+  host, port, user, password, URL and any other connection property are never read or kept.
+- Trigger reader: `trigger_type` (JMS or webMethods messaging), JMS connection alias,
+  destinations (name and queue/topic), subscribed document types and handler services.
+- Legacy REST handlers: services named `_get`, `_post`, `_put`, `_patch`, `_delete` or
+  `_default` are IS REST v1 endpoints at `/rest/<namespace as path>`.
+
 ## Out of scope without explicit owner approval
 
-Semantic parsers for JDBC adapter services, triggers and REST/SOAP descriptors (wait for real
-`probe-shapes` output), native BPM process models, runtime simulation, Java execution,
+Semantic parsers for REST/SOAP descriptor details beyond service references, other adapter
+types' configuration, native BPM process models, runtime simulation, Java execution,
 compilation or class loading, broad Java external-effect classification, non-Ollama or cloud model
 providers, RAG or arbitrary external documents, prompt editing UI, fine-tuning, snapshot diffing,
 Mermaid, JavaScript graph viewers, static-site frameworks, ZIP publishing.

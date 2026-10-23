@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from wm_doc.adapters import operation_phrase
 from wm_doc.analysis import _apply_free_text_policy, _xml_path
 from wm_doc.builtins import builtin_effect, is_builtin_name
 from wm_doc.config import AppConfig
@@ -89,6 +90,10 @@ def render_pseudocode(
     if facts_text:
         lines.append(facts_text)
     if service.service_type is ServiceType.FLOW and service.flow_tree is not None:
+        if service.disabled_steps:
+            lines.append(
+                f"disabled steps left out: {service.disabled_steps} (they never run)"
+            )
         lines.append("steps:")
         renderer = _FlowRenderer(service, callee_note, comments, detail, external_note)
         for child in service.flow_tree.children:
@@ -96,6 +101,8 @@ def render_pseudocode(
         lines.extend(renderer.lines or ["  (no steps)"])
     elif service.service_type is ServiceType.JAVA:
         lines.extend(_java_lines(service, callee_note, external_note))
+    elif service.service_type is ServiceType.OPAQUE and service.adapter is not None:
+        lines.extend(_adapter_lines(service))
     elif service.service_type is ServiceType.OPAQUE:
         source_type = service.source_service_type or "unknown"
         lines.append(
@@ -103,6 +110,22 @@ def render_pseudocode(
             "only the signature and description are known"
         )
     return "\n".join(lines)
+
+
+def _adapter_lines(service: FlowService) -> list[str]:
+    details = service.adapter
+    assert details is not None
+    lines = [
+        "implementation: JDBC adapter service; one configured database operation, "
+        "no FLOW steps; the SQL text is not analysed"
+    ]
+    if details.operation:
+        lines.append(f"  template: {details.operation} ({operation_phrase(details)})")
+    if details.tables:
+        lines.append("  tables: " + ", ".join(f"`{table}`" for table in details.tables))
+    if details.connection:
+        lines.append(f"  connection: `{details.connection}`")
+    return lines
 
 
 def call_annotation(

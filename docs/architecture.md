@@ -317,6 +317,20 @@ longer serialized; `AnalysisResult` and `AnalyzedPackage` expose them as derived
 the same ordering, so in-memory readers are unchanged. `document_reference_occurrences`,
 `document_dependencies` and `service_document_dependencies` stay at top level.
 
+M12 then migrates to `analysis.v11` for the approved readers:
+
+- FLOW steps and mapping lines with `DISABLED="true"` are left out of the tree, calls, mappings
+  and effects; each service records how many in `disabled_steps`.
+- JDBC adapter services carry `adapter` (operation template, tables, connection) and
+  `namespace_artifacts` entries carry `adapter` for JDBC connections (datasource class and
+  product, database name, transaction type) and notifications (type, tables, connection,
+  published document), decoded from the binary `IRTNODE_PROPERTY` by `adapters.py`. Only these
+  allow-listed keys are read, and each value must match the shape of a name.
+- Trigger entries carry `trigger` (`triggers.py`): trigger type, JMS alias, destinations with
+  queue or topic, and per condition or routing rule the subscribed document and handler.
+- Entry points also come from legacy REST v1 handlers (`_get`, `_post`, ... at
+  `/rest/<namespace as path>`).
+
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
 treating them as silently supported. Mapping paths preserve the raw declared webMethods path as

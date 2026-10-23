@@ -40,8 +40,9 @@ only for `describe` and `overview`.
 Point the commands at the server's `packages` directory, or a copy of it.
 
 1. **See what is there.** `stats` prints counts and names (no code or values): packages, services
-   by kind, artifact types, FLOW elements the parser does not interpret yet, platform services
-   missing from the effect catalog, calls leaving the analysed packages, and the largest services.
+   by kind, disabled FLOW steps, artifact types, FLOW elements the parser does not interpret
+   yet, platform services missing from the effect catalog, calls leaving the analysed packages,
+   and the largest services.
 
    ```powershell
    wm-doc stats D:\IntegrationServer\instances\default\packages --output stats.md
@@ -161,18 +162,24 @@ Everything below is read from package files. Each "data and systems" row says ho
 
 | Fact | Source |
 | --- | --- |
-| Calls | FLOW `INVOKE` and transformer (`MAPINVOKE`) steps; statically confirmed Java `Service.doInvoke` calls |
+| Calls | FLOW `INVOKE` and transformer (`MAPINVOKE`) steps; statically confirmed Java `Service.doInvoke` calls. Steps marked disabled in Designer are left out and counted |
 | Signatures | `node.ndf`, or the specification named by `svc_spec` |
 | Error handling | TRY/CATCH, try/catch sequences, REPEAT on failure, EXIT with failure, `pub.flow:getLastError` (FLOW only; Java and opaque services say "not analysed") |
 | Published documents, HTTP/SOAP endpoints, JMS destinations, files, FTP/SFTP, email, storage | the documented input field of the platform service, when the FLOW sets it as a literal or maps it from the pipeline |
-| Adapter and other opaque services | name, signature, and connections their `node.ndf` names |
-| Entry points | triggers, REST/SOAP descriptors and other artifacts whose `node.ndf` contains a service's exact name; `processes.yml`; callers that nothing calls |
+| JDBC adapter services | operation template, tables and connection, decoded from the service's configuration; the connection's database product, database name and transaction type. Server, port, user, password, URL and SQL are never read |
+| Other opaque services | name, signature, and connections their `node.ndf` names |
+| Entry points | triggers (JMS or webMethods messaging, with their queues, topics, JMS alias and subscribed documents, and the JDBC adapter notification that publishes a subscribed document), REST/SOAP descriptors and other artifacts whose `node.ndf` contains a service's exact name; legacy REST v1 handlers (`_get`, `_post`, ... at `/rest/<namespace as path>`); `processes.yml`; callers that nothing calls |
 | External systems | `external-systems.yml` namespace patterns |
 | Developer comments | `<COMMENT>` text in `flow.xml` (used in prompts, subject to the free-text policy) |
 
-Not interpreted: the content of JDBC adapter services (tables, SQL), trigger conditions, REST
-paths, scheduler entries, and Java control flow. `wm-doc probe-shapes` prints the key layout of
-such artifacts (key names and counts, no values) so these can be added later from real shapes.
+Not interpreted: SQL text, trigger filters and message selectors, other adapter types'
+configuration, REST v2 resource paths, scheduler entries, and Java control flow.
+`wm-doc probe-shapes` prints the key layout of such artifacts (key names and counts, no values)
+so these can be added later from real shapes.
+
+For adapter and other opaque services, `describe` lets the model word only the purpose, usage,
+data effects and Designer comment; the tool writes the Main steps (the configured adapter
+operation, or "Not analysed") and the error handling ("not analysed").
 
 ## Commands
 
@@ -201,7 +208,7 @@ such artifacts (key names and counts, no values) so these can be added later fro
 
 ## Output reference
 
-`wm-doc analyze` writes `analysis.json` (schema `analysis.v10`; each fact is stored once, on
+`wm-doc analyze` writes `analysis.json` (schema `analysis.v11`; each fact is stored once, on
 the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,
 `entrypoints.md`, `artifacts.md`, `packages/*.md`, `services/*.md`, `documents/*.md`,
 `graphs/*.dot` and `graphs/index.md`, `processes/*.md` when processes are declared,

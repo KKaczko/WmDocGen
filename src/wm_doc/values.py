@@ -54,6 +54,8 @@ def _parse_node(element: etree._Element) -> Any:
         return element.text or ""
     if element.tag == "null":
         return None
+    if element.tag in {"number", "Boolean"}:
+        return (element.text or "").strip()
     if element.tag == "record":
         return _parse_children(element)
     if element.tag == "array":

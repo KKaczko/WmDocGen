@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from wm_doc.builtins import builtin_effect, is_builtin_name
-from wm_doc.effects import ServiceFacts
+from wm_doc.effects import REST_V1_KIND, ServiceFacts, rest_v1_method
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
 from wm_doc.ir import AnalysisResult, FlowService, Importance, ReferenceTargetKind, ServiceType
 from wm_doc.render.dot import _escape, _node_id
@@ -29,6 +29,12 @@ class ServiceGraphContext:
         self.external_systems = external_systems
         self.referrers: dict[str, list[tuple[str, str]]] = defaultdict(list)
         self.connections: dict[str, list[str]] = defaultdict(list)
+        for service in analysis.services:
+            method = rest_v1_method(service.identity.full_name)
+            if method is not None:
+                # The /rest/... path is left out: SVG output must not contain path-like text.
+                label = f"HTTP {method}" if not method.startswith("any") else "other HTTP methods"
+                self.referrers[service.identity.full_name].append((REST_V1_KIND, label))
         for reference in analysis.artifact_references:
             if reference.target_kind is ReferenceTargetKind.SERVICE:
                 item = (reference.source_kind, reference.source_name)

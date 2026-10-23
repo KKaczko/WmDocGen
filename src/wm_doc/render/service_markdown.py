@@ -90,6 +90,25 @@ service-level findings describe unavailable or malformed evidence.
 {% else -%}
 The artifact was analyzed by the supported parser for its service type.
 {% endif %}
+{% if service.adapter %}
+
+## Adapter Configuration
+
+Read from the JDBC adapter service's configuration (allow-listed fields only; the SQL text,
+server and credentials are not read).
+
+| Field | Value |
+| --- | --- |
+| Adapter type | `{{ service.adapter.adapter_type or "not determined" }}` |
+| Template | `{{ service.adapter.template or "not determined" }}` |
+| Tables | {{ adapter_tables }} |
+| Connection | `{{ service.adapter.connection or "not determined" }}` |
+{% endif %}
+{% if service.disabled_steps %}
+
+{{ service.disabled_steps }} disabled step(s) (`DISABLED="true"`) never run and are left out of
+the steps, calls, mappings and effects on this page.
+{% endif %}
 
 ## Designer Comment
 
@@ -344,10 +363,15 @@ def render_service_markdown(
         call_graph=call_graph,
         render_effects=render_effects_table,
         render_entry_points=render_entry_points_table,
-        summary_text=render_service_summary(service),
+        summary_text=render_service_summary(service, facts),
         layer_text=derived_layer(service) or service.classification.layer,
         description_text=description_text,
         source_service_type=service.source_service_type or "<not declared>",
+        adapter_tables=(
+            ", ".join(f"`{table}`" for table in service.adapter.tables) or "not determined"
+            if service.adapter is not None
+            else ""
+        ),
         incoming_dependencies=incoming_dependencies,
         process_memberships=process_memberships,
         process_definitions=process_definitions,

@@ -198,10 +198,10 @@ def test_entry_points_follow_callers_to_the_trigger(tmp_path: Path) -> None:
 
     assert facts.callers == ("orders.api:createOrder",)
     entry = facts.entry_points[0]
-    assert (entry.kind, entry.name) == ("webMethods/trigger", "`orders.triggers:onOrderRequested`")
+    assert (entry.kind, entry.name) == ("trigger", "`orders.triggers:onOrderRequested`")
     assert entry.path == ("orders.api:createOrder", "orders.api:notifyCrm")
     table = render_entry_points_table(facts)
-    assert "| `orders.triggers:onOrderRequested` | webMethods/trigger |" in table
+    assert "| `orders.triggers:onOrderRequested` | trigger |" in table
 
 
 def test_effects_table_and_facts_text(tmp_path: Path) -> None:
@@ -213,7 +213,7 @@ def test_effects_table_and_facts_text(tmp_path: Path) -> None:
     assert "| HTTP request | calls an external HTTP endpoint |" in table
     assert "| `orders.api:notifyCrm` | literal |" in table
     assert text.startswith("used by:\n")
-    assert "entry point: webMethods/trigger `orders.triggers:onOrderRequested`" in text
+    assert "entry point: trigger `orders.triggers:onOrderRequested`" in text
     assert "via orders.api:notifyCrm" in text
 
 
