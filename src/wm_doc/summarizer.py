@@ -56,6 +56,7 @@ def fit_facts(
     external_note: Callable[[str], str | None] | None = None,
     overhead_chars: int = DEFAULT_OVERHEAD_CHARS,
     num_predict: int = DEFAULT_NUM_PREDICT,
+    callee_outputs: Callable[[str], str | None] | None = None,
 ) -> tuple[str, bool]:
     """Render the richest pseudo-code that fits the context window.
 
@@ -73,6 +74,7 @@ def fit_facts(
             detail=detail,
             facts_text=facts_text,
             external_note=external_note,
+            callee_outputs=callee_outputs,
         )
         if len(facts) <= budget_chars:
             return facts, detail is not FULL_DETAIL
@@ -83,6 +85,7 @@ def fit_facts(
         detail=MINIMAL_DETAIL,
         facts_text=facts_text,
         external_note=external_note,
+        callee_outputs=callee_outputs,
     )
     lines = facts.splitlines()
     kept: list[str] = []

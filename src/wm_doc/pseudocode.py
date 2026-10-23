@@ -45,6 +45,9 @@ MAX_JAVA_ITEMS = 12
 
 # A callee annotation lookup: full service name -> one-line text, or None when unknown.
 CalleeNotes = Callable[[str], str | None]
+# A callee output lookup: full service name -> its declared output fields, or None.
+CalleeOutputs = Callable[[str], str | None]
+MAX_RETURNED_FIELDS = 8
 
 
 @dataclass(frozen=True)
@@ -71,12 +74,14 @@ def render_pseudocode(
     detail: PseudocodeDetail = FULL_DETAIL,
     facts_text: str | None = None,
     external_note: CalleeNotes | None = None,
+    callee_outputs: CalleeOutputs | None = None,
 ) -> str:
     """Render one service as indented pseudo-code lines.
 
     `facts_text` is the deterministic usage and data-effects block (see
     :mod:`wm_doc.effects`); `external_note` names the declared external system of a call
-    target outside the analysed packages.
+    target outside the analysed packages; `callee_outputs` gives the declared outputs of a
+    called service, shown as a `returns:` line because they land in the pipeline.
     """
     comments = comments if detail.include_comments and comments else {}
     lines = [f"service {service.identity.full_name}  [{service.service_type.value}]"]
@@ -95,7 +100,9 @@ def render_pseudocode(
                 f"disabled steps left out: {service.disabled_steps} (they never run)"
             )
         lines.append("steps:")
-        renderer = _FlowRenderer(service, callee_note, comments, detail, external_note)
+        renderer = _FlowRenderer(
+            service, callee_note, comments, detail, external_note, callee_outputs
+        )
         for child in service.flow_tree.children:
             renderer.visit(child, 1, None)
         lines.extend(renderer.lines or ["  (no steps)"])
@@ -191,10 +198,12 @@ class _FlowRenderer:
         comments: Mapping[str, str],
         detail: PseudocodeDetail,
         external_note: CalleeNotes | None = None,
+        callee_outputs: CalleeOutputs | None = None,
     ) -> None:
         self.service = service
         self.callee_note = callee_note
         self.external_note = external_note
+        self.callee_outputs = callee_outputs
         self.comments = comments
         self.detail = detail
         self.lines: list[str] = []
@@ -300,11 +309,22 @@ class _FlowRenderer:
             target, self.resolved.get(target, False), self.callee_note, self.external_note
         )
         self.emit(depth, f"{verb} {target}  # {note}", node)
+        returned = self.callee_outputs(target) if self.callee_outputs is not None else None
         for child in node.children:
             if child.type is FlowNodeType.MAP:
+                if returned and self._is_output_map(child):
+                    self.emit(depth + 1, f"returns: {returned}")
+                    returned = None
                 self._map(child, depth + 1, header=False)
             else:
                 self.visit(child, depth + 1, None)
+        if returned:
+            self.emit(depth + 1, f"returns: {returned}")
+
+    def _is_output_map(self, node: FlowNode) -> bool:
+        flow_map = self.maps.get(node.structural_path)
+        mode = (flow_map.mode if flow_map else node.attributes.get("MODE")) or ""
+        return mode.upper() in {"OUTPUT", "INVOKEOUTPUT"}
 
     def _map(self, node: FlowNode, depth: int, *, header: bool) -> None:
         flow_map = self.maps.get(node.structural_path)
@@ -341,6 +361,21 @@ class _FlowRenderer:
             self.emit(inner, f"{prefix}: {line}" if prefix else line)
         for child in transformers:
             self._call(child, inner)
+
+
+def callee_outputs_lookup(services: Mapping[str, FlowService]) -> CalleeOutputs:
+    """Declared outputs of analysed services, for `returns:` lines after their calls."""
+
+    def outputs(target: str) -> str | None:
+        callee = services.get(target)
+        if callee is None or not callee.signature.outputs:
+            return None
+        fields = callee.signature.outputs
+        shown = ", ".join(_field_text(field) for field in fields[:MAX_RETURNED_FIELDS])
+        extra = len(fields) - MAX_RETURNED_FIELDS
+        return shown + (f", and {extra} more" if extra > 0 else "")
+
+    return outputs
 
 
 def _signature_lines(label: str, fields: list[SignatureField]) -> list[str]:

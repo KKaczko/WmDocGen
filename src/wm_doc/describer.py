@@ -43,7 +43,12 @@ from wm_doc.ollama_provider import (
     OllamaProviderError,
     ProviderGenerationRequest,
 )
-from wm_doc.pseudocode import FULL_DETAIL, load_flow_comments, render_pseudocode
+from wm_doc.pseudocode import (
+    FULL_DETAIL,
+    callee_outputs_lookup,
+    load_flow_comments,
+    render_pseudocode,
+)
 from wm_doc.render.service_markdown import render_effects_table, render_entry_points_table
 from wm_doc.render.service_summary import adapter_sentence
 from wm_doc.service_docs import (
@@ -61,10 +66,13 @@ from wm_doc.service_docs import (
 )
 from wm_doc.summarizer import DEFAULT_NUM_CTX, fit_facts, unknown_names
 
-DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v2"
-DESCRIBE_NUM_PREDICT = 1536
+DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v3"
+# Room for the detailed flow: up to MAX_DETAILED_STEPS items of a few sentences each.
+DESCRIBE_NUM_PREDICT = 4096
 MAX_STEPS = 8
 MAX_STEP_CHARS = 200
+MAX_DETAILED_STEPS = 30
+MAX_DETAILED_STEP_CHARS = 600
 FIELD_LIMITS = {
     "purpose": 400,
     "usage": 400,
@@ -79,6 +87,7 @@ DESCRIBE_SCHEMA: dict[str, Any] = {
         "usage": {"type": "string"},
         "data_effects": {"type": "string"},
         "steps": {"type": "array", "items": {"type": "string"}},
+        "detailed_steps": {"type": "array", "items": {"type": "string"}},
         "error_handling": {"type": "string"},
         "designer_comment": {"type": "string"},
     },
@@ -87,6 +96,7 @@ DESCRIBE_SCHEMA: dict[str, Any] = {
         "usage",
         "data_effects",
         "steps",
+        "detailed_steps",
         "error_handling",
         "designer_comment",
     ],
@@ -98,7 +108,9 @@ SYSTEM_PROMPT = (
     "facts about ONE service: a `used by` section, a `data and systems touched` section, "
     "and pseudo-code of its steps. `CALL x` and `TRANSFORM via x` invoke another service; "
     "the text after `#` describes that service. `in:` and `out:` lines map data into or "
-    "out of a call. Text after `//` is a developer comment. "
+    "out of a call; `returns:` lists the outputs the called service declares, which land in "
+    "the pipeline under those names for later steps. Text after `//` is a developer "
+    "comment. "
     "Use only these facts. Do not invent systems, users, schedules, tables or business "
     "rules. Copy service, document, field and system names exactly as written; never "
     "translate or shorten them. Describe error handling only as the facts show it. If the "
@@ -114,7 +126,16 @@ USER_PROMPT_TEMPLATE = (
     "- data_effects: one to three sentences on which data objects it receives, returns, "
     "reads, creates, changes, publishes or sends, and where, from `data and systems "
     "touched`.\n"
-    "- steps: three to six short items, the main steps in order.\n"
+    "- steps: three to six short items summarizing the main steps in order.\n"
+    "- detailed_steps: the whole flow in execution order, one item per call or decision "
+    "that matters (as many as needed, at most 30). For each call: which service it calls "
+    "and which system, application, database table, queue or endpoint is behind it when "
+    "the facts name one (the `#` note, `data and systems touched`); which inputs it gets "
+    "and where they come from (a service input, a literal, or what an earlier call "
+    "returned); what it returns (`returns:` and `out:` lines) and which later step uses "
+    "it. Describe BRANCH and LOOP in words, for example 'For each entry in /links: ...' "
+    "or 'If /returnFullContracts is true: ...', and say what the CATCH block does. Use "
+    "field, service and system names exactly as they appear in the facts.\n"
     "- error_handling: one sentence. If the facts show no error handling, say that it is "
     "not shown in the facts.\n"
     "- designer_comment: plain text of at most 600 characters, without Markdown, for the "
@@ -135,6 +156,7 @@ OPAQUE_PROMPT_TEMPLATE = (
     "- data_effects: one or two sentences on the data it reads or changes and where, from "
     "`data and systems touched`.\n"
     "- steps: an empty list.\n"
+    "- detailed_steps: an empty list.\n"
     "- error_handling: an empty string.\n"
     "- designer_comment: plain text of at most 600 characters, without Markdown, for the "
     "service's Comments field in Designer: purpose, main inputs and outputs, and effects."
@@ -299,6 +321,7 @@ def deterministic_facts(
     facts: ServiceFacts,
     comments: dict[str, str],
     external_note: Callable[[str], str | None],
+    callee_outputs: Callable[[str], str | None] | None = None,
 ) -> str:
     """Everything known about a service without callee descriptions: the basis of its hash.
 
@@ -312,6 +335,7 @@ def deterministic_facts(
         detail=FULL_DETAIL,
         facts_text=facts.text(),
         external_note=external_note,
+        callee_outputs=callee_outputs,
     )
 
 
@@ -332,6 +356,7 @@ def current_facts_hashes(
         system = external_systems.match(target)
         return system_label(system) if system is not None else None
 
+    outputs = callee_outputs_lookup({s.identity.full_name: s for s in analysis.services})
     hashes: dict[str, str] = {}
     for package in analysis.packages:
         for service in package.services:
@@ -340,7 +365,7 @@ def current_facts_hashes(
                 continue
             comments = load_flow_comments(scan_root, service, config)
             hashes[name] = facts_hash(
-                deterministic_facts(service, facts[name], comments, external_note)
+                deterministic_facts(service, facts[name], comments, external_note, outputs)
             )
     return hashes
 
@@ -711,6 +736,7 @@ class _Run:
     ) -> None:
         self.services = services
         self.facts = facts
+        self.callee_outputs = callee_outputs_lookup(services)
         self.session = session
         self.options = options
         self.position = {name: index for index, name in enumerate(order)}
@@ -762,7 +788,8 @@ class _Run:
                     return generated
             if existing is not None:
                 return existing.purpose_line()
-            return None
+            # An undescribed adapter service still has a known operation and table.
+            return adapter_sentence(self.services[target])
 
         return note
 
@@ -776,7 +803,9 @@ class _Run:
         service = self.services[name]
         facts = self.facts[name]
         comments = load_flow_comments(self.options.scan_root, service, self.options.config)
-        deterministic = deterministic_facts(service, facts, comments, self.external_note)
+        deterministic = deterministic_facts(
+            service, facts, comments, self.external_note, self.callee_outputs
+        )
         current_hash = facts_hash(deterministic)
         facts_markdown = render_facts_block(service, facts)
         path = self.path(name)
@@ -810,6 +839,7 @@ class _Run:
             external_note=self.external_note,
             overhead_chars=len(SYSTEM_PROMPT) + len(template),
             num_predict=DESCRIBE_NUM_PREDICT,
+            callee_outputs=self.callee_outputs,
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -822,6 +852,7 @@ class _Run:
             narrative = replace(
                 narrative,
                 steps=opaque_steps(service),
+                detailed_steps=(),
                 error_handling=OPAQUE_ERROR_HANDLING,
             )
         if narrative is None:
@@ -890,6 +921,15 @@ def narrative_from_payload(payload: Any) -> Narrative | None:
     )
     # Small models sometimes emit punctuation-only items such as ",".
     steps = tuple(step for step in steps if sum(char.isalpha() for char in step) >= 3)
+    detailed_value = payload.get("detailed_steps")
+    detailed = tuple(
+        clean_text(step, MAX_DETAILED_STEP_CHARS)
+        for step in (detailed_value if isinstance(detailed_value, list) else [])[
+            :MAX_DETAILED_STEPS
+        ]
+        if isinstance(step, str)
+    )
+    detailed = tuple(step for step in detailed if sum(char.isalpha() for char in step) >= 3)
     if not texts["purpose"]:
         return None
     return Narrative(
@@ -899,6 +939,7 @@ def narrative_from_payload(payload: Any) -> Narrative | None:
         steps=steps,
         error_handling=texts["error_handling"],
         designer_comment=clean_text(comment.replace("`", ""), MAX_DESIGNER_COMMENT_CHARS),
+        detailed_steps=detailed,
     )
 
 
@@ -909,6 +950,7 @@ def narrative_text(narrative: Narrative) -> str:
             narrative.usage,
             narrative.data_effects,
             *narrative.steps,
+            *narrative.detailed_steps,
             narrative.error_handling,
             narrative.designer_comment,
         ]
@@ -921,6 +963,7 @@ def narrative_payload(narrative: Narrative) -> dict[str, Any]:
         "usage": narrative.usage,
         "data_effects": narrative.data_effects,
         "steps": list(narrative.steps),
+        "detailed_steps": list(narrative.detailed_steps),
         "error_handling": narrative.error_handling,
         "designer_comment": narrative.designer_comment,
     }

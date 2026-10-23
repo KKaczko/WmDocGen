@@ -85,6 +85,12 @@ Point the commands at the server's `packages` directory, or a copy of it.
    wm-doc describe D:\...\packages --package OrdersCore --with-callees --model qwen3.8:27b --docs-dir service-docs --external-systems external-systems.yml
    ```
 
+   Besides a short list of main steps, each description has a detailed flow: every call in
+   order, the system or table behind it, which inputs it gets and where they come from, and
+   what it returns to later steps (from the outputs the called service declares). Naming the
+   systems behind other namespaces in `external-systems.yml` makes this flow say which
+   application each call goes to.
+
    Selection: `--service` (repeatable), `--namespace`, `--package` or `--all`. Services are
    described callees first; each caller's prompt includes the Purpose line of every service it
    calls. Each file is written as soon as it is validated, so an interrupted run continues where
@@ -147,7 +153,9 @@ facts_hash: 3f9c...      # facts the text was written from or approved against
 text_hash: a81b...       # the text as generated; a different hash means you edited it
 ---
 # createOrder
-## Purpose / ## Usage / ## What it does to data / ## Main steps / ## Error handling
+## Purpose / ## Usage / ## What it does to data / ## Main steps
+## Detailed flow        (every call in order: system, inputs and where they come from, outputs)
+## Error handling
 ## Designer comment      (plain text, at most 600 characters)
 ## Notes                 (yours; the tool never writes here)
 <!-- wm-doc:facts:start hash=... -->
