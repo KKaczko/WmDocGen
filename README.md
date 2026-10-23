@@ -168,6 +168,11 @@ sections Purpose, Main capabilities, Entry points, Systems and data) and `servic
 (`service: server`, with Business areas instead of Main capabilities). Their facts block holds
 the package or server facts the draft was written from.
 
+- An answer that names something the facts do not contain is rejected after one retry. With
+  `describe --keep-unverified` it is written anyway as a draft marked with those names
+  (`unverified_names` in the front matter and a notice at the top); it is asked again on the
+  next run until it passes, and approving it removes the mark. Answers that fail the
+  disclosure scan are never kept.
 - A draft you edited, or an approved file, is never regenerated. To get a fresh draft, set
   `status: draft` and restore or delete the text, or delete the file.
 - `--redo-drafts` regenerates unedited drafts even when their facts did not change.

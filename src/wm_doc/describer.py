@@ -53,6 +53,7 @@ from wm_doc.render.service_markdown import render_effects_table, render_entry_po
 from wm_doc.render.service_summary import adapter_sentence
 from wm_doc.service_docs import (
     MAX_DESIGNER_COMMENT_CHARS,
+    UNVERIFIED_KEY,
     DocState,
     DocStatus,
     Narrative,
@@ -181,6 +182,7 @@ class DescribeOutcome(StrEnum):
     PROTECTED = "kept (approved or edited)"
     REJECTED = "rejected"
     FAILED = "failed"
+    UNVERIFIED = "kept with unverified names"
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,9 @@ class DescribeOptions:
     timeout_seconds: int = HTTP_TIMEOUT_SECONDS
     external_systems: ExternalSystemCatalog = EMPTY_CATALOG
     parallel: int = 1
+    # Write a draft whose only problem, after the retry, is a name the facts do not
+    # contain, marked with those names. The disclosure scan is never relaxed.
+    keep_unverified: bool = False
 
 
 @dataclass(frozen=True)
@@ -503,6 +508,8 @@ def approve_docs(
             continue
         doc.status = DocStatus.APPROVED
         doc.facts_hash = doc.current_facts_hash or doc.facts_hash
+        # A person approved it, so the unverified mark of a kept draft is cleared.
+        doc.extra_front_matter.pop(UNVERIFIED_KEY, None)
         write_doc(path, doc)
         approved.append(doc.service)
     return sorted(approved, key=str.casefold), sorted(wanted - found, key=str.casefold)
@@ -568,9 +575,18 @@ class AnswerSpec[T]:
     text_of: Callable[[T], str]
 
     def ask(
-        self, session: ModelSession, messages: list[dict[str, str]], prompt_facts: str
+        self,
+        session: ModelSession,
+        messages: list[dict[str, str]],
+        prompt_facts: str,
+        *,
+        keep_unverified: bool = False,
     ) -> tuple[T | None, bool, tuple[DescribeOutcome, str]]:
-        """Return (answer or None, whether it came from the cache, outcome and note)."""
+        """Return (answer or None, whether it came from the cache, outcome and note).
+
+        With `keep_unverified`, an answer that passes the disclosure scan but still names
+        things outside the facts after the retry is returned as UNVERIFIED (never cached).
+        """
         key = session.cache_key(messages, self.prompt_version, self.schema, self.num_predict)
         if session.cache_dir is not None and not session.refresh:
             payload = _read_cached_payload(session.cache_dir, key, self.prompt_version)
@@ -606,6 +622,8 @@ class AnswerSpec[T]:
                 note = f"the model's answer named things that are not in the facts: {names}"
                 correction = RETRY_PROMPT_TEMPLATE.format(names=names)
             if attempt == 1:
+                if keep_unverified and label is None:
+                    return value, False, (DescribeOutcome.UNVERIFIED, note)
                 return None, False, (DescribeOutcome.REJECTED, note)
             with session.lock:
                 session.stats.retried += 1
@@ -811,9 +829,14 @@ class _Run:
         path = self.path(name)
         existing = self.doc(name)
 
+        # An unverified draft is asked again on every run until it passes or is edited.
         if existing is not None and (
             existing.protected
-            or (existing.facts_hash == current_hash and not self.options.redo_drafts)
+            or (
+                existing.facts_hash == current_hash
+                and not self.options.redo_drafts
+                and not existing.unverified_names
+            )
         ):
             existing.facts_markdown = facts_markdown
             existing.current_facts_hash = current_hash
@@ -846,8 +869,11 @@ class _Run:
             {"role": "user", "content": template.format(facts=prompt_facts)},
         ]
         narrative, from_cache, failure = DESCRIBE_SPEC.ask(
-            self.session, messages, prompt_facts
+            self.session, messages, prompt_facts, keep_unverified=self.options.keep_unverified
         )
+        unverified: list[str] = []
+        if narrative is not None and failure[0] is DescribeOutcome.UNVERIFIED:
+            unverified = unknown_names(narrative_text(narrative), prompt_facts)
         if narrative is not None and opaque:
             narrative = replace(
                 narrative,
@@ -871,10 +897,17 @@ class _Run:
             facts=deterministic,
             facts_markdown=facts_markdown,
         )
+        extra = dict(existing.extra_front_matter) if existing is not None else {}
+        extra.pop(UNVERIFIED_KEY, None)
+        if unverified:
+            extra[UNVERIFIED_KEY] = unverified
         if existing is not None:
             doc.notes = existing.notes
-            doc.extra_front_matter = existing.extra_front_matter
+        doc.extra_front_matter = extra
         write_doc(path, doc)
+        if unverified:
+            # Callers' prompts do not use an unverified purpose line as context.
+            return DescribeResult(name, DescribeOutcome.UNVERIFIED, path, failure[1], shortened)
         line = doc.purpose_line()
         if line:
             with self.lock:
