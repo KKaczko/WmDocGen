@@ -53,6 +53,8 @@ HASH_LENGTH = 16
 # Front-matter key of a draft kept with `describe --keep-unverified`: the names the model
 # used that the facts do not contain. Approving the file removes it.
 UNVERIFIED_KEY = "unverified_names"
+# Front-matter key recording the `describe --detail` level a draft was written with.
+DETAIL_KEY = "detail"
 
 
 class DocStatus(StrEnum):

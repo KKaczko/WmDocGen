@@ -156,3 +156,15 @@ def test_unknown_names_flags_only_names_missing_from_facts(
     facts = render_pseudocode(services[READ_CONFIG], lambda _: None)
 
     assert unknown_names(text, facts) == expected
+
+
+def test_dotted_form_of_a_pipeline_path_from_the_facts_is_known() -> None:
+    facts = "in: copy /wxMessage/payload -> /externalResourceX/fieldInCapital"
+
+    assert unknown_names("It fills externalResourceX.fieldInCapital.", facts) == []
+    assert unknown_names("It fills externalResourceX.fieldOther.", facts) == [
+        "externalResourceX.fieldOther"
+    ]
+    assert unknown_names("It calls externalResourceX.fieldInCapital:run.", facts) == [
+        "externalResourceX.fieldInCapital:run"
+    ]

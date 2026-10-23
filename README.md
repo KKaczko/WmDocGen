@@ -91,6 +91,27 @@ Point the commands at the server's `packages` directory, or a copy of it.
    systems behind other namespaces in `external-systems.yml` makes this flow say which
    application each call goes to.
 
+   How much is written, and how long it takes:
+
+   | `--detail` | What you get | Time per service |
+   | --- | --- | --- |
+   | `brief` | purpose, usage, data, main steps, error handling | shortest (about half) |
+   | `standard` (default) | the above plus the detailed flow | baseline |
+   | `deep` | the detailed flow, written after the model reasons about the facts | several times longer; thinking-capable models only; use `--num-ctx 32768` |
+
+   The model's reasoning is never stored; only its final answer is checked and kept. Each
+   draft records its level in the front matter (`detail:`). Switching levels does not rewrite
+   unchanged drafts; add `--redo-drafts`.
+
+   `--instructions my-style.md` adds your own instructions to the prompt (at most 4,000
+   characters), for example the audience, terms to use or what to emphasise. They never
+   override the rules: the model still uses only the facts and copies names exactly.
+   `overview` takes `--instructions` too.
+
+   Each finished service shows how long the model took, and the summary gives the model time,
+   the average per request, answer tokens per second and the pace in services per hour, so a
+   pilot of a few services tells you how long a package or the server will take.
+
    Selection: `--service` (repeatable), `--namespace`, `--package` or `--all`. Services are
    described callees first; each caller's prompt includes the Purpose line of every service it
    calls. Each file is written as soon as it is validated, so an interrupted run continues where

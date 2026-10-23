@@ -78,6 +78,11 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
   scan but still names things outside the facts after the retry is written as a draft marked
   `unverified_names` (front matter and a notice); it is never cached, is asked again on the
   next run, is not used as callee context, and approving it clears the mark.
+  Owner decision (M12): `describe --detail brief|standard|deep` sets how much is written
+  (deep lets the model think first; only the final answer is read, the reasoning is never
+  kept), and `--instructions FILE` (describe and overview, at most 4,000 characters) appends
+  the owner's own instructions to the fixed system prompt; they never override its rules.
+  Timings are printed to the console only, never written to files.
   For adapter and other opaque services the tool, not the model, writes Main steps and Error
   handling.
 - Facts are never inferred from names. Every data-effect row states how it is known. Artifact
@@ -103,7 +108,8 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
 Semantic parsers for REST/SOAP descriptor details beyond service references, other adapter
 types' configuration, native BPM process models, runtime simulation, Java execution,
 compilation or class loading, broad Java external-effect classification, non-Ollama or cloud model
-providers, RAG or arbitrary external documents, prompt editing UI, fine-tuning, snapshot diffing,
+providers, RAG or arbitrary external documents, a prompt editing UI (beyond the approved
+`--instructions` file), fine-tuning, snapshot diffing,
 Mermaid, JavaScript graph viewers, static-site frameworks, ZIP publishing.
 
 ## Important constraints

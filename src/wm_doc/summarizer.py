@@ -104,6 +104,7 @@ def fit_facts(
 def unknown_names(text: str, facts: str) -> list[str]:
     """Return identifier-shaped names in *text* that the facts do not contain."""
     full_names = {match.casefold() for match in _NAME_RE.findall(facts)}
+    folded_facts = facts.casefold()
     parts: set[str] = set()
     for name in full_names:
         parts.update(piece for piece in _SPLIT_RE.split(name) if piece)
@@ -118,11 +119,21 @@ def unknown_names(text: str, facts: str) -> list[str]:
         pieces = [piece for piece in _SPLIT_RE.split(folded) if piece]
         if "/" in candidate and all(piece in parts for piece in pieces):
             continue  # a pipeline path whose segments all occur in the facts
+        if _is_dotted_pipeline_path(folded, folded_facts):
+            continue  # `doc.field` written for the path /doc/field in the facts
         if len(pieces) == 1 and folded in parts:
             continue
         if candidate not in unknown:
             unknown.append(candidate)
     return unknown
+
+
+def _is_dotted_pipeline_path(candidate: str, folded_facts: str) -> bool:
+    """`order.lines.amount` when the facts contain the pipeline path `/order/lines/amount`."""
+    if "." not in candidate or ":" in candidate or "/" in candidate:
+        return False
+    path = "/" + candidate.replace(".", "/")
+    return re.search(re.escape(path) + r"(?![\w$])", folded_facts) is not None
 
 
 def _is_part_of_a_fact_name(candidate: str, full_names: set[str]) -> bool:

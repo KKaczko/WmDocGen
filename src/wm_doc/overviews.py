@@ -17,6 +17,7 @@ Two layers, like service descriptions:
 
 from __future__ import annotations
 
+import time
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +36,7 @@ from wm_doc.describer import (
     ProgressCallback,
     clean_text,
     open_session,
+    system_prompt,
 )
 from wm_doc.effects import ServiceFacts, compute_service_facts, entry_markers
 from wm_doc.ir import AnalysisResult, ServiceType
@@ -509,7 +511,9 @@ def describe_overviews(
     purposes = service_purposes(
         analysis, load_service_docs(options.docs_dir, analysis.services)
     )
-    budget = _budget_chars(options.num_ctx, len(OVERVIEW_SYSTEM_PROMPT) + 800)
+    budget = _budget_chars(
+        options.num_ctx, len(system_prompt(OVERVIEW_SYSTEM_PROMPT, options.instructions)) + 800
+    )
     total = len(wanted) + (1 if server else 0)
     results: list[DescribeResult] = []
 
@@ -572,14 +576,16 @@ def _describe_one(job: _Job, session: ModelSession, options: DescribeOptions) ->
         outcome = DescribeOutcome.PROTECTED if existing.protected else DescribeOutcome.UNCHANGED
         return DescribeResult(job.key, outcome, job.path)
     messages = [
-        {"role": "system", "content": OVERVIEW_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt(OVERVIEW_SYSTEM_PROMPT, options.instructions)},
         {"role": "user", "content": job.template.format(facts=job.prompt_facts)},
     ]
+    started = time.perf_counter()
     narrative, from_cache, (outcome, note) = job.spec.ask(session, messages, job.prompt_facts)
+    seconds = None if from_cache else time.perf_counter() - started
     if narrative is None:
         if existing is not None:
             _refresh_facts(job.path, existing, block, current)
-        return DescribeResult(job.key, outcome, None, note, shortened)
+        return DescribeResult(job.key, outcome, None, note, shortened, seconds)
     doc = new_doc(
         job.key, job.package, narrative, model=options.model, facts=job.facts, facts_markdown=block
     )
@@ -588,7 +594,7 @@ def _describe_one(job: _Job, session: ModelSession, options: DescribeOptions) ->
         doc.extra_front_matter = existing.extra_front_matter
     write_doc(job.path, doc)
     outcome = DescribeOutcome.CACHED if from_cache else DescribeOutcome.GENERATED
-    return DescribeResult(job.key, outcome, job.path, None, shortened)
+    return DescribeResult(job.key, outcome, job.path, None, shortened, seconds)
 
 
 def _refresh_facts(path: Path, doc: ServiceDoc, block: str, current: str) -> None:

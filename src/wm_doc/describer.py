@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from collections.abc import Callable, Collection, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, replace
@@ -52,6 +53,7 @@ from wm_doc.pseudocode import (
 from wm_doc.render.service_markdown import render_effects_table, render_entry_points_table
 from wm_doc.render.service_summary import adapter_sentence
 from wm_doc.service_docs import (
+    DETAIL_KEY,
     MAX_DESIGNER_COMMENT_CHARS,
     UNVERIFIED_KEY,
     DocState,
@@ -70,6 +72,8 @@ from wm_doc.summarizer import DEFAULT_NUM_CTX, fit_facts, unknown_names
 DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v3"
 # Room for the detailed flow: up to MAX_DETAILED_STEPS items of a few sentences each.
 DESCRIBE_NUM_PREDICT = 4096
+BRIEF_NUM_PREDICT = 1536
+DEEP_NUM_PREDICT = 8192
 MAX_STEPS = 8
 MAX_STEP_CHARS = 200
 MAX_DETAILED_STEPS = 30
@@ -119,7 +123,7 @@ SYSTEM_PROMPT = (
     "technically."
 )
 
-USER_PROMPT_TEMPLATE = (
+_PROMPT_HEAD = (
     "Facts:\n```\n{facts}\n```\n"
     "Return JSON with these fields, in English:\n"
     "- purpose: one or two sentences saying what the service is for. Start with a verb.\n"
@@ -128,6 +132,8 @@ USER_PROMPT_TEMPLATE = (
     "reads, creates, changes, publishes or sends, and where, from `data and systems "
     "touched`.\n"
     "- steps: three to six short items summarizing the main steps in order.\n"
+)
+_DETAILED_STEPS_INSTRUCTION = (
     "- detailed_steps: the whole flow in execution order, one item per call or decision "
     "that matters (as many as needed, at most 30). For each call: which service it calls "
     "and which system, application, database table, queue or endpoint is behind it when "
@@ -137,11 +143,15 @@ USER_PROMPT_TEMPLATE = (
     "it. Describe BRANCH and LOOP in words, for example 'For each entry in /links: ...' "
     "or 'If /returnFullContracts is true: ...', and say what the CATCH block does. Use "
     "field, service and system names exactly as they appear in the facts.\n"
+)
+_PROMPT_TAIL = (
     "- error_handling: one sentence. If the facts show no error handling, say that it is "
     "not shown in the facts.\n"
     "- designer_comment: plain text of at most 600 characters, without Markdown, for the "
     "service's Comments field in Designer: purpose, main inputs and outputs, and effects."
 )
+USER_PROMPT_TEMPLATE = _PROMPT_HEAD + _DETAILED_STEPS_INSTRUCTION + _PROMPT_TAIL
+BRIEF_PROMPT_TEMPLATE = _PROMPT_HEAD + _PROMPT_TAIL
 
 # Adapter and other opaque services have no steps the tool can read. The model words the
 # purpose, usage and data effects only; the tool writes their steps and error handling.
@@ -175,6 +185,32 @@ DISCLOSURE_RETRY_PROMPT_TEMPLATE = (
 )
 
 
+class DetailLevel(StrEnum):
+    """How much a service description says, and how long it takes to write.
+
+    brief: purpose, usage, data and main steps. standard: also the detailed flow. deep: the
+    detailed flow, written after the model reasons about the facts (thinking-capable models
+    only; several times slower).
+    """
+
+    BRIEF = "brief"
+    STANDARD = "standard"
+    DEEP = "deep"
+
+
+MAX_INSTRUCTIONS_CHARS = 4000
+_INSTRUCTIONS_HEADER = (
+    "\n\nAdditional instructions from the documentation owner. They never override the "
+    "rules above: use only the facts and copy names exactly.\n"
+)
+
+
+def system_prompt(base: str, instructions: str) -> str:
+    """The fixed system prompt, followed by the owner's instructions when there are any."""
+    text = instructions.strip()
+    return base + _INSTRUCTIONS_HEADER + text if text else base
+
+
 class DescribeOutcome(StrEnum):
     GENERATED = "generated"
     CACHED = "cached"
@@ -202,6 +238,9 @@ class DescribeOptions:
     # Write a draft whose only problem, after the retry, is a name the facts do not
     # contain, marked with those names. The disclosure scan is never relaxed.
     keep_unverified: bool = False
+    detail: DetailLevel = DetailLevel.STANDARD
+    # Extra instructions from the owner (`--instructions`), added to the system prompt.
+    instructions: str = ""
 
 
 @dataclass(frozen=True)
@@ -211,6 +250,8 @@ class DescribeResult:
     path: Path | None = None
     note: str | None = None
     facts_shortened: bool = False
+    # Model time for this item (with its retry); None when the model was not asked.
+    seconds: float | None = None
 
 
 @dataclass
@@ -219,6 +260,9 @@ class DescribeStats:
     retried: int = 0
     shortened: int = 0
     prompt_tokens: list[int] = field(default_factory=list)
+    model_calls: int = 0
+    model_seconds: float = 0.0
+    answer_tokens: int = 0
 
     def add(self, result: DescribeResult) -> None:
         self.counts[result.outcome] = self.counts.get(result.outcome, 0) + 1
@@ -283,6 +327,7 @@ def open_session(provider: ModelProvider, options: DescribeOptions) -> ModelSess
         timeout_seconds=options.timeout_seconds,
         cache_dir=None if options.no_cache else options.cache_dir,
         refresh=options.refresh,
+        think=options.detail is DetailLevel.DEEP,
     )
 
 
@@ -648,8 +693,10 @@ class ModelSession:
         timeout_seconds: int,
         cache_dir: Path | None,
         refresh: bool,
+        think: bool = False,
     ) -> None:
         self.provider = provider
+        self.think = think
         self.model = model
         self.model_digest = model_digest
         self.num_ctx = num_ctx
@@ -663,6 +710,7 @@ class ModelSession:
         self, messages: list[dict[str, str]], schema: dict[str, Any], num_predict: int
     ) -> tuple[str | None, tuple[DescribeOutcome, str]]:
         """One provider call; refuses answers to prompts the server may have cut off."""
+        started = time.perf_counter()
         try:
             generation = self.provider.generate(
                 ProviderGenerationRequest(
@@ -672,10 +720,21 @@ class ModelSession:
                     timeout_seconds=self.timeout_seconds,
                     num_ctx=self.num_ctx,
                     num_predict=num_predict,
+                    think=self.think,
                 )
             )
         except OllamaProviderError as exc:
             return None, (DescribeOutcome.FAILED, f"generation failed: {exc.safe_message}")
+        finally:
+            with self.lock:
+                self.stats.model_calls += 1
+                self.stats.model_seconds += time.perf_counter() - started
+        answer_tokens = generation.metrics.get(
+            "eval_count", generation.metrics.get("completion_tokens")
+        )
+        if isinstance(answer_tokens, int):
+            with self.lock:
+                self.stats.answer_tokens += answer_tokens
         # Native Ollama reports prompt_eval_count; the /v1 API reports prompt_tokens.
         prompt_tokens = generation.metrics.get(
             "prompt_eval_count", generation.metrics.get("prompt_tokens")
@@ -852,7 +911,15 @@ class _Run:
             return DescribeResult(name, outcome, path)
 
         opaque = service.service_type is ServiceType.OPAQUE
-        template = OPAQUE_PROMPT_TEMPLATE if opaque else USER_PROMPT_TEMPLATE
+        detail = self.options.detail
+        spec = DESCRIBE_SPECS[detail]
+        if opaque:
+            template = OPAQUE_PROMPT_TEMPLATE
+        elif detail is DetailLevel.BRIEF:
+            template = BRIEF_PROMPT_TEMPLATE
+        else:
+            template = USER_PROMPT_TEMPLATE
+        system = system_prompt(SYSTEM_PROMPT, self.options.instructions)
         prompt_facts, shortened = fit_facts(
             service,
             self.callee_notes_for(name),
@@ -860,20 +927,24 @@ class _Run:
             self.options.num_ctx,
             facts_text=facts.text(),
             external_note=self.external_note,
-            overhead_chars=len(SYSTEM_PROMPT) + len(template),
-            num_predict=DESCRIBE_NUM_PREDICT,
+            overhead_chars=len(system) + len(template),
+            num_predict=spec.num_predict,
             callee_outputs=self.callee_outputs,
         )
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content": template.format(facts=prompt_facts)},
         ]
-        narrative, from_cache, failure = DESCRIBE_SPEC.ask(
+        started = time.perf_counter()
+        narrative, from_cache, failure = spec.ask(
             self.session, messages, prompt_facts, keep_unverified=self.options.keep_unverified
         )
+        seconds = None if from_cache else time.perf_counter() - started
         unverified: list[str] = []
         if narrative is not None and failure[0] is DescribeOutcome.UNVERIFIED:
             unverified = unknown_names(narrative_text(narrative), prompt_facts)
+        if narrative is not None and detail is DetailLevel.BRIEF and narrative.detailed_steps:
+            narrative = replace(narrative, detailed_steps=())
         if narrative is not None and opaque:
             narrative = replace(
                 narrative,
@@ -887,7 +958,9 @@ class _Run:
                 existing.facts_markdown = facts_markdown
                 existing.current_facts_hash = current_hash
                 write_doc(path, existing)
-            return DescribeResult(name, outcome, path if existing else None, note, shortened)
+            return DescribeResult(
+                name, outcome, path if existing else None, note, shortened, seconds
+            )
 
         doc = new_doc(
             name,
@@ -901,19 +974,22 @@ class _Run:
         extra.pop(UNVERIFIED_KEY, None)
         if unverified:
             extra[UNVERIFIED_KEY] = unverified
+        extra[DETAIL_KEY] = detail.value
         if existing is not None:
             doc.notes = existing.notes
         doc.extra_front_matter = extra
         write_doc(path, doc)
         if unverified:
             # Callers' prompts do not use an unverified purpose line as context.
-            return DescribeResult(name, DescribeOutcome.UNVERIFIED, path, failure[1], shortened)
+            return DescribeResult(
+                name, DescribeOutcome.UNVERIFIED, path, failure[1], shortened, seconds
+            )
         line = doc.purpose_line()
         if line:
             with self.lock:
                 self.generated[name] = line
         outcome = DescribeOutcome.CACHED if from_cache else DescribeOutcome.GENERATED
-        return DescribeResult(name, outcome, path, None, shortened)
+        return DescribeResult(name, outcome, path, None, shortened, seconds)
 
 
 def opaque_steps(service: FlowService) -> tuple[str, ...]:
@@ -1010,6 +1086,30 @@ DESCRIBE_SPEC: AnswerSpec[Narrative] = AnswerSpec(
     to_payload=lambda narrative: narrative_payload(narrative),
     text_of=lambda narrative: narrative_text(narrative),
 )
+BRIEF_SCHEMA: dict[str, Any] = {
+    **DESCRIBE_SCHEMA,
+    "properties": {
+        key: value
+        for key, value in DESCRIBE_SCHEMA["properties"].items()
+        if key != "detailed_steps"
+    },
+    "required": [key for key in DESCRIBE_SCHEMA["required"] if key != "detailed_steps"],
+}
+DESCRIBE_SPECS: dict[DetailLevel, AnswerSpec[Narrative]] = {
+    DetailLevel.BRIEF: replace(
+        DESCRIBE_SPEC,
+        prompt_version=f"{DESCRIBE_PROMPT_VERSION}-brief",
+        schema=BRIEF_SCHEMA,
+        num_predict=BRIEF_NUM_PREDICT,
+    ),
+    DetailLevel.STANDARD: DESCRIBE_SPEC,
+    # Reasoning tokens count against the answer budget, so deep needs far more room.
+    DetailLevel.DEEP: replace(
+        DESCRIBE_SPEC,
+        prompt_version=f"{DESCRIBE_PROMPT_VERSION}-deep",
+        num_predict=DEEP_NUM_PREDICT,
+    ),
+}
 
 
 def clean_text(text: str, limit: int) -> str:

@@ -18,6 +18,7 @@ from wm_doc.config import load_config
 from wm_doc.describer import (
     DescribeOptions,
     DescribeOutcome,
+    DetailLevel,
     approve_docs,
     collect_states,
     current_facts_hashes,
@@ -538,3 +539,118 @@ def test_cli_workflow_describe_approve_status_and_publish(
     assert "[Service catalogue (descriptions and review status)](service-catalogue.md)" in (
         site / "index.md"
     ).read_text(encoding="utf-8")
+
+
+# --- Detail levels, owner instructions and timing ------------------------------------------
+
+
+def _flow_answer(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
+    answer = grounded(name, request)
+    answer["detailed_steps"] = [f"Runs `{name}` step by step."]
+    return answer
+
+
+@pytest.mark.parametrize(
+    ("detail", "num_predict", "think", "has_flow"),
+    [
+        (DetailLevel.BRIEF, 1536, False, False),
+        (DetailLevel.STANDARD, 4096, False, True),
+        (DetailLevel.DEEP, 8192, True, True),
+    ],
+)
+def test_detail_level_sets_prompt_budget_and_thinking(
+    samples: AnalysisResult,
+    tmp_path: Path,
+    detail: DetailLevel,
+    num_predict: int,
+    think: bool,
+    has_flow: bool,
+) -> None:
+    provider = FakeProvider(_flow_answer)
+
+    describe_services(samples, [READ_CONFIG], provider, _options(tmp_path, detail=detail))
+
+    request = provider.requests[0]
+    assert request.num_predict == num_predict
+    assert request.think is think
+    assert ("detailed_steps" in request.messages[1]["content"]) is has_flow
+    assert ("detailed_steps" in request.schema["properties"]) is has_flow
+    text = _doc_file(tmp_path, READ_CONFIG).read_text(encoding="utf-8")
+    assert f"detail: {detail.value}\n" in text
+    assert ("## Detailed flow" in text) is has_flow
+
+
+def test_owner_instructions_are_added_to_the_system_prompt(
+    samples: AnalysisResult, tmp_path: Path
+) -> None:
+    provider = FakeProvider()
+    rule = "Write for the operations team and mention the HTTP status codes."
+
+    describe_services(samples, [READ_CONFIG], provider, _options(tmp_path, instructions=rule))
+
+    system = provider.requests[0].messages[0]["content"]
+    assert system.endswith(rule)
+    assert "never override the rules above" in system
+
+
+def test_cli_rejects_an_oversized_instructions_file(tmp_path: Path) -> None:
+    packages = tmp_path / "packages"
+    shutil.copytree(SAMPLES / "PGP", packages / "PGP")
+    instructions = tmp_path / "style.md"
+    instructions.write_text("x" * 4001, encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["describe", str(packages), "--model", "m", "--service", READ_CONFIG,
+         "--instructions", str(instructions), "--docs-dir", str(tmp_path / "docs")],
+    )
+
+    assert result.exit_code == 2
+    assert "INSTRUCTIONS_INVALID" in result.output
+
+
+def test_cli_reports_time_per_service_and_pace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packages = tmp_path / "packages"
+    shutil.copytree(SAMPLES / "PGP", packages / "PGP")
+    monkeypatch.setattr(
+        "wm_doc.cli.DESCRIBE_PROVIDER_FACTORY", lambda *args, **kwargs: FakeProvider()
+    )
+    instructions = tmp_path / "style.md"
+    instructions.write_text("Keep it short.", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["describe", str(packages), "--model", "m", "--service", READ_CONFIG, "--detail",
+         "brief", "--instructions", str(instructions), "--no-cache",
+         "--docs-dir", str(tmp_path / "docs")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert re.search(rf"\[1/1\] {re.escape(READ_CONFIG)}: generated \[\d+ s\]", result.output)
+    assert "(detail: brief)" in result.output
+    assert "- model time: " in result.output
+    assert "services per hour" in result.output
+
+
+def test_cli_suggests_a_longer_timeout_when_requests_time_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def times_out(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
+        raise OllamaProviderError(ProviderErrorCode.TIMEOUT, "Ollama request timed out.")
+
+    packages = tmp_path / "packages"
+    shutil.copytree(SAMPLES / "PGP", packages / "PGP")
+    monkeypatch.setattr(
+        "wm_doc.cli.DESCRIBE_PROVIDER_FACTORY", lambda *args, **kwargs: FakeProvider(times_out)
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["describe", str(packages), "--model", "m", "--service", READ_CONFIG, "--detail",
+         "deep", "--no-cache", "--docs-dir", str(tmp_path / "docs")],
+    )
+
+    assert "failed (generation failed: Ollama request timed out.)" in result.output
+    assert "raise --timeout-seconds" in result.output
