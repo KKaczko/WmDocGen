@@ -32,7 +32,7 @@ def test_second_run_reuses_an_identical_analysis(tmp_path: Path) -> None:
     assert (first_reused, second_reused) == (False, True)
     assert render_analysis_json(second) == render_analysis_json(first)
     assert second.unique_dependencies == first.unique_dependencies
-    assert len(list(cache.glob("*.json.gz"))) == 1
+    assert len(list(cache.glob("*.jsonl.gz"))) == 1
 
 
 def test_changed_file_triggers_a_fresh_analysis_and_replaces_the_entry(tmp_path: Path) -> None:
@@ -54,7 +54,7 @@ def test_changed_file_triggers_a_fresh_analysis_and_replaces_the_entry(tmp_path:
         if call.caller == "pgp.services.common:readConfig"
     }
     assert "pub.io:streamToBytes" in targets
-    assert len(list(cache.glob("*.json.gz"))) == 1
+    assert len(list(cache.glob("*.jsonl.gz"))) == 1
 
 
 def test_different_configuration_is_not_reused(tmp_path: Path) -> None:
@@ -75,7 +75,7 @@ def test_damaged_cache_entry_is_rebuilt(tmp_path: Path) -> None:
     root = _copy_samples(tmp_path)
     cache = tmp_path / "cache"
     analyze_cached(root, load_config(None), cache_dir=cache)
-    entry = next(cache.glob("*.json.gz"))
+    entry = next(cache.glob("*.jsonl.gz"))
     entry.write_bytes(b"not gzip")
 
     analysis, reused = analyze_cached(root, load_config(None), cache_dir=cache)
@@ -96,3 +96,34 @@ def test_cli_reports_reuse_and_can_skip_the_cache(tmp_path: Path) -> None:
     assert "Reused the cached analysis" not in first.output
     assert "Reused the cached analysis" in second.output
     assert "Reused the cached analysis" not in fresh.output
+
+
+def test_truncated_cache_entry_is_rebuilt(tmp_path: Path) -> None:
+    import gzip
+
+    root = _copy_samples(tmp_path)
+    cache = tmp_path / "cache"
+    analyze_cached(root, load_config(None), cache_dir=cache)
+    entry = next(cache.glob("*.jsonl.gz"))
+    lines = gzip.decompress(entry.read_bytes()).decode("utf-8").splitlines(keepends=True)
+    entry.write_bytes(gzip.compress("".join(lines[:-1]).encode("utf-8")))
+
+    analysis, reused = analyze_cached(root, load_config(None), cache_dir=cache)
+
+    assert not reused
+    assert len(analysis.packages) == len(lines) - 2
+
+
+def test_entry_of_the_earlier_format_is_replaced(tmp_path: Path) -> None:
+    root = _copy_samples(tmp_path)
+    cache = tmp_path / "cache"
+    analyze_cached(root, load_config(None), cache_dir=cache)
+    entry = next(cache.glob("*.jsonl.gz"))
+    old_entry = entry.with_name(entry.name.split("-")[0] + "-0123.json.gz")
+    old_entry.write_bytes(b"old format")
+    entry.unlink()
+
+    analyze_cached(root, load_config(None), cache_dir=cache)
+
+    assert not old_entry.exists()
+    assert len(list(cache.glob("*.jsonl.gz"))) == 1
