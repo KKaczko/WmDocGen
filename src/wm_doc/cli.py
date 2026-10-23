@@ -7,6 +7,7 @@ from typing import Annotated
 import typer
 
 from wm_doc.analysis_cache import analyze_cached, default_analysis_cache_dir
+from wm_doc.builtins import PlatformServicesError, use_platform_catalog
 from wm_doc.config import AppConfig, load_config
 from wm_doc.describer import (
     STATE_ORDER,
@@ -89,6 +90,7 @@ from wm_doc.render.package_markdown import (
     render_server_overview_section,
     write_package_markdown,
 )
+from wm_doc.render.platform_markdown import write_platform_services
 from wm_doc.render.process_markdown import (
     write_entrypoint_candidates_markdown,
     write_process_markdown,
@@ -172,6 +174,28 @@ def _load_external_systems_or_exit(path: Path | None) -> ExternalSystemCatalog:
         raise typer.Exit(code=2) from exc
 
 
+PlatformServicesOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--platform-services",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="YAML file adding or overriding descriptions of platform (pub.*, wm.*) services.",
+    ),
+]
+
+
+def _use_platform_services_or_exit(path: Path | None) -> None:
+    """Start every command from the shipped platform catalog plus the user's file."""
+    try:
+        use_platform_catalog(path)
+    except PlatformServicesError as exc:
+        typer.echo(f"PLATFORM_SERVICES_INVALID: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+
 NoAnalysisCacheOption = Annotated[
     bool,
     typer.Option(
@@ -230,6 +254,7 @@ MANAGED_ROOT_FILES = (
     "ai-summaries.json",
     "ai-summaries.md",
     "artifacts.md",
+    "platform-services.md",
     "service-catalogue.md",
 )
 MANAGED_ROOT_DIRS = ("services", "documents", "processes", "graphs", "packages")
@@ -322,8 +347,10 @@ def stats(
     exclude_package: ExcludePackageOption = None,
     all_packages: AllPackagesOption = False,
     no_analysis_cache: NoAnalysisCacheOption = False,
+    platform_services_file: PlatformServicesOption = None,
 ) -> None:
     """Print counts and names (no code or values) to plan documentation of a server."""
+    _use_platform_services_or_exit(platform_services_file)
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
@@ -486,6 +513,7 @@ def analyze(
     all_packages: AllPackagesOption = False,
     no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
+    platform_services_file: PlatformServicesOption = None,
     docs_dir: Annotated[
         Path | None,
         typer.Option(
@@ -511,6 +539,7 @@ def analyze(
         load_config(config), include_package, exclude_package, all_packages
     )
     external_catalog = _load_external_systems_or_exit(external_systems_file)
+    _use_platform_services_or_exit(platform_services_file)
     analysis = _analyze(
         packages_path, app_config, processes_file, no_cache=no_analysis_cache
     )
@@ -672,6 +701,7 @@ def describe(
     all_packages: AllPackagesOption = False,
     no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
+    platform_services_file: PlatformServicesOption = None,
     ollama_url: OllamaUrlOption = "http://localhost:11434",
     timeout_seconds: TimeoutOption = HTTP_TIMEOUT_SECONDS,
     allow_remote_provider: AllowRemoteProviderOption = False,
@@ -702,6 +732,7 @@ def describe(
         load_config(config), include_package, exclude_package, all_packages
     )
     external_catalog = _load_external_systems_or_exit(external_systems_file)
+    _use_platform_services_or_exit(platform_services_file)
     analysis = _analyze(
         packages_path, app_config, processes_file, no_cache=no_analysis_cache
     )
@@ -826,6 +857,7 @@ def overview(
     all_packages: AllPackagesOption = False,
     no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
+    platform_services_file: PlatformServicesOption = None,
     ollama_url: OllamaUrlOption = "http://localhost:11434",
     timeout_seconds: TimeoutOption = HTTP_TIMEOUT_SECONDS,
     allow_remote_provider: AllowRemoteProviderOption = False,
@@ -851,6 +883,7 @@ def overview(
         load_config(config), include_package, exclude_package, all_packages
     )
     external_catalog = _load_external_systems_or_exit(external_systems_file)
+    _use_platform_services_or_exit(platform_services_file)
     analysis = _analyze(packages_path, app_config, processes_file, no_cache=no_analysis_cache)
     known = {p.name for p in analysis.packages}
     selected = sorted(known, key=str.casefold) if all_overviews else list(package or [])
@@ -999,12 +1032,14 @@ def status(
     all_packages: AllPackagesOption = False,
     no_analysis_cache: NoAnalysisCacheOption = False,
     external_systems_file: ExternalSystemsOption = None,
+    platform_services_file: PlatformServicesOption = None,
 ) -> None:
     """Report which services have no, draft, edited, approved or outdated descriptions."""
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
     external_catalog = _load_external_systems_or_exit(external_systems_file)
+    _use_platform_services_or_exit(platform_services_file)
     analysis = _analyze(packages_path, app_config, no_cache=no_analysis_cache)
     hashes = current_facts_hashes(analysis, packages_path, app_config, external_catalog)
     states = collect_states(analysis, docs_dir, hashes)
@@ -1152,6 +1187,7 @@ def _write_full_outputs(
     graph_index_path = write_graph_index(output, graph_assets)
     write_analysis_limitations(output)
     write_artifact_inventory(output, analysis)
+    write_platform_services(output, analysis)
     package_summaries = summarize_packages(analysis, service_facts)
     package_overviews = (
         package_overview_docs(docs_dir, package_summaries) if docs_dir is not None else {}

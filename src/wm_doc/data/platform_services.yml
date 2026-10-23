@@ -1,0 +1,1233 @@
+# Descriptions of webMethods platform services (`pub.*`, `wm.*`) for wm-doc.
+#
+# These services live in the product packages (WmPublic, WmART, WmJDBCAdapter, WmRoot), which
+# are never part of the analysed packages. Each entry gives the service's full name, a one-line
+# description written for wm-doc (not copied from product documentation), an effect family,
+# and optionally where the call moves data:
+#
+#   data:
+#     object: what is moved ("document", "file", ...)
+#     system: where it goes ("HTTP", "JMS", ...)
+#     object_inputs: documented input fields naming the object
+#     where_inputs: documented input fields naming the location
+#
+# When a FLOW sets or maps one of those input fields, its value (or source path) is shown;
+# nothing is guessed. Add or override entries without changing the tool with
+# `--platform-services <your file>` (same format).
+#
+# Families: TRANSACTION, MESSAGING, REMOTE, FILE, IO, XML, JSON, FLAT_FILE, DOCUMENT, STRING,
+# DATE, NUMERIC, LIST, ERROR_HANDLING, LOGGING, STORAGE, FLOW_CONTROL, SECURITY, SCHEMA,
+# SERVER_ADMIN.
+
+services:
+  # pub.art.connection
+  - name: pub.art.connection:disableConnection
+    description: "disables an adapter connection"
+    family: SERVER_ADMIN
+  - name: pub.art.connection:enableConnection
+    description: "enables an adapter connection"
+    family: SERVER_ADMIN
+  - name: pub.art.connection:getConnectionStatistics
+    description: "reads the usage statistics of an adapter connection"
+    family: SERVER_ADMIN
+  - name: pub.art.connection:listAdapterConnections
+    description: "lists the connections of an adapter"
+    family: SERVER_ADMIN
+  - name: pub.art.connection:queryConnectionState
+    description: "reads the state of an adapter connection"
+    family: SERVER_ADMIN
+
+  # pub.art.listener
+  - name: pub.art.listener:disableListener
+    description: "disables an adapter listener"
+    family: SERVER_ADMIN
+  - name: pub.art.listener:enableListener
+    description: "enables an adapter listener"
+    family: SERVER_ADMIN
+  - name: pub.art.listener:listAdapterListeners
+    description: "lists the listeners of an adapter"
+    family: SERVER_ADMIN
+  - name: pub.art.listener:queryListenerState
+    description: "reads the state of an adapter listener"
+    family: SERVER_ADMIN
+  - name: pub.art.listener:suspendListener
+    description: "suspends an adapter listener"
+    family: SERVER_ADMIN
+
+  # pub.art.notification
+  - name: pub.art.notification:disableListenerNotification
+    description: "disables an adapter listener notification"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:disablePollingNotification
+    description: "disables an adapter polling notification"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:enableListenerNotification
+    description: "enables an adapter listener notification"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:enablePollingNotification
+    description: "enables an adapter polling notification"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:listAdapterListenerNotifications
+    description: "lists the listener notifications of an adapter"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:listAdapterPollingNotifications
+    description: "lists the polling notifications of an adapter"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:queryListenerNotificationState
+    description: "reads the state of an adapter listener notification"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:queryPollingNotificationState
+    description: "reads the state of an adapter polling notification"
+    family: SERVER_ADMIN
+  - name: pub.art.notification:suspendPollingNotification
+    description: "suspends an adapter polling notification"
+    family: SERVER_ADMIN
+
+  # pub.art.service
+  - name: pub.art.service:listAdapterServices
+    description: "lists the services of an adapter"
+    family: SERVER_ADMIN
+  - name: pub.art.service:setAdapterServiceNodeConnection
+    description: "switches the connection an adapter service uses"
+    family: SERVER_ADMIN
+
+  # pub.art.transaction
+  - name: pub.art.transaction:commitTransaction
+    description: "commits a transaction"
+    family: TRANSACTION
+  - name: pub.art.transaction:rollbackTransaction
+    description: "rolls back a transaction"
+    family: TRANSACTION
+  - name: pub.art.transaction:setTransactionTimeout
+    description: "sets a transaction timeout"
+    family: TRANSACTION
+  - name: pub.art.transaction:startTransaction
+    description: "starts a transaction"
+    family: TRANSACTION
+
+  # pub.art
+  - name: pub.art:listRegisteredAdapters
+    description: "lists the installed adapters"
+    family: SERVER_ADMIN
+
+  # pub.cache.atomic
+  - name: pub.cache.atomic:putIfAbsent
+    description: "puts an entry in a cache unless the key is already there"
+    family: STORAGE
+    data:
+      object: "cache entry"
+      system: "cache"
+      where_inputs: ["cacheName"]
+  - name: pub.cache.atomic:remove
+    description: "removes a cache entry if it holds a given value"
+    family: STORAGE
+    data:
+      object: "cache entry"
+      system: "cache"
+      where_inputs: ["cacheName"]
+  - name: pub.cache.atomic:replace
+    description: "replaces a cache entry"
+    family: STORAGE
+    data:
+      object: "cache entry"
+      system: "cache"
+      where_inputs: ["cacheName"]
+
+  # pub.cache.serviceResults
+  - name: pub.cache.serviceResults:resetServerCache
+    description: "clears all cached service results on the server"
+    family: STORAGE
+  - name: pub.cache.serviceResults:resetServiceCache
+    description: "clears the cached results of a service"
+    family: STORAGE
+
+  # pub.cache
+  - name: pub.cache:containsKey
+    description: "checks a cache for a key"
+    family: STORAGE
+    data:
+      object: "cache entry"
+      system: "cache"
+      where_inputs: ["cacheName"]
+  - name: pub.cache:get
+    description: "reads an entry from a cache"
+    family: STORAGE
+    data:
+      object: "cache entry"
+      system: "cache"
+      where_inputs: ["cacheName"]
+  - name: pub.cache:put
+    description: "puts an entry in a cache"
+    family: STORAGE
+    data:
+      object: "cache entry"
+      system: "cache"
+      where_inputs: ["cacheName"]
+  - name: pub.cache:remove
+    description: "removes an entry from a cache"
+    family: STORAGE
+    data:
+      object: "cache entry"
+      system: "cache"
+      where_inputs: ["cacheName"]
+
+  # pub.client.ftp
+  - name: pub.client.ftp:cd
+    description: "changes the directory on an FTP server"
+    family: REMOTE
+  - name: pub.client.ftp:delete
+    description: "deletes a file on an FTP server"
+    family: REMOTE
+  - name: pub.client.ftp:get
+    description: "downloads a file over FTP"
+    family: REMOTE
+    data:
+      object: "file"
+      system: "FTP"
+      where_inputs: ["remotefile"]
+  - name: pub.client.ftp:login
+    description: "opens an FTP session"
+    family: REMOTE
+    data:
+      object: "FTP session"
+      system: "FTP"
+      where_inputs: ["serverhost"]
+  - name: pub.client.ftp:logout
+    description: "closes an FTP session"
+    family: REMOTE
+  - name: pub.client.ftp:ls
+    description: "lists files on an FTP server"
+    family: REMOTE
+  - name: pub.client.ftp:mget
+    description: "downloads several files over FTP"
+    family: REMOTE
+  - name: pub.client.ftp:mput
+    description: "uploads several files over FTP"
+    family: REMOTE
+  - name: pub.client.ftp:put
+    description: "uploads a file over FTP"
+    family: REMOTE
+    data:
+      object: "file"
+      system: "FTP"
+      where_inputs: ["remotefile"]
+  - name: pub.client.ftp:rename
+    description: "renames a file on an FTP server"
+    family: REMOTE
+
+  # pub.client.ldap
+  - name: pub.client.ldap:add
+    description: "adds an entry to an LDAP directory"
+    family: REMOTE
+    data:
+      object: "directory entry"
+      system: "LDAP"
+      where_inputs: ["url", "dn"]
+  - name: pub.client.ldap:compare
+    description: "compares an attribute of an LDAP directory entry"
+    family: REMOTE
+    data:
+      object: "directory entry"
+      system: "LDAP"
+      where_inputs: ["url", "dn"]
+  - name: pub.client.ldap:delete
+    description: "deletes an entry from an LDAP directory"
+    family: REMOTE
+    data:
+      object: "directory entry"
+      system: "LDAP"
+      where_inputs: ["url", "dn"]
+  - name: pub.client.ldap:modify
+    description: "changes an entry in an LDAP directory"
+    family: REMOTE
+    data:
+      object: "directory entry"
+      system: "LDAP"
+      where_inputs: ["url", "dn"]
+  - name: pub.client.ldap:rename
+    description: "renames an entry in an LDAP directory"
+    family: REMOTE
+    data:
+      object: "directory entry"
+      system: "LDAP"
+      where_inputs: ["url", "dn"]
+  - name: pub.client.ldap:search
+    description: "searches an LDAP directory"
+    family: REMOTE
+    data:
+      object: "directory entries"
+      system: "LDAP"
+      where_inputs: ["url", "dn"]
+
+  # pub.client.sftp
+  - name: pub.client.sftp:cd
+    description: "changes the directory on an SFTP server"
+    family: REMOTE
+  - name: pub.client.sftp:get
+    description: "downloads a file over SFTP"
+    family: REMOTE
+    data:
+      object: "file"
+      system: "SFTP"
+      where_inputs: ["remoteFile"]
+  - name: pub.client.sftp:login
+    description: "opens an SFTP session"
+    family: REMOTE
+    data:
+      object: "SFTP session"
+      system: "SFTP"
+      where_inputs: ["userAlias"]
+  - name: pub.client.sftp:logout
+    description: "closes an SFTP session"
+    family: REMOTE
+  - name: pub.client.sftp:ls
+    description: "lists files on an SFTP server"
+    family: REMOTE
+  - name: pub.client.sftp:mkdir
+    description: "creates a directory on an SFTP server"
+    family: REMOTE
+  - name: pub.client.sftp:put
+    description: "uploads a file over SFTP"
+    family: REMOTE
+    data:
+      object: "file"
+      system: "SFTP"
+      where_inputs: ["remoteFile"]
+  - name: pub.client.sftp:rename
+    description: "renames a file on an SFTP server"
+    family: REMOTE
+  - name: pub.client.sftp:rm
+    description: "deletes a file on an SFTP server"
+    family: REMOTE
+
+  # pub.client
+  - name: pub.client:ftp
+    description: "transfers a file over FTP"
+    family: REMOTE
+    data:
+      object: "file"
+      system: "FTP"
+      where_inputs: ["serverhost", "dirpath", "remotefile"]
+  - name: pub.client:http
+    description: "calls an external HTTP endpoint"
+    family: REMOTE
+    data:
+      object: "HTTP request"
+      system: "HTTP"
+      where_inputs: ["url", "method"]
+  - name: pub.client:restClient
+    description: "calls an external REST endpoint"
+    family: REMOTE
+    data:
+      object: "REST request"
+      system: "HTTP"
+      where_inputs: ["url", "method"]
+  - name: pub.client:smtp
+    description: "sends an email"
+    family: REMOTE
+    data:
+      object: "email"
+      system: "SMTP"
+      where_inputs: ["to"]
+  - name: pub.client:soapClient
+    description: "calls an external SOAP endpoint"
+    family: REMOTE
+    data:
+      object: "SOAP request"
+      system: "SOAP"
+      where_inputs: ["address"]
+  - name: pub.client:soapHTTP
+    description: "calls an external SOAP endpoint"
+    family: REMOTE
+    data:
+      object: "SOAP request"
+      system: "SOAP over HTTP"
+      where_inputs: ["address"]
+  - name: pub.client:soapRPC
+    description: "calls an external SOAP endpoint (RPC style)"
+    family: REMOTE
+    data:
+      object: "SOAP request"
+      system: "SOAP"
+      where_inputs: ["address"]
+
+  # pub.date
+  - name: pub.date:calculateDateDifference
+    description: "measures the time between dates"
+    family: DATE
+  - name: pub.date:compareDates
+    description: "compares dates"
+    family: DATE
+  - name: pub.date:currentNanoTime
+    description: "reads the current time in nanoseconds"
+    family: DATE
+  - name: pub.date:dateBuild
+    description: "builds a date"
+    family: DATE
+  - name: pub.date:dateTimeBuild
+    description: "builds a date and time from its parts"
+    family: DATE
+  - name: pub.date:dateTimeFormat
+    description: "reformats a date and time"
+    family: DATE
+  - name: pub.date:elapsedNanoTime
+    description: "measures elapsed time in nanoseconds"
+    family: DATE
+  - name: pub.date:formatDate
+    description: "formats a date"
+    family: DATE
+  - name: pub.date:getCurrentDate
+    description: "reads the current date and time"
+    family: DATE
+  - name: pub.date:getCurrentDateString
+    description: "reads the current date"
+    family: DATE
+  - name: pub.date:getWorkingDays
+    description: "counts the working days between two dates"
+    family: DATE
+  - name: pub.date:incrementDate
+    description: "shifts a date"
+    family: DATE
+
+  # pub.datetime
+  - name: pub.datetime:increment
+    description: "shifts a date and time"
+    family: DATE
+
+  # pub.document
+  - name: pub.document:bytesToDocument
+    description: "converts bytes to a document"
+    family: DOCUMENT
+  - name: pub.document:deleteDocuments
+    description: "removes documents from a list"
+    family: DOCUMENT
+  - name: pub.document:documentListToDocument
+    description: "turns a document list into a document"
+    family: DOCUMENT
+  - name: pub.document:documentToBytes
+    description: "serializes a document as bytes"
+    family: DOCUMENT
+  - name: pub.document:documentToDocumentList
+    description: "turns a document into a list"
+    family: DOCUMENT
+  - name: pub.document:documentToXMLValues
+    description: "converts a document to XML values"
+    family: DOCUMENT
+  - name: pub.document:groupDocuments
+    description: "groups documents"
+    family: DOCUMENT
+  - name: pub.document:insertDocument
+    description: "inserts a document into a list"
+    family: DOCUMENT
+  - name: pub.document:removeNullFields
+    description: "removes empty fields from a document"
+    family: DOCUMENT
+  - name: pub.document:searchDocuments
+    description: "searches a document list"
+    family: DOCUMENT
+  - name: pub.document:sortDocuments
+    description: "sorts documents"
+    family: DOCUMENT
+  - name: pub.document:XMLValuesToDocument
+    description: "converts XML values to a document"
+    family: DOCUMENT
+
+  # pub.file
+  - name: pub.file:bytesToFile
+    description: "writes bytes to a file"
+    family: FILE
+    data:
+      object: "file"
+      system: "file system"
+      where_inputs: ["fileName"]
+  - name: pub.file:checkFileExistence
+    description: "checks whether a file exists"
+    family: FILE
+  - name: pub.file:copy
+    description: "copies a file"
+    family: FILE
+  - name: pub.file:copyFile
+    description: "copies a file"
+    family: FILE
+    data:
+      object: "file"
+      system: "file system"
+      where_inputs: ["fileName"]
+  - name: pub.file:delete
+    description: "deletes a file"
+    family: FILE
+  - name: pub.file:deleteFile
+    description: "deletes a file"
+    family: FILE
+    data:
+      object: "file"
+      system: "file system"
+      where_inputs: ["fileName"]
+  - name: pub.file:getFile
+    description: "reads a file"
+    family: FILE
+    data:
+      object: "file"
+      system: "file system"
+      where_inputs: ["filename"]
+  - name: pub.file:listFiles
+    description: "lists files in a directory"
+    family: FILE
+    data:
+      object: "directory listing"
+      system: "file system"
+      where_inputs: ["directory"]
+  - name: pub.file:move
+    description: "moves a file"
+    family: FILE
+  - name: pub.file:moveFile
+    description: "moves a file"
+    family: FILE
+    data:
+      object: "file"
+      system: "file system"
+      where_inputs: ["fileName"]
+  - name: pub.file:streamToFile
+    description: "writes a stream to a file"
+    family: FILE
+    data:
+      object: "file"
+      system: "file system"
+      where_inputs: ["fileName"]
+  - name: pub.file:stringToFile
+    description: "writes a string to a file"
+    family: FILE
+    data:
+      object: "file"
+      system: "file system"
+      where_inputs: ["fileName"]
+
+  # pub.flatFile
+  - name: pub.flatFile:convertToString
+    description: "serializes a flat file"
+    family: FLAT_FILE
+  - name: pub.flatFile:convertToValues
+    description: "parses a flat file"
+    family: FLAT_FILE
+
+  # pub.flow
+  - name: pub.flow:clearPipeline
+    description: "clears the pipeline"
+    family: FLOW_CONTROL
+  - name: pub.flow:debugLog
+    description: "writes a log entry"
+    family: LOGGING
+  - name: pub.flow:getCallingService
+    description: "reads the name of the calling service"
+    family: FLOW_CONTROL
+  - name: pub.flow:getLastError
+    description: "captures the last error"
+    family: ERROR_HANDLING
+  - name: pub.flow:getRetryCount
+    description: "reads the retry count"
+    family: ERROR_HANDLING
+  - name: pub.flow:getTransportInfo
+    description: "reads transport details of the request"
+    family: FLOW_CONTROL
+  - name: pub.flow:invokeService
+    description: "invokes a service named at runtime"
+    family: FLOW_CONTROL
+  - name: pub.flow:restorePipeline
+    description: "restores a saved pipeline"
+    family: FLOW_CONTROL
+  - name: pub.flow:restorePipelineFromFile
+    description: "restores the pipeline from a file"
+    family: FILE
+    data:
+      object: "pipeline"
+      system: "file system"
+      where_inputs: ["fileName"]
+  - name: pub.flow:savePipeline
+    description: "saves the pipeline"
+    family: FLOW_CONTROL
+  - name: pub.flow:savePipelineToFile
+    description: "saves the pipeline to a file"
+    family: FILE
+    data:
+      object: "pipeline"
+      system: "file system"
+      where_inputs: ["fileName"]
+  - name: pub.flow:setCustomContextID
+    description: "sets a custom context ID for auditing"
+    family: LOGGING
+  - name: pub.flow:setResponse
+    description: "sets the HTTP response body"
+    family: FLOW_CONTROL
+  - name: pub.flow:setResponse2
+    description: "sets the HTTP response body"
+    family: FLOW_CONTROL
+  - name: pub.flow:setResponseCode
+    description: "sets the HTTP response code"
+    family: FLOW_CONTROL
+  - name: pub.flow:setResponseHeader
+    description: "sets an HTTP response header"
+    family: FLOW_CONTROL
+  - name: pub.flow:setResponseHeaders
+    description: "sets HTTP response headers"
+    family: FLOW_CONTROL
+  - name: pub.flow:sleep
+    description: "pauses execution"
+    family: FLOW_CONTROL
+  - name: pub.flow:throwExceptionForRetry
+    description: "raises a retryable exception"
+    family: ERROR_HANDLING
+  - name: pub.flow:tracePipeline
+    description: "traces the pipeline"
+    family: FLOW_CONTROL
+
+  # pub.hashtable
+  - name: pub.hashtable:containsKey
+    description: "checks a hashtable for a key"
+    family: LIST
+  - name: pub.hashtable:createHashtable
+    description: "creates a hashtable"
+    family: LIST
+  - name: pub.hashtable:get
+    description: "reads an entry from a hashtable"
+    family: LIST
+  - name: pub.hashtable:listKeys
+    description: "lists the keys of a hashtable"
+    family: LIST
+  - name: pub.hashtable:put
+    description: "puts an entry in a hashtable"
+    family: LIST
+  - name: pub.hashtable:remove
+    description: "removes an entry from a hashtable"
+    family: LIST
+  - name: pub.hashtable:size
+    description: "measures a hashtable"
+    family: LIST
+
+  # pub.io
+  - name: pub.io:bytesToStream
+    description: "opens a stream over bytes"
+    family: IO
+  - name: pub.io:close
+    description: "closes a stream"
+    family: IO
+  - name: pub.io:read
+    description: "reads bytes from a stream"
+    family: IO
+  - name: pub.io:streamToBytes
+    description: "reads a stream into bytes"
+    family: IO
+  - name: pub.io:streamToString
+    description: "reads a stream into a string"
+    family: IO
+  - name: pub.io:stringToStream
+    description: "opens a stream over a string"
+    family: IO
+
+  # pub.jms
+  - name: pub.jms:acknowledge
+    description: "acknowledges a JMS message"
+    family: MESSAGING
+  - name: pub.jms:createConsumer
+    description: "creates a JMS message consumer"
+    family: MESSAGING
+    data:
+      object: "message consumer"
+      system: "JMS"
+      where_inputs: ["destinationName", "connectionAliasName"]
+  - name: pub.jms:receive
+    description: "receives a JMS message"
+    family: MESSAGING
+  - name: pub.jms:reply
+    description: "replies to a JMS message"
+    family: MESSAGING
+    data:
+      object: "message"
+      system: "JMS"
+      where_inputs: ["connectionAliasName"]
+  - name: pub.jms:send
+    description: "sends a JMS message"
+    family: MESSAGING
+    data:
+      object: "message"
+      system: "JMS"
+      where_inputs: ["destinationName", "connectionAliasName"]
+  - name: pub.jms:sendAndWait
+    description: "sends a JMS message and waits for a reply"
+    family: MESSAGING
+    data:
+      object: "message"
+      system: "JMS"
+      where_inputs: ["destinationName", "connectionAliasName"]
+  - name: pub.jms:sendBatch
+    description: "sends a batch of JMS messages"
+    family: MESSAGING
+    data:
+      object: "message"
+      system: "JMS"
+      where_inputs: ["destinationName", "connectionAliasName"]
+  - name: pub.jms:waitForReply
+    description: "waits for a reply to a JMS message"
+    family: MESSAGING
+
+  # pub.json.schema
+  - name: pub.json.schema:validate
+    description: "validates JSON against a JSON schema"
+    family: SCHEMA
+
+  # pub.json
+  - name: pub.json:documentToJSONString
+    description: "serializes a document as JSON"
+    family: JSON
+  - name: pub.json:jsonStreamToDocument
+    description: "parses a JSON stream"
+    family: JSON
+  - name: pub.json:jsonStringToDocument
+    description: "parses JSON text"
+    family: JSON
+
+  # pub.list
+  - name: pub.list:addItemToVector
+    description: "adds an item to a list"
+    family: LIST
+  - name: pub.list:appendToDocumentList
+    description: "appends to a document list"
+    family: LIST
+  - name: pub.list:appendToStringList
+    description: "appends to a string list"
+    family: LIST
+  - name: pub.list:sizeOfList
+    description: "measures a list"
+    family: LIST
+  - name: pub.list:stringListToDocumentList
+    description: "converts a string list to documents"
+    family: LIST
+  - name: pub.list:vectorToArray
+    description: "converts a list to an array"
+    family: LIST
+
+  # pub.math
+  - name: pub.math:absoluteValue
+    description: "returns the absolute value of a number"
+    family: NUMERIC
+  - name: pub.math:addFloatList
+    description: "adds a list of numbers"
+    family: NUMERIC
+  - name: pub.math:addFloats
+    description: "adds floating-point numbers"
+    family: NUMERIC
+  - name: pub.math:addIntList
+    description: "adds a list of integers"
+    family: NUMERIC
+  - name: pub.math:addInts
+    description: "adds integers"
+    family: NUMERIC
+  - name: pub.math:addObjects
+    description: "adds two numbers of any numeric type"
+    family: NUMERIC
+  - name: pub.math:divideFloats
+    description: "divides floating-point numbers"
+    family: NUMERIC
+  - name: pub.math:divideInts
+    description: "divides integers"
+    family: NUMERIC
+  - name: pub.math:divideObjects
+    description: "divides two numbers of any numeric type"
+    family: NUMERIC
+  - name: pub.math:max
+    description: "returns the largest number in a list"
+    family: NUMERIC
+  - name: pub.math:min
+    description: "returns the smallest number in a list"
+    family: NUMERIC
+  - name: pub.math:multiplyFloatList
+    description: "multiplies a list of floating-point numbers"
+    family: NUMERIC
+  - name: pub.math:multiplyFloats
+    description: "multiplies floating-point numbers"
+    family: NUMERIC
+  - name: pub.math:multiplyIntList
+    description: "multiplies a list of integers"
+    family: NUMERIC
+  - name: pub.math:multiplyInts
+    description: "multiplies integers"
+    family: NUMERIC
+  - name: pub.math:multiplyObjects
+    description: "multiplies two numbers of any numeric type"
+    family: NUMERIC
+  - name: pub.math:randomDouble
+    description: "returns a random number"
+    family: NUMERIC
+  - name: pub.math:roundNumber
+    description: "rounds a number"
+    family: NUMERIC
+  - name: pub.math:subtractFloats
+    description: "subtracts floating-point numbers"
+    family: NUMERIC
+  - name: pub.math:subtractInts
+    description: "subtracts integers"
+    family: NUMERIC
+  - name: pub.math:subtractObjects
+    description: "subtracts two numbers of any numeric type"
+    family: NUMERIC
+  - name: pub.math:toNumber
+    description: "converts a string to a number"
+    family: NUMERIC
+
+  # pub.pollingNotificationUtils
+  - name: pub.pollingNotificationUtils:dropObjects
+    description: "removes the database objects a JDBC polling notification created"
+    family: SERVER_ADMIN
+  - name: pub.pollingNotificationUtils:getDBObjectsList
+    description: "lists the database objects created for JDBC polling notifications"
+    family: SERVER_ADMIN
+
+  # pub.publish
+  - name: pub.publish:deliver
+    description: "delivers a message to a destination"
+    family: MESSAGING
+    data:
+      object: "document"
+      system: "Broker/UM"
+      object_inputs: ["documentTypeName"]
+  - name: pub.publish:deliverAndWait
+    description: "delivers a message and waits for a reply"
+    family: MESSAGING
+    data:
+      object: "document"
+      system: "Broker/UM"
+      object_inputs: ["documentTypeName"]
+  - name: pub.publish:getRedeliveryCount
+    description: "reads how often a message was redelivered"
+    family: MESSAGING
+  - name: pub.publish:publish
+    description: "publishes a message"
+    family: MESSAGING
+    data:
+      object: "document"
+      system: "Broker/UM"
+      object_inputs: ["documentTypeName"]
+  - name: pub.publish:publishAndWait
+    description: "publishes a message and waits for a reply"
+    family: MESSAGING
+    data:
+      object: "document"
+      system: "Broker/UM"
+      object_inputs: ["documentTypeName"]
+  - name: pub.publish:reply
+    description: "replies to a published message"
+    family: MESSAGING
+    data:
+      object: "document"
+      system: "Broker/UM"
+      object_inputs: ["documentTypeName"]
+  - name: pub.publish:waitForReply
+    description: "waits for a reply to a published message"
+    family: MESSAGING
+
+  # pub.remote
+  - name: pub.remote:invoke
+    description: "invokes a service on a remote server"
+    family: REMOTE
+    data:
+      object: "service"
+      system: "remote Integration Server"
+      object_inputs: ["$service"]
+      where_inputs: ["$alias"]
+
+  # pub.scheduler
+  - name: pub.scheduler:addComplexTask
+    description: "schedules a task with a complex timetable"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:addOneTimeTask
+    description: "schedules a one-time task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:addRepeatingTask
+    description: "schedules a repeating task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:cancelTask
+    description: "cancels a scheduled task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:getTaskIDs
+    description: "lists the IDs of scheduled tasks"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:getTaskInfo
+    description: "reads the details of a scheduled task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:getUserTaskList
+    description: "lists the scheduled user tasks"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:resumeTask
+    description: "resumes a suspended scheduled task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:suspendTask
+    description: "suspends a scheduled task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:updateComplexTask
+    description: "changes a scheduled complex task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:updateOneTimeTask
+    description: "changes a scheduled one-time task"
+    family: SERVER_ADMIN
+  - name: pub.scheduler:updateRepeatingTask
+    description: "changes a scheduled repeating task"
+    family: SERVER_ADMIN
+
+  # pub.schema
+  - name: pub.schema:createXSD
+    description: "creates an XML schema from a document type"
+    family: SCHEMA
+  - name: pub.schema:validate
+    description: "validates against a schema"
+    family: SCHEMA
+  - name: pub.schema:validatePipeline
+    description: "validates the pipeline against a schema"
+    family: SCHEMA
+
+  # pub.security.outboundPasswords
+  - name: pub.security.outboundPasswords:getPassword
+    description: "reads a stored outbound password"
+    family: SECURITY
+  - name: pub.security.outboundPasswords:removePassword
+    description: "removes a stored outbound password"
+    family: SECURITY
+  - name: pub.security.outboundPasswords:setPassword
+    description: "stores an outbound password"
+    family: SECURITY
+
+  # pub.security.pki
+  - name: pub.security.pki:sign
+    description: "signs data"
+    family: SECURITY
+  - name: pub.security.pki:verify
+    description: "verifies a signature"
+    family: SECURITY
+
+  # pub.security.util
+  - name: pub.security.util:createMessageDigest
+    description: "hashes data"
+    family: SECURITY
+
+  # pub.soap.utils
+  - name: pub.soap.utils:addHeaderEntry
+    description: "adds a SOAP header entry"
+    family: XML
+  - name: pub.soap.utils:createSoapData
+    description: "creates an empty SOAP message"
+    family: XML
+  - name: pub.soap.utils:createXOPObject
+    description: "creates an MTOM/XOP attachment object"
+    family: XML
+  - name: pub.soap.utils:getBody
+    description: "reads the SOAP body"
+    family: XML
+  - name: pub.soap.utils:getHeaderEntries
+    description: "reads the SOAP header entries"
+    family: XML
+  - name: pub.soap.utils:getXOPObjectContent
+    description: "reads the content of an MTOM/XOP attachment"
+    family: XML
+  - name: pub.soap.utils:soapDataToString
+    description: "serializes a SOAP message as a string"
+    family: XML
+  - name: pub.soap.utils:stringToSoapData
+    description: "parses a SOAP message from a string"
+    family: XML
+
+  # pub.storage
+  - name: pub.storage:add
+    description: "adds an entry to Integration Server storage"
+    family: STORAGE
+    data:
+      object: "stored entry"
+      system: "IS storage"
+      where_inputs: ["storeName"]
+  - name: pub.storage:deleteStore
+    description: "deletes a store from Integration Server storage"
+    family: STORAGE
+    data:
+      object: "store"
+      system: "IS storage"
+      where_inputs: ["storeName"]
+  - name: pub.storage:get
+    description: "reads an entry from Integration Server storage"
+    family: STORAGE
+    data:
+      object: "stored entry"
+      system: "IS storage"
+      where_inputs: ["storeName"]
+  - name: pub.storage:keys
+    description: "lists the keys in Integration Server storage"
+    family: STORAGE
+    data:
+      object: "stored entry keys"
+      system: "IS storage"
+      where_inputs: ["storeName"]
+  - name: pub.storage:lock
+    description: "locks an entry in Integration Server storage"
+    family: STORAGE
+  - name: pub.storage:put
+    description: "stores an entry in Integration Server storage"
+    family: STORAGE
+    data:
+      object: "stored entry"
+      system: "IS storage"
+      where_inputs: ["storeName"]
+  - name: pub.storage:remove
+    description: "removes an entry from Integration Server storage"
+    family: STORAGE
+    data:
+      object: "stored entry"
+      system: "IS storage"
+      where_inputs: ["storeName"]
+  - name: pub.storage:unlock
+    description: "unlocks an entry in Integration Server storage"
+    family: STORAGE
+
+  # pub.string
+  - name: pub.string:base64Decode
+    description: "base64-decodes a value"
+    family: STRING
+  - name: pub.string:base64Encode
+    description: "base64-encodes a value"
+    family: STRING
+  - name: pub.string:bytesToString
+    description: "converts bytes to a string"
+    family: STRING
+  - name: pub.string:concat
+    description: "joins strings"
+    family: STRING
+  - name: pub.string:HTMLDecode
+    description: "HTML-decodes a string"
+    family: STRING
+  - name: pub.string:HTMLEncode
+    description: "HTML-encodes a string"
+    family: STRING
+  - name: pub.string:indexOf
+    description: "finds text in a string"
+    family: STRING
+  - name: pub.string:isAlphanumeric
+    description: "checks whether a string is alphanumeric"
+    family: STRING
+  - name: pub.string:isDate
+    description: "checks whether a string is a valid date"
+    family: STRING
+  - name: pub.string:isNullOrBlank
+    description: "checks whether a string is empty"
+    family: STRING
+  - name: pub.string:isNumber
+    description: "checks whether a string is a number"
+    family: STRING
+  - name: pub.string:length
+    description: "measures a string"
+    family: STRING
+  - name: pub.string:lookupDictionary
+    description: "looks up a value in a dictionary"
+    family: STRING
+  - name: pub.string:lookupTable
+    description: "looks up a value in a table"
+    family: STRING
+  - name: pub.string:makeString
+    description: "joins a list into a string"
+    family: STRING
+  - name: pub.string:messageFormat
+    description: "formats a message from a pattern"
+    family: STRING
+  - name: pub.string:numericFormat
+    description: "formats a number"
+    family: STRING
+  - name: pub.string:objectToString
+    description: "converts an object to a string"
+    family: STRING
+  - name: pub.string:padLeft
+    description: "pads a string"
+    family: STRING
+  - name: pub.string:padRight
+    description: "pads a string"
+    family: STRING
+  - name: pub.string:replace
+    description: "replaces text in a string"
+    family: STRING
+  - name: pub.string:stringToBytes
+    description: "converts a string to bytes"
+    family: STRING
+  - name: pub.string:substitutePipelineVariables
+    description: "replaces pipeline variable references in a string"
+    family: STRING
+  - name: pub.string:substring
+    description: "takes a substring"
+    family: STRING
+  - name: pub.string:tokenize
+    description: "splits a string into tokens"
+    family: STRING
+  - name: pub.string:toLower
+    description: "lower-cases a string"
+    family: STRING
+  - name: pub.string:toUpper
+    description: "upper-cases a string"
+    family: STRING
+  - name: pub.string:trim
+    description: "trims a string"
+    family: STRING
+  - name: pub.string:URLDecode
+    description: "URL-decodes a string"
+    family: STRING
+  - name: pub.string:URLEncode
+    description: "URL-encodes a string"
+    family: STRING
+  - name: pub.string:XMLDecode
+    description: "decodes XML entities in a string"
+    family: STRING
+  - name: pub.string:XMLEncode
+    description: "encodes XML entities in a string"
+    family: STRING
+
+  # pub.sync
+  - name: pub.sync:notify
+    description: "notifies the services waiting on a key"
+    family: FLOW_CONTROL
+  - name: pub.sync:wait
+    description: "waits for a notification on a key"
+    family: FLOW_CONTROL
+
+  # pub.trigger
+  - name: pub.trigger:disableJMSTriggers
+    description: "disables JMS triggers"
+    family: SERVER_ADMIN
+  - name: pub.trigger:enableJMSTriggers
+    description: "enables JMS triggers"
+    family: SERVER_ADMIN
+  - name: pub.trigger:resumeProcessing
+    description: "resumes document processing by triggers"
+    family: SERVER_ADMIN
+  - name: pub.trigger:resumeRetrieval
+    description: "resumes document retrieval by triggers"
+    family: SERVER_ADMIN
+  - name: pub.trigger:suspendJMSTriggers
+    description: "suspends JMS triggers"
+    family: SERVER_ADMIN
+  - name: pub.trigger:suspendProcessing
+    description: "suspends document processing by triggers"
+    family: SERVER_ADMIN
+  - name: pub.trigger:suspendRetrieval
+    description: "suspends document retrieval by triggers"
+    family: SERVER_ADMIN
+
+  # pub.utils
+  - name: pub.utils:deepClone
+    description: "copies an object"
+    family: DOCUMENT
+  - name: pub.utils:executeOSCommand
+    description: "runs an operating-system command"
+    family: REMOTE
+    data:
+      object: "operating-system command"
+      system: "server host"
+      object_inputs: ["command"]
+  - name: pub.utils:generateUUID
+    description: "generates a UUID"
+    family: STRING
+  - name: pub.utils:getServerProperty
+    description: "reads a server property"
+    family: SERVER_ADMIN
+
+  # pub.xml
+  - name: pub.xml:documentToXMLString
+    description: "serializes a document as XML"
+    family: XML
+  - name: pub.xml:freeXMLNode
+    description: "releases an XML node"
+    family: XML
+  - name: pub.xml:getNextXMLNode
+    description: "reads the next XML node"
+    family: XML
+  - name: pub.xml:getXMLNodeIterator
+    description: "iterates over XML nodes"
+    family: XML
+  - name: pub.xml:getXMLNodeType
+    description: "reads the type of an XML node"
+    family: XML
+  - name: pub.xml:loadEnhancedXMLNode
+    description: "loads an XML document for the enhanced XML parser"
+    family: XML
+  - name: pub.xml:loadXMLNode
+    description: "loads an XML document from a URL or file"
+    family: REMOTE
+    data:
+      object: "XML document"
+      system: "HTTP or file system"
+      where_inputs: ["url"]
+  - name: pub.xml:queryXMLNode
+    description: "queries an XML node"
+    family: XML
+  - name: pub.xml:xmlNodeToDocument
+    description: "converts XML into a document"
+    family: XML
+  - name: pub.xml:xmlStringToXMLNode
+    description: "parses XML text"
+    family: XML
+
+  # wm.art.admin.connection
+  - name: wm.art.admin.connection:getResourceConfiguration
+    description: "reads the configuration of an adapter connection (internal service)"
+    family: SERVER_ADMIN
+
+  # wm.b2b.edi.util
+  - name: wm.b2b.edi.util:convertToValues
+    description: "parses an EDI document"
+    family: FLAT_FILE
+
+  # wm.b2b.edi
+  - name: wm.b2b.edi:convertToString
+    description: "serializes an EDI document"
+    family: FLAT_FILE
+  - name: wm.b2b.edi:convertToValues
+    description: "parses an EDI document"
+    family: FLAT_FILE
+
+  # wm.server.globalvariables
+  - name: wm.server.globalvariables:addGlobalVariable
+    description: "adds a server global variable"
+    family: SERVER_ADMIN
+  - name: wm.server.globalvariables:editGlobalVariable
+    description: "changes a server global variable"
+    family: SERVER_ADMIN
+  - name: wm.server.globalvariables:listGlobalVariables
+    description: "lists server global variables"
+    family: SERVER_ADMIN
+  - name: wm.server.globalvariables:removeGlobalVariable
+    description: "removes a server global variable"
+    family: SERVER_ADMIN
+
+  # wm.server.ns.dependency
+  - name: wm.server.ns.dependency:getReferenced
+    description: "lists the nodes that reference a namespace node (internal service)"
+    family: SERVER_ADMIN
+
+  # wm.server.openapi
+  # To confirm in Designer: whether it calls a consumed REST API.
+  - name: wm.server.openapi:invoke
+    description: "invokes an OpenAPI operation (internal service)"
+    family: FLOW_CONTROL
+
+  # wm.server.packages
+  - name: wm.server.packages:getPackageStatus
+    description: "reads the status of a package"
+    family: SERVER_ADMIN
+
+  # wm.server.ports
+  - name: wm.server.ports:listListeners
+    description: "lists the server's ports"
+    family: SERVER_ADMIN
+
+  # wm.server.ui
+  - name: wm.server.ui:addSolution
+    description: "adds an entry to the Solutions menu of the administrator UI"
+    family: SERVER_ADMIN
+  - name: wm.server.ui:removeSolution
+    description: "removes an entry from the Solutions menu of the administrator UI"
+    family: SERVER_ADMIN
+
+  # wm.server
+  - name: wm.server:disconnect
+    description: "ends the current server session"
+    family: SERVER_ADMIN

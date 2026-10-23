@@ -1,20 +1,26 @@
-"""Static catalog of webMethods platform (``pub.*`` / ``wm.*``) service effects.
+"""Catalog of webMethods platform (``pub.*`` / ``wm.*``) service descriptions and effects.
 
-Built-in services are never present in an analyzed package, so they can never be
-resolved from a snapshot. Before M9 they were reported only as unresolved targets
-with ``UNKNOWN`` type, which discarded the richest semantic signal a FLOW carries:
+Built-in services live in the product packages (WmPublic, WmART, WmJDBCAdapter, ...), which
+are never analysed, so a call to one can never be resolved from the packages. The catalog
+gives each known platform service a one-line description and an effect family:
 ``pub.art.transaction:startTransaction`` means the service is transactional, and
 ``pub.publish:publish`` means it emits a message.
 
-This module is a fixed name-to-label lookup over documented platform services. It
-does not parse adapters, triggers or resources, and it never infers behaviour for a
-name it does not know -- unknown built-ins keep their previous unresolved treatment.
+The entries live in ``data/platform_services.yml``. A user file passed with
+``--platform-services`` adds or overrides entries (`use_platform_catalog`). This is a fixed
+name-to-description lookup; nothing is inferred for a name the catalog does not know --
+unknown built-ins keep their unresolved treatment and are listed by `stats`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from importlib import resources
+from pathlib import Path
+from typing import Any
+
+import yaml
 
 BUILTIN_PREFIXES = ("pub.", "wm.")
 
@@ -100,263 +106,117 @@ class BuiltinEffect:
     data: DataEffectSpec | None = None
 
 
-_T = BuiltinFamily
-_D = DataEffectSpec
-
-# (service name, effect label, family). Documented platform services, plus the server
-# administration services named below.
-_CATALOG: tuple[tuple[str, str, BuiltinFamily], ...] = (
-    ("pub.art.transaction:startTransaction", "starts a transaction", _T.TRANSACTION),
-    ("pub.art.transaction:commitTransaction", "commits a transaction", _T.TRANSACTION),
-    ("pub.art.transaction:rollbackTransaction", "rolls back a transaction", _T.TRANSACTION),
-    ("pub.art.transaction:setTransactionTimeout", "sets a transaction timeout", _T.TRANSACTION),
-    ("pub.publish:publish", "publishes a message", _T.MESSAGING),
-    ("pub.publish:publishAndWait", "publishes a message and waits for a reply", _T.MESSAGING),
-    ("pub.publish:deliver", "delivers a message to a destination", _T.MESSAGING),
-    ("pub.publish:reply", "replies to a published message", _T.MESSAGING),
-    ("pub.client:http", "calls an external HTTP endpoint", _T.REMOTE),
-    ("pub.client:soapHTTP", "calls an external SOAP endpoint", _T.REMOTE),
-    ("pub.client.ftp:put", "uploads a file over FTP", _T.REMOTE),
-    ("pub.client.ftp:get", "downloads a file over FTP", _T.REMOTE),
-    ("pub.remote:invoke", "invokes a service on a remote server", _T.REMOTE),
-    ("pub.file:getFile", "reads a file", _T.FILE),
-    ("pub.file:stringToFile", "writes a string to a file", _T.FILE),
-    ("pub.file:bytesToFile", "writes bytes to a file", _T.FILE),
-    ("pub.file:listFiles", "lists files in a directory", _T.FILE),
-    ("pub.file:copy", "copies a file", _T.FILE),
-    ("pub.file:delete", "deletes a file", _T.FILE),
-    ("pub.file:move", "moves a file", _T.FILE),
-    ("pub.io:close", "closes a stream", _T.IO),
-    ("pub.io:streamToBytes", "reads a stream into bytes", _T.IO),
-    ("pub.io:streamToString", "reads a stream into a string", _T.IO),
-    ("pub.io:bytesToStream", "opens a stream over bytes", _T.IO),
-    ("pub.xml:xmlStringToXMLNode", "parses XML text", _T.XML),
-    ("pub.xml:xmlNodeToDocument", "converts XML into a document", _T.XML),
-    ("pub.xml:documentToXMLString", "serializes a document as XML", _T.XML),
-    ("pub.xml:queryXMLNode", "queries an XML node", _T.XML),
-    ("pub.xml:freeXMLNode", "releases an XML node", _T.XML),
-    ("pub.json:documentToJSONString", "serializes a document as JSON", _T.JSON),
-    ("pub.json:jsonStringToDocument", "parses JSON text", _T.JSON),
-    ("pub.flatFile:convertToValues", "parses a flat file", _T.FLAT_FILE),
-    ("pub.flatFile:convertToString", "serializes a flat file", _T.FLAT_FILE),
-    ("pub.document:documentToXMLValues", "converts a document to XML values", _T.DOCUMENT),
-    ("pub.document:XMLValuesToDocument", "converts XML values to a document", _T.DOCUMENT),
-    ("pub.string:concat", "joins strings", _T.STRING),
-    ("pub.string:substring", "takes a substring", _T.STRING),
-    ("pub.string:trim", "trims a string", _T.STRING),
-    ("pub.string:toUpper", "upper-cases a string", _T.STRING),
-    ("pub.string:toLower", "lower-cases a string", _T.STRING),
-    ("pub.string:replace", "replaces text in a string", _T.STRING),
-    ("pub.string:tokenize", "splits a string into tokens", _T.STRING),
-    ("pub.string:padLeft", "pads a string", _T.STRING),
-    ("pub.string:length", "measures a string", _T.STRING),
-    ("pub.string:base64Encode", "base64-encodes a value", _T.STRING),
-    ("pub.string:base64Decode", "base64-decodes a value", _T.STRING),
-    ("pub.date:getCurrentDateString", "reads the current date", _T.DATE),
-    ("pub.date:formatDate", "formats a date", _T.DATE),
-    ("pub.date:dateTimeFormat", "reformats a date and time", _T.DATE),
-    ("pub.date:dateBuild", "builds a date", _T.DATE),
-    ("pub.math:addInts", "adds integers", _T.NUMERIC),
-    ("pub.math:addFloats", "adds floating-point numbers", _T.NUMERIC),
-    ("pub.list:sizeOfList", "measures a list", _T.LIST),
-    ("pub.list:appendToDocumentList", "appends to a document list", _T.LIST),
-    ("pub.list:appendToStringList", "appends to a string list", _T.LIST),
-    ("pub.list:stringListToDocumentList", "converts a string list to documents", _T.LIST),
-    ("pub.flow:getLastError", "captures the last error", _T.ERROR_HANDLING),
-    ("pub.flow:throwExceptionForRetry", "raises a retryable exception", _T.ERROR_HANDLING),
-    ("pub.flow:debugLog", "writes a log entry", _T.LOGGING),
-    ("pub.flow:clearPipeline", "clears the pipeline", _T.FLOW_CONTROL),
-    ("pub.flow:savePipeline", "saves the pipeline", _T.FLOW_CONTROL),
-    ("pub.flow:restorePipeline", "restores a saved pipeline", _T.FLOW_CONTROL),
-    ("pub.flow:tracePipeline", "traces the pipeline", _T.FLOW_CONTROL),
-    ("pub.flow:sleep", "pauses execution", _T.FLOW_CONTROL),
-    ("pub.security.pki:sign", "signs data", _T.SECURITY),
-    ("pub.security.pki:verify", "verifies a signature", _T.SECURITY),
-    ("pub.security.util:createMessageDigest", "hashes data", _T.SECURITY),
-    ("pub.schema:validate", "validates against a schema", _T.SCHEMA),
-    ("pub.schema:validatePipeline", "validates the pipeline against a schema", _T.SCHEMA),
-    # M12 additions: services common in production FLOWs.
-    ("pub.jms:send", "sends a JMS message", _T.MESSAGING),
-    ("pub.jms:sendAndWait", "sends a JMS message and waits for a reply", _T.MESSAGING),
-    ("pub.jms:sendBatch", "sends a batch of JMS messages", _T.MESSAGING),
-    ("pub.jms:reply", "replies to a JMS message", _T.MESSAGING),
-    ("pub.client:smtp", "sends an email", _T.REMOTE),
-    ("pub.client:ftp", "transfers a file over FTP", _T.REMOTE),
-    ("pub.client.sftp:put", "uploads a file over SFTP", _T.REMOTE),
-    ("pub.client.sftp:get", "downloads a file over SFTP", _T.REMOTE),
-    ("pub.client:soapClient", "calls an external SOAP endpoint", _T.REMOTE),
-    ("pub.file:copyFile", "copies a file", _T.FILE),
-    ("pub.file:moveFile", "moves a file", _T.FILE),
-    ("pub.file:deleteFile", "deletes a file", _T.FILE),
-    ("pub.file:streamToFile", "writes a stream to a file", _T.FILE),
-    ("pub.file:checkFileExistence", "checks whether a file exists", _T.FILE),
-    ("pub.storage:put", "stores an entry in Integration Server storage", _T.STORAGE),
-    ("pub.storage:get", "reads an entry from Integration Server storage", _T.STORAGE),
-    ("pub.storage:remove", "removes an entry from Integration Server storage", _T.STORAGE),
-    ("pub.cache:put", "puts an entry in a cache", _T.STORAGE),
-    ("pub.cache:get", "reads an entry from a cache", _T.STORAGE),
-    ("pub.cache:remove", "removes an entry from a cache", _T.STORAGE),
-    ("pub.json:jsonStreamToDocument", "parses a JSON stream", _T.JSON),
-    ("pub.flow:setResponseCode", "sets the HTTP response code", _T.FLOW_CONTROL),
-    ("pub.flow:setResponse2", "sets the HTTP response body", _T.FLOW_CONTROL),
-    ("pub.flow:setResponseHeader", "sets an HTTP response header", _T.FLOW_CONTROL),
-    ("pub.flow:getTransportInfo", "reads transport details of the request", _T.FLOW_CONTROL),
-    ("pub.flow:invokeService", "invokes a service named at runtime", _T.FLOW_CONTROL),
-    ("pub.flow:getRetryCount", "reads the retry count", _T.ERROR_HANDLING),
-    ("pub.string:messageFormat", "formats a message from a pattern", _T.STRING),
-    ("pub.string:numericFormat", "formats a number", _T.STRING),
-    ("pub.string:makeString", "joins a list into a string", _T.STRING),
-    ("pub.string:objectToString", "converts an object to a string", _T.STRING),
-    ("pub.string:bytesToString", "converts bytes to a string", _T.STRING),
-    ("pub.string:stringToBytes", "converts a string to bytes", _T.STRING),
-    ("pub.string:indexOf", "finds text in a string", _T.STRING),
-    ("pub.string:lookupTable", "looks up a value in a table", _T.STRING),
-    ("pub.date:compareDates", "compares dates", _T.DATE),
-    ("pub.date:incrementDate", "shifts a date", _T.DATE),
-    ("pub.date:calculateDateDifference", "measures the time between dates", _T.DATE),
-    ("pub.math:multiplyInts", "multiplies integers", _T.NUMERIC),
-    ("pub.math:subtractInts", "subtracts integers", _T.NUMERIC),
-    ("pub.math:divideInts", "divides integers", _T.NUMERIC),
-    ("pub.math:toNumber", "converts a string to a number", _T.NUMERIC),
-    ("pub.list:addItemToVector", "adds an item to a list", _T.LIST),
-    ("pub.list:vectorToArray", "converts a list to an array", _T.LIST),
-    ("pub.document:documentListToDocument", "turns a document list into a document", _T.DOCUMENT),
-    ("pub.document:documentToDocumentList", "turns a document into a list", _T.DOCUMENT),
-    ("pub.document:deleteDocuments", "removes documents from a list", _T.DOCUMENT),
-    ("pub.document:groupDocuments", "groups documents", _T.DOCUMENT),
-    ("pub.document:sortDocuments", "sorts documents", _T.DOCUMENT),
-    ("pub.document:searchDocuments", "searches a document list", _T.DOCUMENT),
-    # Added after checking public 10.x packages.
-    ("pub.flow:setResponse", "sets the HTTP response body", _T.FLOW_CONTROL),
-    ("pub.hashtable:createHashtable", "creates a hashtable", _T.LIST),
-    ("pub.hashtable:put", "puts an entry in a hashtable", _T.LIST),
-    ("pub.hashtable:get", "reads an entry from a hashtable", _T.LIST),
-    ("pub.hashtable:remove", "removes an entry from a hashtable", _T.LIST),
-    ("pub.hashtable:containsKey", "checks a hashtable for a key", _T.LIST),
-    ("pub.hashtable:listKeys", "lists the keys of a hashtable", _T.LIST),
-    ("pub.hashtable:size", "measures a hashtable", _T.LIST),
-    ("pub.utils:generateUUID", "generates a UUID", _T.STRING),
-    ("pub.utils:deepClone", "copies an object", _T.DOCUMENT),
-    ("pub.utils:getServerProperty", "reads a server property", _T.SERVER_ADMIN),
-    ("pub.utils:executeOSCommand", "runs an operating-system command", _T.REMOTE),
-    ("pub.xml:getXMLNodeIterator", "iterates over XML nodes", _T.XML),
-    ("pub.xml:getNextXMLNode", "reads the next XML node", _T.XML),
-    ("pub.xml:getXMLNodeType", "reads the type of an XML node", _T.XML),
-    ("pub.xml:loadXMLNode", "loads an XML document from a URL or file", _T.REMOTE),
-    ("pub.document:documentToBytes", "serializes a document as bytes", _T.DOCUMENT),
-    ("pub.document:bytesToDocument", "converts bytes to a document", _T.DOCUMENT),
-    ("pub.string:padRight", "pads a string", _T.STRING),
-    ("pub.string:isNullOrBlank", "checks whether a string is empty", _T.STRING),
-    ("pub.string:URLEncode", "URL-encodes a string", _T.STRING),
-    ("pub.string:URLDecode", "URL-decodes a string", _T.STRING),
-    ("pub.string:HTMLEncode", "HTML-encodes a string", _T.STRING),
-    ("pub.string:HTMLDecode", "HTML-decodes a string", _T.STRING),
-    ("pub.math:addFloatList", "adds a list of numbers", _T.NUMERIC),
-    ("pub.math:multiplyFloats", "multiplies floating-point numbers", _T.NUMERIC),
-    ("pub.math:subtractFloats", "subtracts floating-point numbers", _T.NUMERIC),
-    ("pub.math:divideFloats", "divides floating-point numbers", _T.NUMERIC),
-    ("wm.b2b.edi:convertToString", "serializes an EDI document", _T.FLAT_FILE),
-    ("wm.b2b.edi:convertToValues", "parses an EDI document", _T.FLAT_FILE),
-    ("wm.b2b.edi.util:convertToValues", "parses an EDI document", _T.FLAT_FILE),
-    # Integration Server administration services (`wm.server.*`). They are not in the
-    # Built-in Services reference, but packages call them to manage the server itself.
-    (
-        "wm.server.globalvariables:addGlobalVariable",
-        "adds a server global variable",
-        _T.SERVER_ADMIN,
-    ),
-    (
-        "wm.server.globalvariables:editGlobalVariable",
-        "changes a server global variable",
-        _T.SERVER_ADMIN,
-    ),
-    (
-        "wm.server.globalvariables:removeGlobalVariable",
-        "removes a server global variable",
-        _T.SERVER_ADMIN,
-    ),
-    (
-        "wm.server.globalvariables:listGlobalVariables",
-        "lists server global variables",
-        _T.SERVER_ADMIN,
-    ),
-    ("wm.server.packages:getPackageStatus", "reads the status of a package", _T.SERVER_ADMIN),
-    ("wm.server.ports:listListeners", "lists the server's ports", _T.SERVER_ADMIN),
-    (
-        "wm.server.ui:addSolution",
-        "adds an entry to the Solutions menu of the administrator UI",
-        _T.SERVER_ADMIN,
-    ),
-    (
-        "wm.server.ui:removeSolution",
-        "removes an entry from the Solutions menu of the administrator UI",
-        _T.SERVER_ADMIN,
-    ),
-    ("wm.server:disconnect", "ends the current server session", _T.SERVER_ADMIN),
-)
-
-# Where data leaves the service. Field names are documented inputs of each service.
-_DATA_EFFECTS: dict[str, DataEffectSpec] = {
-    "pub.publish:publish": _D("document", "Broker/UM", object_inputs=("documentTypeName",)),
-    "pub.publish:publishAndWait": _D(
-        "document", "Broker/UM", object_inputs=("documentTypeName",)
-    ),
-    "pub.publish:deliver": _D("document", "Broker/UM", object_inputs=("documentTypeName",)),
-    "pub.publish:reply": _D("document", "Broker/UM", object_inputs=("documentTypeName",)),
-    "pub.jms:send": _D(
-        "message", "JMS", where_inputs=("destinationName", "connectionAliasName")
-    ),
-    "pub.jms:sendAndWait": _D(
-        "message", "JMS", where_inputs=("destinationName", "connectionAliasName")
-    ),
-    "pub.jms:sendBatch": _D(
-        "message", "JMS", where_inputs=("destinationName", "connectionAliasName")
-    ),
-    "pub.jms:reply": _D("message", "JMS", where_inputs=("connectionAliasName",)),
-    "pub.client:http": _D("HTTP request", "HTTP", where_inputs=("url", "method")),
-    "pub.client:soapHTTP": _D("SOAP request", "SOAP over HTTP", where_inputs=("address",)),
-    "pub.client:soapClient": _D("SOAP request", "SOAP", where_inputs=("address",)),
-    "pub.client:smtp": _D("email", "SMTP", where_inputs=("to",)),
-    "pub.client:ftp": _D("file", "FTP", where_inputs=("serverhost", "dirpath", "remotefile")),
-    "pub.client.ftp:put": _D("file", "FTP", where_inputs=("remotefile",)),
-    "pub.client.ftp:get": _D("file", "FTP", where_inputs=("remotefile",)),
-    "pub.client.sftp:put": _D("file", "SFTP", where_inputs=("remoteFile",)),
-    "pub.client.sftp:get": _D("file", "SFTP", where_inputs=("remoteFile",)),
-    "pub.remote:invoke": _D(
-        "service",
-        "remote Integration Server",
-        object_inputs=("$service",),
-        where_inputs=("$alias",),
-    ),
-    "pub.file:getFile": _D("file", "file system", where_inputs=("filename",)),
-    "pub.file:stringToFile": _D("file", "file system", where_inputs=("fileName",)),
-    "pub.file:bytesToFile": _D("file", "file system", where_inputs=("fileName",)),
-    "pub.file:streamToFile": _D("file", "file system", where_inputs=("fileName",)),
-    "pub.file:listFiles": _D("directory listing", "file system", where_inputs=("directory",)),
-    "pub.file:copyFile": _D("file", "file system", where_inputs=("fileName",)),
-    "pub.file:moveFile": _D("file", "file system", where_inputs=("fileName",)),
-    "pub.file:deleteFile": _D("file", "file system", where_inputs=("fileName",)),
-    "pub.storage:put": _D("stored entry", "IS storage", where_inputs=("storeName",)),
-    "pub.storage:get": _D("stored entry", "IS storage", where_inputs=("storeName",)),
-    "pub.storage:remove": _D("stored entry", "IS storage", where_inputs=("storeName",)),
-    "pub.cache:put": _D("cache entry", "cache", where_inputs=("cacheName",)),
-    "pub.cache:get": _D("cache entry", "cache", where_inputs=("cacheName",)),
-    "pub.cache:remove": _D("cache entry", "cache", where_inputs=("cacheName",)),
-    "pub.xml:loadXMLNode": _D("XML document", "HTTP or file system", where_inputs=("url",)),
-    "pub.utils:executeOSCommand": _D(
-        "operating-system command", "server host", object_inputs=("command",)
-    ),
-}
-
-BUILTIN_SERVICES: dict[str, BuiltinEffect] = {
-    name.casefold(): BuiltinEffect(label=label, family=family, data=_DATA_EFFECTS.get(name))
-    for name, label, family in _CATALOG
-}
-
-
 def is_builtin_name(full_name: str) -> bool:
     """Report whether *full_name* addresses the platform rather than a package."""
     return full_name.casefold().startswith(BUILTIN_PREFIXES)
+
+
+MAX_DESCRIPTION_CHARS = 120
+MAX_USER_ENTRIES = 5_000
+_DATA_KEYS = {"object", "system", "object_inputs", "where_inputs"}
+_ENTRY_KEYS = {"name", "description", "family", "data"}
+
+
+class PlatformServicesError(ValueError):
+    """Raised when a platform services file cannot be used as written."""
+
+
+def parse_platform_services(text: str, origin: str) -> dict[str, BuiltinEffect]:
+    """Validate a platform services YAML document; return name (case-folded) -> effect."""
+    try:
+        raw: Any = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise PlatformServicesError(f"{origin} is not valid YAML.") from exc
+    if raw is None:
+        return {}
+    items = raw.get("services") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        raise PlatformServicesError(f"{origin} must contain a `services:` list.")
+    if len(items) > MAX_USER_ENTRIES:
+        raise PlatformServicesError(f"{origin} lists more than {MAX_USER_ENTRIES} services.")
+    catalog: dict[str, BuiltinEffect] = {}
+    for item in items:
+        name, effect = _entry(item, origin)
+        key = name.casefold()
+        if key in catalog:
+            raise PlatformServicesError(f"{origin} lists `{name}` twice.")
+        catalog[key] = effect
+    return catalog
+
+
+def _entry(item: Any, origin: str) -> tuple[str, BuiltinEffect]:
+    if not isinstance(item, dict) or set(item) - _ENTRY_KEYS:
+        raise PlatformServicesError(
+            f"{origin}: each service needs only name, description, family and data."
+        )
+    name = str(item.get("name") or "").strip()
+    if not is_builtin_name(name) or ":" not in name:
+        raise PlatformServicesError(
+            f"{origin}: `{name or '?'}` is not a platform service name (pub.* or wm.*); "
+            "use external-systems.yml for services of other packages."
+        )
+    description = " ".join(str(item.get("description") or "").split())
+    if not description or len(description) > MAX_DESCRIPTION_CHARS:
+        raise PlatformServicesError(
+            f"{origin}: `{name}` needs a description of 1 to {MAX_DESCRIPTION_CHARS} characters."
+        )
+    try:
+        family = BuiltinFamily(str(item.get("family") or "").strip().upper())
+    except ValueError as exc:
+        raise PlatformServicesError(f"{origin}: `{name}` has an unknown family.") from exc
+    return name, BuiltinEffect(label=description, family=family, data=_data(item, name, origin))
+
+
+def _data(item: dict[str, Any], name: str, origin: str) -> DataEffectSpec | None:
+    data = item.get("data")
+    if data is None:
+        return None
+    if not isinstance(data, dict) or set(data) - _DATA_KEYS:
+        raise PlatformServicesError(
+            f"{origin}: `{name}` data takes only object, system, object_inputs, where_inputs."
+        )
+    object_label = str(data.get("object") or "").strip()
+    system = str(data.get("system") or "").strip()
+    if not object_label or not system:
+        raise PlatformServicesError(f"{origin}: `{name}` data needs an object and a system.")
+    fields: dict[str, tuple[str, ...]] = {}
+    for key in ("object_inputs", "where_inputs"):
+        value = data.get(key) or []
+        if not isinstance(value, list) or not all(isinstance(x, str) and x for x in value):
+            raise PlatformServicesError(f"{origin}: `{name}` {key} must be a list of names.")
+        fields[key] = tuple(value)
+    return DataEffectSpec(
+        object_label,
+        system,
+        object_inputs=fields["object_inputs"],
+        where_inputs=fields["where_inputs"],
+    )
+
+
+def load_platform_services(path: Path) -> dict[str, BuiltinEffect]:
+    """Read a user platform services file (same format as the shipped catalog)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PlatformServicesError("Platform services file could not be read.") from exc
+    return parse_platform_services(text, "Platform services file")
+
+
+SHIPPED_SERVICES: dict[str, BuiltinEffect] = parse_platform_services(
+    resources.files("wm_doc").joinpath("data/platform_services.yml").read_text(encoding="utf-8"),
+    "Shipped platform services catalog",
+)
+# The catalog in use: the shipped entries, plus a user file once `use_platform_catalog` ran.
+BUILTIN_SERVICES: dict[str, BuiltinEffect] = dict(SHIPPED_SERVICES)
+
+
+def use_platform_catalog(extra: Path | None) -> int:
+    """Reset to the shipped catalog and add the entries of *extra*; return how many it had."""
+    added = load_platform_services(extra) if extra is not None else {}
+    BUILTIN_SERVICES.clear()
+    BUILTIN_SERVICES.update(SHIPPED_SERVICES)
+    BUILTIN_SERVICES.update(added)
+    return len(added)
 
 
 def builtin_effect(full_name: str) -> BuiltinEffect | None:

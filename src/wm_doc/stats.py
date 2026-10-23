@@ -71,6 +71,7 @@ def render_stats(analysis: AnalysisResult) -> str:
     lines += _unsupported_flow_section(services)
     lines += _uncatalogued_platform_section(services)
     lines += _external_calls_section(analysis)
+    lines += _unresolved_reasons_section(analysis)
     lines += _largest_services_section(services)
     return "\n".join(lines).rstrip() + "\n"
 
@@ -122,14 +123,20 @@ def _uncatalogued_platform_section(services: list[FlowService]) -> list[str]:
             target = dependency.target_service
             if is_builtin_name(target) and builtin_effect(target) is None:
                 callers[target].add(service.identity.full_name)
-    lines = ["## Platform services missing from the effect catalog", ""]
+    lines = [
+        "## Platform services missing from the effect catalog",
+        "",
+        (
+            "Every one is listed. Describe them in a file passed with `--platform-services` "
+            "(format: `src/wm_doc/data/platform_services.yml`)."
+        ),
+        "",
+    ]
     if not callers:
         return [*lines, "None.", ""]
     lines += ["| Service | Callers |", "| --- | ---: |"]
     ranked = sorted(callers.items(), key=lambda item: (-len(item[1]), item[0].casefold()))
-    lines += [f"| `{name}` | {len(users)} |" for name, users in ranked[:TOP_ITEMS]]
-    if len(ranked) > TOP_ITEMS:
-        lines.append(f"| ... {len(ranked) - TOP_ITEMS} more | |")
+    lines += [f"| `{name}` | {len(users)} |" for name, users in ranked]
     return [*lines, ""]
 
 
@@ -161,6 +168,52 @@ def _external_calls_section(analysis: AnalysisResult) -> list[str]:
     ]
     if len(ranked) > TOP_ITEMS:
         lines.append(f"| ... {len(ranked) - TOP_ITEMS} more | | |")
+    return [*lines, ""]
+
+
+def _unresolved_reasons_section(analysis: AnalysisResult) -> list[str]:
+    """Whether each unresolved call target exists in the folder as something else."""
+    present = {
+        artifact.full_name: artifact_kind(artifact) for artifact in analysis.namespace_artifacts
+    }
+    targets: dict[str, set[str]] = defaultdict(set)
+    found: dict[str, Counter[str]] = defaultdict(Counter)
+    for dependency in analysis.unique_dependencies:
+        target = dependency.target_service
+        if dependency.resolved or is_builtin_name(target):
+            continue
+        prefix = namespace_prefix(target)
+        if target in targets[prefix]:
+            continue
+        targets[prefix].add(target)
+        kind = present.get(target)
+        if kind is not None:
+            found[prefix][kind] += 1
+    lines = [
+        "## Why calls leave the analysed packages",
+        "",
+        (
+            "For the call targets above: a node with the exact name exists in the scanned "
+            "folder but is not a recognised service (the kinds are counted), or no node with "
+            "that name is in the folder at all (its package is missing, skipped or named "
+            "differently)."
+        ),
+        "",
+    ]
+    if not targets:
+        return [*lines, "None.", ""]
+    lines += [
+        "| Namespace prefix | Targets | In the folder, not a service | Not in the folder |",
+        "| --- | ---: | --- | ---: |",
+    ]
+    ranked = sorted(targets, key=lambda prefix: (-len(targets[prefix]), prefix.casefold()))
+    for prefix in ranked[:TOP_ITEMS]:
+        kinds = found[prefix]
+        shown = ", ".join(f"{count} `{kind}`" for kind, count in kinds.most_common()) or "-"
+        missing = len(targets[prefix]) - sum(kinds.values())
+        lines.append(f"| `{prefix}` | {len(targets[prefix])} | {shown} | {missing} |")
+    if len(ranked) > TOP_ITEMS:
+        lines.append(f"| ... {len(ranked) - TOP_ITEMS} more | | | |")
     return [*lines, ""]
 
 

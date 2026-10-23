@@ -48,6 +48,7 @@ def render_documentation_index(
         "- [Services](services/)",
         "- [Document Types](documents/)",
         "- [Other artifacts and skipped packages](artifacts.md)",
+        "- [Platform services called (pub.*, wm.*)](platform-services.md)",
     ]
     if catalogue_path:
         lines.append(f"- [Service catalogue (descriptions and review status)]({catalogue_path})")

@@ -3,7 +3,8 @@
 This project builds an offline tool that documents webMethods Integration Server packages
 (built against 10.15): a deterministic technical documentation site, and one reviewed
 description file per service drafted by a local Ollama model from facts the tool established.
-The target is a production server of about 100 packages and under 2,000 services.
+The target production server has about 200 packages and 7,300 services (6,000 FLOW, 1,100
+adapter services) and 9,600 document types.
 
 Current milestone: M12 (approved by the repository owner). The earlier business-context /
 business-enrichment path (`build-business-context`, `enrich-business`, `ollama-test`,
@@ -25,6 +26,9 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
 - Readers (`adapters.py`, `triggers.py`): the approved JDBC adapter decoder and trigger reader
   (see "Approved readers"); their results sit on `FlowService.adapter` and
   `NamespaceArtifact.adapter` / `.trigger`.
+- Platform catalog (`builtins.py`, `data/platform_services.yml`): one-line description, effect
+  family and optional data-effect inputs per `pub.*` / `wm.*` service, written for wm-doc (never
+  copied documentation); `--platform-services` adds or overrides entries for one command.
 - Facts (`effects.py`, `references.py`, `builtins.py`, `external_systems.py`): per service, the
   direct callers, entry points (artifacts whose node.ndf contains a service's exact name,
   `processes.yml`, uncalled callers), and data and systems touched (signature documents; platform
