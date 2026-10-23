@@ -50,6 +50,9 @@ PACKAGE_OVERVIEW_PREFIX = "package:"
 SERVER_OVERVIEW = "server"
 MAX_DESIGNER_COMMENT_CHARS = 600
 HASH_LENGTH = 16
+# Front-matter key of a draft kept with `describe --keep-unverified`: the names the model
+# used that the facts do not contain. Approving the file removes it.
+UNVERIFIED_KEY = "unverified_names"
 
 
 class DocStatus(StrEnum):
@@ -116,6 +119,13 @@ class ServiceDoc:
         return text_hash(self.narrative) != self.text_hash
 
     @property
+    def unverified_names(self) -> list[str]:
+        value = self.extra_front_matter.get(UNVERIFIED_KEY)
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    @property
     def protected(self) -> bool:
         """True when the narrative belongs to a person and must not be regenerated."""
         return self.status is DocStatus.APPROVED or self.edited
@@ -159,8 +169,17 @@ class ServiceDoc:
         else:
             title = self.service.rsplit(":", 1)[-1]
         start = f"<!-- wm-doc:facts:start hash={self.current_facts_hash} -->"
+        unverified = self.unverified_names
+        notice = (
+            "> **Unverified draft:** the model used names that are not in the facts: "
+            + ", ".join(f"`{name}`" for name in unverified)
+            + ". Check them before approving.\n\n"
+            if unverified
+            else ""
+        )
         return (
             f"---\n{header}\n---\n# {title}\n\n`{self.service}`\n\n"
+            f"{notice}"
             f"{self.narrative.strip()}\n\n"
             f"{NOTES_HEADING}\n\n{self.notes.strip() or NOTES_PLACEHOLDER}\n\n"
             f"{start}\n{self.facts_markdown.strip()}\n{FACTS_END}\n"

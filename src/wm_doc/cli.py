@@ -607,6 +607,17 @@ ProcessesFileOption = Annotated[
     Path | None,
     typer.Option("--processes-file", help="Optional processes.yml catalog."),
 ]
+KeepUnverifiedOption = Annotated[
+    bool,
+    typer.Option(
+        "--keep-unverified",
+        help=(
+            "Still write a draft whose answer names things the facts do not contain (after "
+            "the retry), marked with those names. Answers that fail the disclosure scan are "
+            "never kept."
+        ),
+    ),
+]
 RedoDraftsOption = Annotated[
     bool,
     typer.Option(
@@ -695,6 +706,7 @@ def describe(
         ),
     ] = False,
     redo_drafts: RedoDraftsOption = False,
+    keep_unverified: KeepUnverifiedOption = False,
     config: ConfigOption = None,
     processes_file: ProcessesFileOption = None,
     include_package: IncludePackageOption = None,
@@ -769,6 +781,7 @@ def describe(
                 no_cache=no_cache,
                 refresh=refresh,
                 redo_drafts=redo_drafts,
+                keep_unverified=keep_unverified,
                 num_ctx=num_ctx,
                 timeout_seconds=timeout_seconds,
                 external_systems=external_catalog,
@@ -820,6 +833,7 @@ def _echo_generation_summary(
         f"- drafts kept (facts unchanged): {counts.get(DescribeOutcome.UNCHANGED, 0)}\n"
         f"- approved or edited, kept: {counts.get(DescribeOutcome.PROTECTED, 0)}\n"
         f"- rejected by validation: {counts.get(DescribeOutcome.REJECTED, 0)}\n"
+        f"- kept with unverified names: {counts.get(DescribeOutcome.UNVERIFIED, 0)}\n"
         f"- generation failed: {counts.get(DescribeOutcome.FAILED, 0)}\n"
         f"- corrective retries: {stats.retried}\n"
         f"- facts shortened to fit: {stats.shortened}\n"

@@ -481,6 +481,12 @@ def doc_badge(doc: ServiceDoc) -> str:
             "**Approved, but the facts have changed since.** Review the description against "
             "the facts below."
         )
+    unverified = ", ".join(f"`{name}`" for name in doc.unverified_names)
+    if unverified:
+        return (
+            f"**Draft with unverified names, not reviewed.** Written by {model}; it names "
+            f"things that are not in the facts ({unverified}). Check it before relying on it."
+        )
     if state is DocState.EDITED:
         return f"**Edited draft, not yet approved.** First written by {model}."
     return (

@@ -74,6 +74,10 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
   prompt, sized to `--num-ctx`; every
   identifier-shaped name in the answer must occur in the facts sent; the disclosure scan must pass;
   one corrective retry; otherwise the answer is rejected. Only validated drafts are cached.
+  Owner decision (M12): with `describe --keep-unverified`, an answer that passes the disclosure
+  scan but still names things outside the facts after the retry is written as a draft marked
+  `unverified_names` (front matter and a notice); it is never cached, is asked again on the
+  next run, is not used as callee context, and approving it clears the mark.
   For adapter and other opaque services the tool, not the model, writes Main steps and Error
   handling.
 - Facts are never inferred from names. Every data-effect row states how it is known. Artifact
@@ -120,7 +124,8 @@ Mermaid, JavaScript graph viewers, static-site frameworks, ZIP publishing.
   key names such as `password`, `passwd`, `token`, `access_token`, `api-key`, and bearer values.
 - Do not expose secret values from package files.
 - Never persist raw prompts, raw model responses, provider URLs, auth material, chain-of-thought,
-  or invalid model output. A server token is read from the environment variable named by
+  or invalid model output (except the marked unverified drafts above, kept on request). A
+  server token is read from the environment variable named by
   `--api-key-env`, never from a flag, and is only sent over https or to loopback.
 - Developer `<COMMENT>` text from `flow.xml` is used in prompts only, through the free-text policy,
   and is not added to `analysis.json`.

@@ -316,6 +316,73 @@ def test_answer_that_stays_unsafe_is_rejected(samples: AnalysisResult, tmp_path:
     assert not _doc_file(tmp_path, READ_CONFIG).exists()
 
 
+def _invents(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
+    answer = grounded(name, request)
+    answer["data_effects"] = "Writes rows to customerAccountTable."
+    return answer
+
+
+def test_keep_unverified_writes_a_marked_draft(samples: AnalysisResult, tmp_path: Path) -> None:
+    from wm_doc.render.service_markdown import doc_badge
+
+    options = _options(tmp_path, keep_unverified=True)
+    provider = FakeProvider(_invents)
+
+    results, stats = describe_services(samples, [READ_CONFIG], provider, options)
+
+    assert results[0].outcome is DescribeOutcome.UNVERIFIED
+    assert stats.counts[DescribeOutcome.UNVERIFIED] == 1
+    path = _doc_file(tmp_path, READ_CONFIG)
+    text = path.read_text(encoding="utf-8")
+    assert "unverified_names:\n- customerAccountTable\n" in text
+    assert (
+        "> **Unverified draft:** the model used names that are not in the facts: "
+        "`customerAccountTable`. Check them before approving."
+    ) in text
+    doc = read_doc(path)
+    assert doc is not None and doc.state() is DocState.DRAFT
+    assert doc.purpose_line() == f"Handles the work of `{READ_CONFIG}`."
+    assert "unverified names" in doc_badge(doc)
+
+    # Not cached: the next run asks the model again instead of keeping the draft.
+    describe_services(samples, [READ_CONFIG], provider, options)
+    assert len(provider.requests) == 4
+
+    approve_docs(tmp_path / "service-docs", services=[READ_CONFIG])
+    approved = path.read_text(encoding="utf-8")
+    assert "unverified" not in approved.casefold()
+    assert "status: approved" in approved
+
+
+def test_keep_unverified_never_keeps_an_unsafe_answer(
+    samples: AnalysisResult, tmp_path: Path
+) -> None:
+    def leaks(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
+        answer = grounded(name, request)
+        answer["data_effects"] = "Reads jdbc:mysql://dbhost/orders."
+        return answer
+
+    results, _ = describe_services(
+        samples, [READ_CONFIG], FakeProvider(leaks), _options(tmp_path, keep_unverified=True)
+    )
+
+    assert results[0].outcome is DescribeOutcome.REJECTED
+    assert not _doc_file(tmp_path, READ_CONFIG).exists()
+
+
+def test_verified_answer_replaces_an_unverified_draft(
+    samples: AnalysisResult, tmp_path: Path
+) -> None:
+    options = _options(tmp_path, keep_unverified=True)
+    describe_services(samples, [READ_CONFIG], FakeProvider(_invents), options)
+
+    results, _ = describe_services(samples, [READ_CONFIG], FakeProvider(), options)
+
+    assert results[0].outcome is DescribeOutcome.GENERATED
+    text = _doc_file(tmp_path, READ_CONFIG).read_text(encoding="utf-8")
+    assert "unverified" not in text.casefold()
+
+
 def test_provider_failure_is_reported_per_service(
     samples: AnalysisResult, tmp_path: Path
 ) -> None:
