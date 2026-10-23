@@ -840,7 +840,7 @@ def test_analyze_cli_writes_expected_outputs(tmp_path) -> None:
     assert len(list((output / "services").glob("*.md"))) == 35
     assert len(list((output / "documents").glob("*.md"))) == 7
     assert not (output / "processes").exists()
-    assert sum(1 for path in output.rglob("*") if path.is_file()) == 52  # + artifacts, packages
+    assert sum(1 for path in output.rglob("*") if path.is_file()) == 53  # + site pages
 
 
 def test_pgp_and_synthetic_fixture_formats_differ() -> None:

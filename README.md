@@ -41,8 +41,9 @@ Point the commands at the server's `packages` directory, or a copy of it.
 
 1. **See what is there.** `stats` prints counts and names (no code or values): packages, services
    by kind, disabled FLOW steps, artifact types, FLOW elements the parser does not interpret
-   yet, platform services missing from the effect catalog, calls leaving the analysed packages,
-   and the largest services.
+   yet, every platform service missing from the catalog, calls leaving the analysed packages
+   (and whether their targets exist in the folder as something other than a service), and the
+   largest services.
 
    ```powershell
    wm-doc stats D:\IntegrationServer\instances\default\packages --output stats.md
@@ -59,6 +60,13 @@ Point the commands at the server's `packages` directory, or a copy of it.
 2. **Declare what the code calls but does not contain.** Copy `examples/external-systems.yml`
    and map namespace patterns from the stats report to system names. Optionally list your
    business processes in `processes.yml` (see `docs/format-behavior.md`).
+
+   Platform services (`pub.*`, `wm.*` from WmPublic, WmART, WmJDBCAdapter, ...) are described
+   by a catalog shipped with the tool (`src/wm_doc/data/platform_services.yml`, about 300
+   services). If `stats` lists some as missing, describe them in your own file (see
+   `examples/platform-services.yml`) and pass it with `--platform-services` to `stats`,
+   `analyze`, `describe`, `overview` and `status`. A changed description changes the facts:
+   unapproved drafts are redrafted, and approved ones show as "approved, facts changed".
 
 3. **Check the model server.**
 
@@ -165,7 +173,8 @@ Everything below is read from package files. Each "data and systems" row says ho
 | Calls | FLOW `INVOKE` and transformer (`MAPINVOKE`) steps; statically confirmed Java `Service.doInvoke` calls. Steps marked disabled in Designer are left out and counted |
 | Signatures | `node.ndf`, or the specification named by `svc_spec` |
 | Error handling | TRY/CATCH, try/catch sequences, REPEAT on failure, EXIT with failure, `pub.flow:getLastError` (FLOW only; Java and opaque services say "not analysed") |
-| Published documents, HTTP/SOAP endpoints, JMS destinations, files, FTP/SFTP, email, storage | the documented input field of the platform service, when the FLOW sets it as a literal or maps it from the pipeline |
+| Platform service calls | the platform catalog (shipped, plus `--platform-services`): a one-line description and an effect family |
+| Published documents, HTTP/REST/SOAP endpoints, LDAP entries, JMS destinations, files, FTP/SFTP, email, storage | the documented input field of the platform service, when the FLOW sets it as a literal or maps it from the pipeline |
 | JDBC adapter services | operation template, tables and connection, decoded from the service's configuration; the connection's database product, database name and transaction type. Server, port, user, password, URL and SQL are never read |
 | Other opaque services | name, signature, and connections their `node.ndf` names |
 | Entry points | triggers (JMS or webMethods messaging, with their queues, topics, JMS alias and subscribed documents, and the JDBC adapter notification that publishes a subscribed document), REST/SOAP descriptors and other artifacts whose `node.ndf` contains a service's exact name; legacy REST v1 handlers (`_get`, `_post`, ... at `/rest/<namespace as path>`); `processes.yml`; callers that nothing calls |
@@ -210,7 +219,8 @@ operation, or "Not analysed") and the error handling ("not analysed").
 
 `wm-doc analyze` writes `analysis.json` (schema `analysis.v11`; each fact is stored once, on
 the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,
-`entrypoints.md`, `artifacts.md`, `packages/*.md`, `services/*.md`, `documents/*.md`,
+`entrypoints.md`, `artifacts.md`, `platform-services.md` (platform services the code calls,
+with their descriptions and callers), `packages/*.md`, `services/*.md`, `documents/*.md`,
 `graphs/*.dot` and `graphs/index.md`, `processes/*.md` when processes are declared,
 `service-catalogue.md` with `--docs-dir`, and with `--render-graphs` SVG/PNG graphs plus one call
 graph per service (`graphs/services/`). Before writing it removes only these generated files and
