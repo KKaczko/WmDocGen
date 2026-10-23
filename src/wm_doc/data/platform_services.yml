@@ -893,6 +893,9 @@ services:
   - name: pub.security.outboundPasswords:setPassword
     description: "stores an outbound password"
     family: SECURITY
+  - name: pub.security.outboundPasswords:updatePassword
+    description: "changes a stored outbound password"
+    family: SECURITY
 
   # pub.security.pki
   - name: pub.security.pki:sign
@@ -903,9 +906,34 @@ services:
     family: SECURITY
 
   # pub.security.util
+  - name: pub.security.util:convertSecureString
+    description: "converts a secure string holding a sensitive value"
+    family: SECURITY
   - name: pub.security.util:createMessageDigest
     description: "hashes data"
     family: SECURITY
+  - name: pub.security.util:createSecureString
+    description: "creates a secure string for a sensitive value"
+    family: SECURITY
+  - name: pub.security.util:destroySecureString
+    description: "destroys a secure string"
+    family: SECURITY
+
+  # pub.security
+  - name: pub.security:encrypt
+    description: "encrypts data"
+    family: SECURITY
+
+  # pub.soap.handler
+  - name: pub.soap.handler:getSOAPMessage
+    description: "reads the SOAP message inside a SOAP handler"
+    family: XML
+  - name: pub.soap.handler:registerWmConsumer
+    description: "registers a SOAP consumer handler"
+    family: SERVER_ADMIN
+  - name: pub.soap.handler:unregisterConsumer
+    description: "unregisters a SOAP consumer handler"
+    family: SERVER_ADMIN
 
   # pub.soap.utils
   - name: pub.soap.utils:addHeaderEntry
@@ -1171,6 +1199,11 @@ services:
     description: "reads the configuration of an adapter connection (internal service)"
     family: SERVER_ADMIN
 
+  # wm.art.dev.connection
+  - name: wm.art.dev.connection:createConnectionNode
+    description: "creates an adapter connection (internal service)"
+    family: SERVER_ADMIN
+
   # wm.b2b.edi.util
   - name: wm.b2b.edi.util:convertToValues
     description: "parses an EDI document"
@@ -1183,6 +1216,16 @@ services:
   - name: wm.b2b.edi:convertToValues
     description: "parses an EDI document"
     family: FLAT_FILE
+
+  # wm.monitor.util
+  - name: wm.monitor.util:getCurrentUser
+    description: "reads the current user (internal service)"
+    family: SECURITY
+
+  # wm.server.access
+  - name: wm.server.access:userList
+    description: "lists the server's users (internal service)"
+    family: SERVER_ADMIN
 
   # wm.server.globalvariables
   - name: wm.server.globalvariables:addGlobalVariable
@@ -1213,10 +1256,30 @@ services:
   - name: wm.server.packages:getPackageStatus
     description: "reads the status of a package"
     family: SERVER_ADMIN
+  - name: wm.server.packages:packageActivate
+    description: "activates a package (internal service)"
+    family: SERVER_ADMIN
+  - name: wm.server.packages:packageCreate
+    description: "creates a package (internal service)"
+    family: SERVER_ADMIN
+  - name: wm.server.packages:packageInfo
+    description: "reads the details of a package (internal service)"
+    family: SERVER_ADMIN
+  - name: wm.server.packages:packageList
+    description: "lists the server's packages (internal service)"
+    family: SERVER_ADMIN
 
   # wm.server.ports
   - name: wm.server.ports:listListeners
     description: "lists the server's ports"
+    family: SERVER_ADMIN
+
+  # wm.server.query
+  - name: wm.server.query:getServiceStats
+    description: "reads service usage statistics (internal service)"
+    family: SERVER_ADMIN
+  - name: wm.server.query:getStats
+    description: "reads server statistics (internal service)"
     family: SERVER_ADMIN
 
   # wm.server.ui

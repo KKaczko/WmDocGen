@@ -64,6 +64,24 @@ PRODUCTION_NAMES = (
     "pub.scheduler:getTaskInfo",
     "pub.scheduler:getUserTaskList",
     "pub.scheduler:resumeTask",
+    # Second production run.
+    "pub.security.outboundPasswords:updatePassword",
+    "pub.security.util:convertSecureString",
+    "pub.security.util:createSecureString",
+    "pub.security.util:destroySecureString",
+    "pub.security:encrypt",
+    "pub.soap.handler:getSOAPMessage",
+    "pub.soap.handler:registerWmConsumer",
+    "pub.soap.handler:unregisterConsumer",
+    "wm.art.dev.connection:createConnectionNode",
+    "wm.monitor.util:getCurrentUser",
+    "wm.server.access:userList",
+    "wm.server.packages:packageActivate",
+    "wm.server.packages:packageCreate",
+    "wm.server.packages:packageInfo",
+    "wm.server.packages:packageList",
+    "wm.server.query:getServiceStats",
+    "wm.server.query:getStats",
 )
 
 FLOW_NODE = """<Values version="2.0">
