@@ -62,8 +62,9 @@ Point the commands at the server's `packages` directory, or a copy of it.
    business processes in `processes.yml` (see `docs/format-behavior.md`).
 
    Platform services (`pub.*`, `wm.*` from WmPublic, WmART, WmJDBCAdapter, ...) are described
-   by a catalog shipped with the tool (`src/wm_doc/data/platform_services.yml`, about 300
-   services). If `stats` lists some as missing, describe them in your own file (see
+   by a catalog shipped with the tool (`src/wm_doc/data/platform_services.yml`, about 660
+   services: every service in the Integration Server 10.15 Built-In Services Reference, plus the
+   WmJDBCAdapter, EDI and `wm.server.*` services seen in real packages). If `stats` lists some as missing, describe them in your own file (see
    `examples/platform-services.yml`) and pass it with `--platform-services` to `stats`,
    `analyze`, `describe`, `overview` and `status`. A changed description changes the facts:
    unapproved drafts are redrafted, and approved ones show as "approved, facts changed".

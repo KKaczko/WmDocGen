@@ -129,8 +129,49 @@ def test_shipped_catalog_covers_the_production_list() -> None:
     missing = [name for name in PRODUCTION_NAMES if builtin_effect(name) is None]
 
     assert missing == []
-    assert len(SHIPPED_SERVICES) > 250
+    assert len(SHIPPED_SERVICES) > 650
     assert all(0 < len(effect.label) <= 120 for effect in SHIPPED_SERVICES.values())
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "pub.alert:emit",
+        "pub.cache.admin:clearCache",
+        "pub.db:query",
+        "pub.jwt:verifyJWT",
+        "pub.mime:createMimeData",
+        "pub.mqtt:publish",
+        "pub.parquet:write",
+        "pub.remote.gd:submit",
+        "pub.smime:processSignedData",
+        "pub.soap.wsrm:createSequence",
+        "pub.websocket:send",
+        "pub.xmldata:xmlDataToXMLString",
+        "pub.xslt.Transformations:transformSerialXML",
+    ],
+)
+def test_catalog_covers_every_reference_folder(name: str) -> None:
+    assert builtin_effect(name) is not None
+
+
+def test_pub_db_query_is_a_database_effect(tmp_path: Path) -> None:
+    _flow(
+        tmp_path,
+        "orders.legacy",
+        "readOrders",
+        _invoke("pub.db:query", _set("$dbAlias", "ordersDb"), _set("$dbTable", "ORDERS")),
+    )
+    analysis = analyze_path(tmp_path, load_config(None))
+
+    facts = compute_service_facts(analysis, ExternalSystemCatalog())["orders.legacy:readOrders"]
+    assert [(e.action, e.object, e.where) for e in facts.effects] == [
+        (
+            "selects rows from a database table",
+            "table rows `ORDERS`",
+            "database: $dbAlias `ordersDb`",
+        )
+    ]
 
 
 def test_rest_client_call_becomes_a_data_effect(tmp_path: Path) -> None:

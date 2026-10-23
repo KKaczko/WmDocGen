@@ -29,6 +29,7 @@ class BuiltinFamily(StrEnum):
     """Coarse effect family used to derive a service layer and summary sentence."""
 
     TRANSACTION = "TRANSACTION"
+    DATABASE = "DATABASE"
     MESSAGING = "MESSAGING"
     REMOTE = "REMOTE"
     FILE = "FILE"
@@ -58,6 +59,7 @@ FAMILY_RANK: dict[BuiltinFamily, int] = {
     for rank, family in enumerate(
         (
             BuiltinFamily.TRANSACTION,
+            BuiltinFamily.DATABASE,
             BuiltinFamily.MESSAGING,
             BuiltinFamily.REMOTE,
             BuiltinFamily.FILE,
