@@ -1,14 +1,16 @@
 """Reuse the last analysis of a packages directory when none of its files changed.
 
 `stats`, `analyze`, `describe`, `status` and `probe-shapes` all start from a full analysis,
-which takes minutes for a server with a couple of thousand services but only about a second
-to reload. The cache key is a fingerprint of the tool and schema version, the configuration,
+which takes minutes for a server with a couple of thousand services but only seconds to
+reload. The cache key is a fingerprint of the tool and schema version, the configuration,
 the explicit `processes.yml`, and every file under the packages directory (relative path, size,
 modification time). Any change to a file therefore triggers a fresh analysis.
 
-One entry is kept per packages directory and configuration, stored as gzip-compressed
-`analysis.json` content in the user's cache folder. It holds the same data as `analysis.json`;
-a damaged or unreadable entry is ignored and rebuilt.
+One entry is kept per packages directory and configuration, in the user's cache folder: a
+gzip-compressed file with one JSON line for the server-wide part of the analysis and one line
+per package. It is written and read one package at a time, so the cache never holds a second
+copy of a large server in memory. It contains the same data as `analysis.json`; a damaged or
+unreadable entry is ignored and rebuilt.
 """
 
 from __future__ import annotations
@@ -24,9 +26,10 @@ from pydantic import ValidationError
 from wm_doc import __version__
 from wm_doc.analysis import analyze_path
 from wm_doc.config import AppConfig
-from wm_doc.ir import ANALYSIS_SCHEMA_VERSION, AnalysisResult
+from wm_doc.ir import ANALYSIS_SCHEMA_VERSION, AnalysisResult, AnalyzedPackage
 
-CACHE_FORMAT = "analysis-cache.v1"
+CACHE_FORMAT = "analysis-cache.v2"
+CACHE_SUFFIX = ".jsonl.gz"
 CACHE_DIR_ENV = "WM_DOC_ANALYSIS_CACHE_DIR"
 
 
@@ -102,7 +105,7 @@ def analyze_cached(
         ).encode("utf-8")
     ).hexdigest()[:20]
     fingerprint = input_fingerprint(root, config, processes_file, processes_file_explicit)
-    entry = cache_dir / f"{owner}-{fingerprint[:32]}.json.gz"
+    entry = cache_dir / f"{owner}-{fingerprint[:32]}{CACHE_SUFFIX}"
     cached = _load(entry)
     if cached is not None:
         return cached, True
@@ -115,25 +118,42 @@ def analyze_cached(
 
 def _load(entry: Path) -> AnalysisResult | None:
     try:
-        payload = gzip.decompress(entry.read_bytes())
-        analysis = AnalysisResult.model_validate_json(payload)
-    except (OSError, EOFError, ValueError, ValidationError):
+        with gzip.open(entry, "rt", encoding="utf-8") as handle:
+            header = json.loads(handle.readline())
+            if header.get("format") != CACHE_FORMAT:
+                return None
+            analysis = AnalysisResult.model_validate_json(handle.readline())
+            packages = [
+                AnalyzedPackage.model_validate_json(handle.readline())
+                for _ in range(int(header["packages"]))
+            ]
+            if handle.readline():
+                return None  # more lines than the header announced
+    except (OSError, EOFError, ValueError, KeyError, TypeError, ValidationError):
         return None
     if analysis.schema_version != ANALYSIS_SCHEMA_VERSION:
         return None
-    return analysis
+    return analysis.model_copy(update={"packages": packages})
 
 
 def _store(cache_dir: Path, owner: str, entry: Path, analysis: AnalysisResult) -> None:
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        data = gzip.compress(
-            analysis.model_dump_json(exclude_none=True).encode("utf-8"), compresslevel=1
-        )
-        temp = entry.with_suffix(".tmp")
-        temp.write_bytes(data)
+        temp = entry.with_name(entry.name + ".tmp")
+        with gzip.open(temp, "wt", encoding="utf-8", compresslevel=1) as handle:
+            header = {"format": CACHE_FORMAT, "packages": len(analysis.packages)}
+            handle.write(json.dumps(header) + "\n")
+            handle.write(analysis.model_dump_json(exclude_none=True, exclude={"packages"}))
+            handle.write("\n")
+            for package in analysis.packages:
+                handle.write(package.model_dump_json(exclude_none=True) + "\n")
         os.replace(temp, entry)
-        for stale in cache_dir.glob(f"{owner}-*.json.gz"):
+        # `*.json.gz` entries are the single-document format of earlier versions.
+        stale_entries = [
+            *cache_dir.glob(f"{owner}-*.json.gz"),
+            *cache_dir.glob(f"{owner}-*{CACHE_SUFFIX}"),
+        ]
+        for stale in stale_entries:
             if stale != entry:
                 stale.unlink(missing_ok=True)
     except OSError:

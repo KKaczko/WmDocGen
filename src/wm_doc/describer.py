@@ -23,7 +23,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -315,8 +315,13 @@ def current_facts_hashes(
     scan_root: Path,
     config: AppConfig,
     external_systems: ExternalSystemCatalog = EMPTY_CATALOG,
+    *,
+    facts: Mapping[str, ServiceFacts] | None = None,
+    only: Collection[str] | None = None,
 ) -> dict[str, str]:
-    facts = compute_service_facts(analysis, external_systems)
+    """Facts hash per service; `only` limits the work to services that have a description."""
+    if facts is None:
+        facts = compute_service_facts(analysis, external_systems)
 
     def external_note(target: str) -> str | None:
         system = external_systems.match(target)
@@ -326,6 +331,8 @@ def current_facts_hashes(
     for package in analysis.packages:
         for service in package.services:
             name = service.identity.full_name
+            if only is not None and name not in only:
+                continue
             comments = load_flow_comments(scan_root, service, config)
             hashes[name] = facts_hash(
                 deterministic_facts(service, facts[name], comments, external_note)

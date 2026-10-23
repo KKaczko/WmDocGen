@@ -116,6 +116,7 @@ from wm_doc.scope_analysis import (
 )
 from wm_doc.service_docs import (
     DocState,
+    doc_path,
     iter_docs,
     load_service_docs,
     overview_doc_path,
@@ -1041,11 +1042,18 @@ def status(
     external_catalog = _load_external_systems_or_exit(external_systems_file)
     _use_platform_services_or_exit(platform_services_file)
     analysis = _analyze(packages_path, app_config, no_cache=no_analysis_cache)
-    hashes = current_facts_hashes(analysis, packages_path, app_config, external_catalog)
-    states = collect_states(analysis, docs_dir, hashes)
-    overviews = overview_states(
-        analysis, docs_dir, compute_service_facts(analysis, external_catalog)
+    facts = compute_service_facts(analysis, external_catalog)
+    # Only services with a description file need their facts hashed; the rest are "missing".
+    described = {
+        service.identity.full_name
+        for service in analysis.services
+        if doc_path(docs_dir, service.identity.package, service.identity.full_name).is_file()
+    }
+    hashes = current_facts_hashes(
+        analysis, packages_path, app_config, external_catalog, facts=facts, only=described
     )
+    states = collect_states(analysis, docs_dir, hashes)
+    overviews = overview_states(analysis, docs_dir, facts)
     orphans = sorted(
         (
             doc.service
