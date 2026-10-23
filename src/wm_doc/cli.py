@@ -66,7 +66,7 @@ from wm_doc.overviews import (
     summarize_packages,
 )
 from wm_doc.provider_probe import probe_provider
-from wm_doc.render.analysis_json import render_analysis_json
+from wm_doc.render.analysis_json import write_analysis_json
 from wm_doc.render.artifact_markdown import write_artifact_inventory
 from wm_doc.render.catalogue_markdown import SERVICE_CATALOGUE, write_service_catalogue
 from wm_doc.render.document_markdown import write_document_markdown
@@ -1126,7 +1126,7 @@ def _write_full_outputs(
     except OutputCleanupError as exc:
         typer.echo(f"Output cleanup failed: {exc.safe_message}", err=True)
         raise typer.Exit(code=1) from exc
-    (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
+    write_analysis_json(output / "analysis.json", analysis)
     services = [service for package in analysis.packages for service in package.services]
     documents = [document for package in analysis.packages for document in package.document_types]
     service_docs = load_service_docs(docs_dir, services) if docs_dir is not None else {}
@@ -1289,7 +1289,7 @@ def _write_scoped_outputs(
         typer.echo(f"Output cleanup failed: {exc.safe_message}", err=True)
         raise typer.Exit(code=1) from exc
 
-    (output / "analysis.json").write_text(render_analysis_json(analysis), encoding="utf-8")
+    write_analysis_json(output / "analysis.json", analysis)
     write_analysis_limitations(output)
     write_scope_json(output, scope)
     write_scope_markdown(output, scope)
