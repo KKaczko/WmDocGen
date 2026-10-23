@@ -30,6 +30,7 @@ _MECHANISM_TEXT: dict[str, str] = {
 # much they matter to a reader deciding whether this service is business-critical.
 _NOTABLE_FAMILIES: tuple[BuiltinFamily, ...] = (
     BuiltinFamily.TRANSACTION,
+    BuiltinFamily.DATABASE,
     BuiltinFamily.MESSAGING,
     BuiltinFamily.REMOTE,
     BuiltinFamily.FILE,
@@ -39,6 +40,7 @@ _NOTABLE_FAMILIES: tuple[BuiltinFamily, ...] = (
 
 _FAMILY_LAYER: dict[BuiltinFamily, str] = {
     BuiltinFamily.TRANSACTION: "DATA_ACCESS",
+    BuiltinFamily.DATABASE: "DATA_ACCESS",
     BuiltinFamily.MESSAGING: "MESSAGING",
     BuiltinFamily.REMOTE: "INTEGRATION",
     BuiltinFamily.FILE: "FILE_IO",
