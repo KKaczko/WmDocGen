@@ -4,12 +4,13 @@ For every service this answers, from analysed facts only:
 
 - **Used by**: its direct callers, and the entry points that reach it -- triggers, REST or
   SOAP descriptors and other artifacts whose node.ndf names a service on the call path,
-  declared `processes.yml` entrypoints, and callers that nothing in the analysed packages
-  calls.
+  legacy REST v1 handlers (`_get`, `_post`, ... at `/rest/<namespace as path>`), declared
+  `processes.yml` entrypoints, and callers that nothing in the analysed packages calls.
 - **Data and systems touched**: documents in its signature; platform calls that move data
   (publish, JMS, HTTP, SOAP, files, FTP/SFTP, email, storage) with the object and location
-  read from the literal or mapped value of the documented input field; calls to opaque
-  services such as adapter services, with the connections their node.ndf names; calls that
+  read from the literal or mapped value of the documented input field; JDBC adapter
+  services with the operation, tables and connection decoded from their configuration;
+  other opaque services, with the connections their node.ndf names; calls that
   leave the analysed packages, named after a declared external system when one matches.
   Effects of local callees are included with the call chain ("via").
 
@@ -23,10 +24,13 @@ from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
+from wm_doc.adapters import operation_phrase
 from wm_doc.builtins import BuiltinEffect, builtin_effect, is_builtin_name
 from wm_doc.callgraph import summary_order
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
 from wm_doc.ir import (
+    AdapterDetails,
+    AdapterRole,
     AnalysisResult,
     FlowService,
     Importance,
@@ -36,8 +40,10 @@ from wm_doc.ir import (
     ReferenceTargetKind,
     ServiceDocumentUsageRole,
     ServiceType,
+    TriggerDetails,
 )
 from wm_doc.pseudocode import clean_pipeline_path
+from wm_doc.triggers import trigger_summary
 
 MAX_VIA_DEPTH = 6
 MAX_EFFECTS = 40
@@ -46,6 +52,18 @@ MAX_ENTRY_POINTS_IN_TEXT = 6
 MAX_ENTRY_DEPTH = 12
 MAX_CALLERS_SHOWN = 10
 INPUT_MAP_MODES = {"INPUT", "INVOKEINPUT"}
+ADAPTER_KNOWN_FROM = "adapter service configuration"
+REST_V1_KIND = "REST v1 handler"
+# IS REST v1: a folder is a resource at /rest/<folder path>; services with these names
+# handle the HTTP methods.
+REST_V1_HANDLERS = {
+    "_get": "GET",
+    "_post": "POST",
+    "_put": "PUT",
+    "_patch": "PATCH",
+    "_delete": "DELETE",
+    "_default": "any other method",
+}
 
 
 @dataclass(frozen=True)
@@ -118,8 +136,13 @@ def compute_service_facts(
         for service in package.services
     }
     connections = _connections_by_source(analysis)
+    adapter_connections = {
+        artifact.full_name: artifact.adapter
+        for artifact in analysis.namespace_artifacts
+        if artifact.adapter is not None and artifact.adapter.role is AdapterRole.CONNECTION
+    }
     own = {
-        name: _own_effects(service, services, connections, external_systems)
+        name: _own_effects(service, services, connections, external_systems, adapter_connections)
         for name, service in services.items()
     }
     effects = _transitive_effects(services, own)
@@ -154,8 +177,11 @@ def _own_effects(
     services: dict[str, FlowService],
     connections: dict[str, list[str]],
     external_systems: ExternalSystemCatalog,
+    adapter_connections: dict[str, AdapterDetails] | None = None,
 ) -> list[DataEffect]:
     effects: list[DataEffect] = []
+    if service.adapter is not None:
+        effects.append(adapter_effect(service.adapter, adapter_connections or {}))
     for dependency in sorted(
         service.service_document_dependencies, key=lambda item: item.target_document.casefold()
     ):
@@ -188,7 +214,13 @@ def _own_effects(
             continue  # helpers such as *utils* (see the classification config) move no data
         if resolved.get(target, call.resolved):
             callee = services.get(target)
-            if callee is not None and callee.service_type is ServiceType.OPAQUE:
+            # An adapter service with a decoded configuration brings its own table effect
+            # through the call chain instead.
+            if (
+                callee is not None
+                and callee.service_type is ServiceType.OPAQUE
+                and callee.adapter is None
+            ):
                 effects.append(_opaque_effect(callee, connections))
             continue
         system = external_systems.match(target)
@@ -290,6 +322,42 @@ def _short(text: str, limit: int = 120) -> str:
     return flat if len(flat) <= limit else flat[: limit - 3] + "..."
 
 
+def adapter_effect(
+    details: AdapterDetails, adapter_connections: dict[str, AdapterDetails]
+) -> DataEffect:
+    """What a JDBC adapter service does, from its decoded configuration."""
+    tables = details.tables
+    if not tables:
+        target = "database"
+    elif len(tables) == 1:
+        target = f"table `{tables[0]}`"
+    else:
+        target = "tables " + ", ".join(f"`{table}`" for table in tables)
+    return DataEffect(
+        target,
+        operation_phrase(details),
+        connection_label(details.connection, adapter_connections),
+        ADAPTER_KNOWN_FROM,
+    )
+
+
+def connection_label(
+    connection: str | None, adapter_connections: dict[str, AdapterDetails]
+) -> str:
+    """The database a connection reaches, with its product and database name when known."""
+    if not connection:
+        return "database (connection not determined)"
+    details = adapter_connections.get(connection)
+    extra: list[str] = []
+    if details is not None:
+        if details.database_product:
+            extra.append(details.database_product)
+        if details.database_name:
+            extra.append(f"database `{details.database_name}`")
+    suffix = f" ({', '.join(extra)})" if extra else ""
+    return f"database: connection `{connection}`{suffix}"
+
+
 def _opaque_effect(callee: FlowService, connections: dict[str, list[str]]) -> DataEffect:
     service_type = callee.source_service_type or "opaque"
     found = connections.get(callee.identity.full_name, [])
@@ -353,11 +421,42 @@ def _callers(services: dict[str, FlowService]) -> dict[str, set[str]]:
     return callers
 
 
+def rest_v1_method(full_name: str) -> str | None:
+    """The HTTP method a legacy REST handler serves (`_get` -> GET), or None."""
+    namespace, _, name = full_name.rpartition(":")
+    return REST_V1_HANDLERS.get(name) if namespace else None
+
+
+def rest_v1_endpoint(full_name: str) -> str | None:
+    """`HTTP POST /rest/orders/api` for `orders.api:_post`, or None for other services."""
+    method = rest_v1_method(full_name)
+    if method is None:
+        return None
+    path = "/rest/" + full_name.rpartition(":")[0].replace(".", "/")
+    if method.startswith("any"):
+        return f"{path} (any other HTTP method)"
+    return f"HTTP {method} {path}"
+
+
 def entry_markers(analysis: AnalysisResult) -> dict[str, list[tuple[str, str]]]:
     markers: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for service in analysis.services:
+        endpoint = rest_v1_endpoint(service.identity.full_name)
+        if endpoint is not None:
+            markers[service.identity.full_name].append((REST_V1_KIND, f"`{endpoint}`"))
+    triggers = {
+        artifact.full_name: artifact.trigger
+        for artifact in analysis.namespace_artifacts
+        if artifact.trigger is not None
+    }
+    publishers = notification_publishers(analysis)
     for reference in analysis.artifact_references:
         if reference.target_kind is ReferenceTargetKind.SERVICE:
-            marker = (reference.source_kind, f"`{reference.source_name}`")
+            trigger = triggers.get(reference.source_name)
+            if trigger is not None:
+                marker = (trigger.kind, _trigger_marker(reference.source_name, trigger, publishers))
+            else:
+                marker = (reference.source_kind, f"`{reference.source_name}`")
             if marker not in markers[reference.target_name]:
                 markers[reference.target_name].append(marker)
     names = {process.process_id: process.name for process in analysis.processes}
@@ -367,6 +466,35 @@ def entry_markers(analysis: AnalysisResult) -> dict[str, list[tuple[str, str]]]:
             if marker not in markers[entrypoint.resolved_service]:
                 markers[entrypoint.resolved_service].append(marker)
     return markers
+
+
+def _trigger_marker(name: str, trigger: TriggerDetails, publishers: dict[str, str]) -> str:
+    parts = [trigger_summary(trigger)] if trigger_summary(trigger) else []
+    parts += sorted(
+        {
+            publishers[item.document_type]
+            for item in trigger.subscriptions
+            if item.document_type in publishers
+        },
+        key=str.casefold,
+    )
+    return f"`{name}`" + (f" ({'; '.join(parts)})" if parts else "")
+
+
+def notification_publishers(analysis: AnalysisResult) -> dict[str, str]:
+    """Document type -> the JDBC adapter notification that publishes it."""
+    publishers: dict[str, str] = {}
+    for artifact in analysis.namespace_artifacts:
+        details = artifact.adapter
+        if details is None or details.published_document is None:
+            continue
+        tables = ", ".join(f"table `{table}`" for table in details.tables)
+        on = f" on {tables}" if tables else ""
+        kind = details.operation or "notification"
+        publishers[details.published_document] = (
+            f"published by JDBC adapter notification `{artifact.full_name}` ({kind}{on})"
+        )
+    return publishers
 
 
 def _entry_points(

@@ -11,7 +11,9 @@ time and are not written back into the canonical snapshot.
 
 from __future__ import annotations
 
+from wm_doc.adapters import operation_phrase
 from wm_doc.builtins import FAMILY_RANK, BuiltinFamily, builtin_effect, is_builtin_name
+from wm_doc.effects import ADAPTER_KNOWN_FROM, ServiceFacts
 from wm_doc.ir import FlowNode, FlowNodeType, FlowService, ServiceType, SignatureField
 
 # Families that describe how a service copes with failure or traces itself, not what it does.
@@ -31,6 +33,7 @@ _NOTABLE_FAMILIES: tuple[BuiltinFamily, ...] = (
     BuiltinFamily.MESSAGING,
     BuiltinFamily.REMOTE,
     BuiltinFamily.FILE,
+    BuiltinFamily.SERVER_ADMIN,
     BuiltinFamily.SECURITY,
 )
 
@@ -39,6 +42,7 @@ _FAMILY_LAYER: dict[BuiltinFamily, str] = {
     BuiltinFamily.MESSAGING: "MESSAGING",
     BuiltinFamily.REMOTE: "INTEGRATION",
     BuiltinFamily.FILE: "FILE_IO",
+    BuiltinFamily.SERVER_ADMIN: "ADMINISTRATION",
     BuiltinFamily.SECURITY: "SECURITY",
     BuiltinFamily.SCHEMA: "VALIDATION",
     BuiltinFamily.XML: "TRANSFORMATION",
@@ -187,6 +191,8 @@ def derived_layer(service: FlowService) -> str | None:
     This replaces the ``UNKNOWN`` that pattern-based classification produces for
     almost every service in a real package.
     """
+    if service.adapter is not None:
+        return "DATA_ACCESS"
     families = set(service_effect_families(service))
     for family in _NOTABLE_FAMILIES:
         if family in families:
@@ -198,9 +204,41 @@ def derived_layer(service: FlowService) -> str | None:
     return None
 
 
-def render_service_summary(service: FlowService) -> str:
+def adapter_sentence(service: FlowService) -> str | None:
+    """`JDBC adapter service: selects rows from table `x` through connection `y`.`"""
+    details = service.adapter
+    if details is None:
+        return None
+    tables = ", ".join(f"`{table}`" for table in details.tables)
+    target = f" table{'s' if len(details.tables) > 1 else ''} {tables}" if tables else ""
+    through = f" through connection `{details.connection}`" if details.connection else ""
+    template = f" (template `{details.operation}`)" if details.operation else ""
+    return f"JDBC adapter service{template}: {operation_phrase(details)}{target}{through}."
+
+
+def _adapter_call_sentence(facts: ServiceFacts | None) -> str | None:
+    """Database operations of the adapter services this service calls directly."""
+    if facts is None:
+        return None
+    parts: list[str] = []
+    for effect in facts.effects:
+        if effect.known_from == ADAPTER_KNOWN_FROM and len(effect.via) == 1:
+            text = f"{effect.action} {effect.object}"
+            if text not in parts:
+                parts.append(text)
+    if not parts:
+        return None
+    sentence = "Through adapter services it " + _join(parts[:3])
+    if len(parts) > 3:
+        sentence += f", and {len(parts) - 3} more database operation(s)"
+    return sentence + "."
+
+
+def render_service_summary(service: FlowService, facts: ServiceFacts | None = None) -> str:
     """Build the plain-language summary paragraph for one service."""
     sentences = [
+        adapter_sentence(service),
+        _adapter_call_sentence(facts),
         _effect_sentence(service),
         _signature_sentence(service),
         _dependency_sentence(service),

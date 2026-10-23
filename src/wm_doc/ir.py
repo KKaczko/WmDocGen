@@ -96,7 +96,7 @@ class DependencyKind(StrEnum):
     USES_TRANSFORMER = "USES_TRANSFORMER"
 
 
-ANALYSIS_SCHEMA_VERSION = "analysis.v10"
+ANALYSIS_SCHEMA_VERSION = "analysis.v11"
 
 
 class SignatureOrigin(StrEnum):
@@ -941,6 +941,69 @@ class ServiceSummary(BaseModel):
     source: SourceReference
 
 
+class TriggerDestination(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    kind: str  # "queue", "topic" or "not determined"
+
+
+class TriggerSubscription(BaseModel):
+    """One condition or routing rule: the document it subscribes to and its handler."""
+
+    model_config = ConfigDict(frozen=True)
+
+    handler: str | None = None
+    document_type: str | None = None
+
+
+class TriggerDetails(BaseModel):
+    """Owner-approved trigger facts (`triggers.py`).
+
+    Kept: the trigger type, the JMS connection alias, destinations with queue or topic,
+    subscribed document types and handler services. Filters, message selectors, users and
+    tuning values are not read.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    trigger_type: str | None = None
+    kind: str
+    connection_alias: str | None = None
+    destinations: list[TriggerDestination] = Field(default_factory=list)
+    subscriptions: list[TriggerSubscription] = Field(default_factory=list)
+
+
+class AdapterRole(StrEnum):
+    SERVICE = "SERVICE"
+    CONNECTION = "CONNECTION"
+    NOTIFICATION = "NOTIFICATION"
+
+
+class AdapterDetails(BaseModel):
+    """Allow-listed fields decoded from a JDBC adapter node's `IRTNODE_PROPERTY` (`adapters.py`).
+
+    Services: operation template, connection and tables. Connections: datasource class
+    (database product), database name and transaction type. Notifications: notification
+    type, connection, tables and published document. Server, host, port, user, password,
+    URL, SQL text and every other property are never read.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    role: AdapterRole
+    adapter_type: str | None = None
+    template: str | None = None
+    operation: str | None = None
+    connection: str | None = None
+    tables: list[str] = Field(default_factory=list)
+    datasource_class: str | None = None
+    database_product: str | None = None
+    database_name: str | None = None
+    transaction_type: str | None = None
+    published_document: str | None = None
+
+
 class FlowService(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -962,6 +1025,11 @@ class FlowService(BaseModel):
     flow_maps: list[FlowMap] = Field(default_factory=list)
     mapping_operations: list[MappingOperation] = Field(default_factory=list)
     transformer_bindings: list[TransformerBinding] = Field(default_factory=list)
+    # FLOW steps and mapping lines marked DISABLED="true": left out of the tree and of every
+    # call, mapping and effect, because they never run.
+    disabled_steps: int = 0
+    # JDBC adapter services: the allow-listed configuration (see AdapterDetails).
+    adapter: AdapterDetails | None = None
     java_analysis: JavaServiceAnalysis | None = None
     document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
     service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
@@ -1003,7 +1071,8 @@ class NamespaceArtifact(BaseModel):
     """A namespace node that is neither a supported service nor a document type.
 
     Triggers, REST/SOAP descriptors, adapter connections and notifications land here. They
-    are listed by their declared node type only; their content is not interpreted.
+    are listed by their declared node type. Only triggers and JDBC adapter connections and
+    notifications have their content read, through the approved readers.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -1012,6 +1081,8 @@ class NamespaceArtifact(BaseModel):
     package: str
     probable_type: str
     node_type: str | None = None
+    trigger: TriggerDetails | None = None
+    adapter: AdapterDetails | None = None
     source: SourceReference
 
 

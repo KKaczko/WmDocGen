@@ -58,6 +58,14 @@ def render_stats(analysis: AnalysisResult) -> str:
         f"| Document types | {len(analysis.document_types)} |",
         "",
     ]
+    disabled = [service for service in services if service.disabled_steps]
+    if disabled:
+        total = sum(service.disabled_steps for service in disabled)
+        lines += [
+            f"Disabled FLOW steps (left out, they never run): {total} in "
+            f"{len(disabled)} service(s).",
+            "",
+        ]
     lines += _opaque_section(services)
     lines += _artifact_section(analysis)
     lines += _unsupported_flow_section(services)

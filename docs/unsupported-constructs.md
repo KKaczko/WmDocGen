@@ -21,11 +21,12 @@ Unsupported or only partially supported in M12:
 - Broad Java external-effect classification
 - Java helper method/body effect analysis
 - Java execution, compilation, class loading, reflection modeling, or full semantic analysis
-- Detailed JDBC Adapter Service parsing
-- JDBC SQL, table, view, procedure, connection-alias, or database-resource extraction
-- Adapter service family semantics beyond opaque service identity
-- Universal Messaging triggers
-- JMS triggers
+- JDBC adapter fields beyond the approved allow-list (operation template, tables, connection;
+  for connections the datasource class, database name and transaction type; for notifications
+  the type, tables, connection and published document): SQL text, procedure names, columns,
+  server, port, user, password, URL and other connection properties are never read
+- Configuration of adapter types other than JDBC
+- Trigger filters, message selectors, join conditions and tuning values
 - Schedulers
 - Native webMethods BPM/process-model parsing
 - Automatic business process discovery from technical graph shape
@@ -41,8 +42,8 @@ Unsupported or only partially supported in M12:
 - Cloud provider defaults, RAG, arbitrary external documents, prompt editing UI, model fine-tuning,
   impact analysis, and snapshot comparison
 - Model-written text that names anything absent from the facts sent with its prompt
-- Semantic content of JDBC adapter services (tables, SQL), trigger conditions, REST paths and
-  scheduler entries; only exact name references found in their `node.ndf` are used
+- REST v2 resource paths and scheduler entries; only exact name references found in their
+  `node.ndf` are used
 
 M5-lite keeps parseable service artifacts with explicit unsupported `svc_type` values, after
 surrounding whitespace is trimmed, as `OPAQUE` services. Missing, empty, whitespace-only,
@@ -50,6 +51,8 @@ malformed, or non-scalar service-type metadata is not promoted to a service. Opa
 resolve exact incoming calls and appear in the service dependency graph, but their
 implementation-specific body is not interpreted. The analyzer does not infer database, messaging,
 scheduler, trigger, process, file, network, or other external behavior from an opaque service.
+M12 adds one exception approved by the owner: JDBC adapter services, connections and
+notifications have the allow-listed fields of their `IRTNODE_PROPERTY` decoded (`adapters.py`).
 
 M6 supports only user-maintained `processes.yml` catalog declarations. Declared entrypoints must be
 exact canonical service full names, and traversal follows only resolved local service dependencies.

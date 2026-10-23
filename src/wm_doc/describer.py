@@ -25,7 +25,7 @@ import os
 import threading
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -35,7 +35,7 @@ from wm_doc.config import AppConfig
 from wm_doc.disclosure import unsafe_disclosure_label
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
-from wm_doc.ir import AnalysisResult, FlowService, SignatureField
+from wm_doc.ir import AnalysisResult, FlowService, ServiceType, SignatureField
 from wm_doc.ollama_provider import (
     HTTP_TIMEOUT_SECONDS,
     TEMPERATURE,
@@ -45,6 +45,7 @@ from wm_doc.ollama_provider import (
 )
 from wm_doc.pseudocode import FULL_DETAIL, load_flow_comments, render_pseudocode
 from wm_doc.render.service_markdown import render_effects_table, render_entry_points_table
+from wm_doc.render.service_summary import adapter_sentence
 from wm_doc.service_docs import (
     MAX_DESIGNER_COMMENT_CHARS,
     DocState,
@@ -60,7 +61,7 @@ from wm_doc.service_docs import (
 )
 from wm_doc.summarizer import DEFAULT_NUM_CTX, fit_facts, unknown_names
 
-DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v1"
+DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v2"
 DESCRIBE_NUM_PREDICT = 1536
 MAX_STEPS = 8
 MAX_STEP_CHARS = 200
@@ -119,6 +120,26 @@ USER_PROMPT_TEMPLATE = (
     "- designer_comment: plain text of at most 600 characters, without Markdown, for the "
     "service's Comments field in Designer: purpose, main inputs and outputs, and effects."
 )
+
+# Adapter and other opaque services have no steps the tool can read. The model words the
+# purpose, usage and data effects only; the tool writes their steps and error handling.
+OPAQUE_PROMPT_TEMPLATE = (
+    "Facts:\n```\n{facts}\n```\n"
+    "This service has no FLOW or Java steps in the facts: it is an adapter or other "
+    "service whose implementation is a configuration. Do not describe steps, SQL, "
+    "conditions or error handling that the facts do not state.\n"
+    "Return JSON with these fields, in English:\n"
+    "- purpose: one or two sentences saying what the service is for, from its name, "
+    "signature and the configured operation in the facts. Start with a verb.\n"
+    "- usage: one or two sentences on who or what uses it, from `used by`.\n"
+    "- data_effects: one or two sentences on the data it reads or changes and where, from "
+    "`data and systems touched`.\n"
+    "- steps: an empty list.\n"
+    "- error_handling: an empty string.\n"
+    "- designer_comment: plain text of at most 600 characters, without Markdown, for the "
+    "service's Comments field in Designer: purpose, main inputs and outputs, and effects."
+)
+OPAQUE_ERROR_HANDLING = "Error handling is not analysed for this service type."
 
 RETRY_PROMPT_TEMPLATE = (
     "Your answer used names that do not appear in the facts: {names}. "
@@ -765,6 +786,8 @@ class _Run:
                         self.generated[name] = line
             return DescribeResult(name, outcome, path)
 
+        opaque = service.service_type is ServiceType.OPAQUE
+        template = OPAQUE_PROMPT_TEMPLATE if opaque else USER_PROMPT_TEMPLATE
         prompt_facts, shortened = fit_facts(
             service,
             self.callee_notes_for(name),
@@ -772,16 +795,22 @@ class _Run:
             self.options.num_ctx,
             facts_text=facts.text(),
             external_note=self.external_note,
-            overhead_chars=len(SYSTEM_PROMPT) + len(USER_PROMPT_TEMPLATE),
+            overhead_chars=len(SYSTEM_PROMPT) + len(template),
             num_predict=DESCRIBE_NUM_PREDICT,
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": USER_PROMPT_TEMPLATE.format(facts=prompt_facts)},
+            {"role": "user", "content": template.format(facts=prompt_facts)},
         ]
         narrative, from_cache, failure = DESCRIBE_SPEC.ask(
             self.session, messages, prompt_facts
         )
+        if narrative is not None and opaque:
+            narrative = replace(
+                narrative,
+                steps=opaque_steps(service),
+                error_handling=OPAQUE_ERROR_HANDLING,
+            )
         if narrative is None:
             outcome, note = failure
             if existing is not None:
@@ -808,6 +837,16 @@ class _Run:
                 self.generated[name] = line
         outcome = DescribeOutcome.CACHED if from_cache else DescribeOutcome.GENERATED
         return DescribeResult(name, outcome, path, None, shortened)
+
+
+def opaque_steps(service: FlowService) -> tuple[str, ...]:
+    """The steps of an adapter or other opaque service, written by the tool from its facts."""
+    if service.adapter is None:
+        source_type = service.source_service_type or "opaque"
+        return (f"Not analysed: the implementation of this `{source_type}` service is not read.",)
+    # "JDBC adapter service (template `Select`): selects rows from ..." -> "Selects rows from ..."
+    operation = (adapter_sentence(service) or "").split(": ", 1)[-1]
+    return (operation[:1].upper() + operation[1:],)
 
 
 def parse_narrative(content: str) -> Narrative | None:

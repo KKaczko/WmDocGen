@@ -8,9 +8,20 @@ from pathlib import Path
 from lxml import etree
 
 from wm_doc import __version__
+from wm_doc.adapters import (
+    CONNECTION_NODE_TYPE,
+    NOTIFICATION_NODE_TYPE,
+    AdapterDecodeError,
+    decode_adapter_service,
+    decode_connection,
+    decode_notification,
+    is_jdbc,
+)
+from wm_doc.adapters import SERVICE_TYPE as ADAPTER_SERVICE_TYPE
 from wm_doc.config import AppConfig, ExtractionMode, classify_service
 from wm_doc.discovery import scan_path
 from wm_doc.ir import (
+    AdapterDetails,
     AnalysisFinding,
     AnalysisMetrics,
     AnalysisResult,
@@ -80,6 +91,7 @@ from wm_doc.ir import (
     TextValue,
     TransformerBinding,
     TransformerBindingDirection,
+    TriggerDetails,
     UniqueDependency,
     call_sort_key,
     document_type_sort_key,
@@ -96,6 +108,7 @@ from wm_doc.java_analysis import analyze_java_service
 from wm_doc.process_analysis import build_process_analysis
 from wm_doc.process_catalog import ParsedProcessCatalog, load_process_catalog
 from wm_doc.references import find_references
+from wm_doc.triggers import TRIGGER_NODE_TYPE, read_trigger
 from wm_doc.values import parse_values_file, scalar_value
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
 
@@ -531,7 +544,7 @@ def analyze_path(
         process_output.process_document_relationships,
         process_output.technical_entrypoint_candidates,
     )
-    namespace_artifacts = _namespace_artifacts(inventory.packages)
+    namespace_artifacts = _namespace_artifacts(scan_root, inventory.packages, all_findings)
     artifact_references = _artifact_references(
         scan_root, service_index, all_document_types, namespace_artifacts, all_services
     )
@@ -603,8 +616,14 @@ def _artifact_references(
     return find_references(scan_root, sources, known)
 
 
-def _namespace_artifacts(packages: Iterable[PackageInventory]) -> list[NamespaceArtifact]:
-    """Non-service namespace nodes (triggers, descriptors, connections, ...), listed only."""
+def _namespace_artifacts(
+    scan_root: Path, packages: Iterable[PackageInventory], findings: list[AnalysisFinding]
+) -> list[NamespaceArtifact]:
+    """Non-service namespace nodes (triggers, descriptors, connections, ...).
+
+    Triggers and JDBC adapter connections and notifications are read by the approved
+    readers; every other node is listed by its node type only.
+    """
     artifacts: list[NamespaceArtifact] = []
     for package in packages:
         for artifact in package.artifacts:
@@ -615,12 +634,17 @@ def _namespace_artifacts(packages: Iterable[PackageInventory]) -> list[Namespace
                 if artifact.identity is not None and artifact.identity.full_name
                 else artifact.relative_path
             )
+            trigger, adapter = _artifact_details(
+                scan_root, artifact, full_name, findings
+            )
             artifacts.append(
                 NamespaceArtifact(
                     full_name=full_name,
                     package=package.name,
                     probable_type=artifact.probable_type,
                     node_type=artifact.node_type,
+                    trigger=trigger,
+                    adapter=adapter,
                     source=artifact.source,
                 )
             )
@@ -630,6 +654,52 @@ def _namespace_artifacts(packages: Iterable[PackageInventory]) -> list[Namespace
             (item.node_type or item.probable_type).casefold(),
             item.full_name.casefold(),
         ),
+    )
+
+
+_READ_NODE_TYPES = {TRIGGER_NODE_TYPE, CONNECTION_NODE_TYPE, NOTIFICATION_NODE_TYPE}
+
+
+def _artifact_details(
+    scan_root: Path,
+    artifact: ArtifactCandidate,
+    full_name: str,
+    findings: list[AnalysisFinding],
+) -> tuple[TriggerDetails | None, AdapterDetails | None]:
+    if artifact.node_type not in _READ_NODE_TYPES:
+        return None, None
+    node_path = scan_root / artifact.source.path
+    if node_path.name != "node.ndf" or not node_path.is_file():
+        return None, None
+    try:
+        values = parse_values_file(node_path)
+    except (XmlParseError, XmlSecurityError) as exc:
+        findings.append(_xml_finding(exc, node_path, scan_root, "node_ndf"))
+        return None, None
+    if artifact.node_type == TRIGGER_NODE_TYPE:
+        return read_trigger(values), None
+    blob = scalar_value(values, "IRTNODE_PROPERTY")
+    if not blob:
+        return None, None
+    try:
+        details = (
+            decode_connection(blob)
+            if artifact.node_type == CONNECTION_NODE_TYPE
+            else decode_notification(blob, full_name)
+        )
+    except AdapterDecodeError:
+        findings.append(_adapter_unreadable(node_path, scan_root))
+        return None, None
+    return None, details if is_jdbc(details) else None
+
+
+def _adapter_unreadable(node_path: Path, scan_root: Path) -> AnalysisFinding:
+    return AnalysisFinding(
+        status=FindingStatus.PARTIALLY_SUPPORTED,
+        code="ADAPTER_CONFIGURATION_UNREADABLE",
+        message="IRTNODE_PROPERTY does not have the expected base64 binary layout.",
+        source=_node_value_source(node_path, scan_root, "adapter", "IRTNODE_PROPERTY"),
+        severity=FindingSeverity.INFO,
     )
 
 
@@ -1231,6 +1301,7 @@ def _parse_flow_service(
     flow_maps: list[FlowMap] = []
     mapping_operations: list[MappingOperation] = []
     transformer_bindings: list[TransformerBinding] = []
+    disabled_steps = 0
     if flow_path.exists():
         try:
             (
@@ -1240,6 +1311,7 @@ def _parse_flow_service(
                 mapping_operations,
                 transformer_bindings,
                 flow_findings,
+                disabled_steps,
             ) = _parse_flow_xml(
                 flow_path, scan_root, identity, config, id_factory
             )
@@ -1276,6 +1348,7 @@ def _parse_flow_service(
         flow_maps=flow_maps,
         mapping_operations=mapping_operations,
         transformer_bindings=transformer_bindings,
+        disabled_steps=disabled_steps,
         extraction_policy=extraction_policy,
         findings=findings,
         source=artifact.source,
@@ -1367,11 +1440,19 @@ def _parse_opaque_service(
     description_status = ServiceDescriptionStatus.NO_DESCRIPTION
     source_service_type = artifact.source_service_type
     specification: str | None = None
+    adapter: AdapterDetails | None = None
 
     try:
         values = parse_values_file(node_path)
         source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
         specification = _normalized_scalar_value(values, "svc_spec")
+        blob = scalar_value(values, "IRTNODE_PROPERTY")
+        if source_service_type == ADAPTER_SERVICE_TYPE and blob:
+            try:
+                decoded = decode_adapter_service(blob)
+                adapter = decoded if is_jdbc(decoded) else None
+            except AdapterDecodeError:
+                findings.append(_adapter_unreadable(node_path, scan_root))
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1406,6 +1487,7 @@ def _parse_opaque_service(
         specification=specification,
         classification=classification,
         metrics=AnalysisMetrics(),
+        adapter=adapter,
         extraction_policy=extraction_policy,
         findings=findings,
         source=artifact.source,
@@ -1759,6 +1841,7 @@ def _parse_flow_xml(
     list[MappingOperation],
     list[TransformerBinding],
     list[AnalysisFinding],
+    int,
 ]:
     root = parse_xml_file(flow_path)
     findings: list[AnalysisFinding] = []
@@ -1767,7 +1850,7 @@ def _parse_flow_xml(
     mapping_operations: list[MappingOperation] = []
     transformer_bindings: list[TransformerBinding] = []
     unsupported_seen: set[str] = set()
-    counters = {"node": 0, "call": 0, "map": 0, "mapop": 0, "binding": 0}
+    counters = {"node": 0, "call": 0, "map": 0, "mapop": 0, "binding": 0, "disabled": 0}
 
     def next_node_id() -> str:
         counters["node"] += 1
@@ -1839,6 +1922,12 @@ def _parse_flow_xml(
                     )
                 )
             return child_nodes
+
+        if _is_disabled(element):
+            # A disabled step (and everything inside it) never runs: it adds no calls,
+            # mappings or effects, and is only counted.
+            counters["disabled"] += 1
+            return []
 
         node_id = next_node_id()
         structural_path_parts = [*parent_path, node_id]
@@ -1924,6 +2013,9 @@ def _parse_flow_xml(
                 and isinstance(child.tag, str)
                 and child.tag != "COMMENT"
             ):
+                if _is_disabled(child):
+                    counters["disabled"] += 1
+                    continue
                 label_source = _element_source(flow_path, scan_root, child, "branch_case")
                 raw_label = child.get("NAME")
                 label = _apply_free_text_policy(
@@ -2013,7 +2105,12 @@ def _parse_flow_xml(
         sorted(mapping_operations, key=_mapping_operation_key),
         sorted(transformer_bindings, key=_transformer_binding_key),
         sorted(findings, key=_finding_key),
+        counters["disabled"],
     )
+
+
+def _is_disabled(element: etree._Element) -> bool:
+    return (element.get("DISABLED") or "").strip().lower() == "true"
 
 
 def _parse_flow_map(
@@ -2091,6 +2188,9 @@ def _parse_flow_map(
             )
             continue
         if child_tag in MAPPING_OPERATION_TAGS:
+            if _is_disabled(child):
+                counters["disabled"] += 1
+                continue
             counters["mapop"] += 1
             map_operation_order += 1
             operation = _parse_mapping_operation(
