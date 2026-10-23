@@ -14,7 +14,9 @@ SECRET_KEY_VALUE_RE = re.compile(
 )
 AUTHORIZATION_RE = re.compile(r"(?i)(authorization\s*[:=]\s*)[^\s,|}\]]+")
 BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s,|}\]]+")
-JDBC_RE = re.compile(r"(?i)\bjdbc:[^\s,|}\]]+")
+# A JDBC URL: `jdbc:<driver>:...` (jdbc:oracle:thin:@host, jdbc:mysql://host, jdbc:wm://host).
+# A namespace name such as `orders.jdbc:OrdersConnection` is not one.
+JDBC_RE = re.compile(r"(?i)(?<![\w.])jdbc:[a-z][\w+.-]*:[^\s,|}\]]*")
 WINDOWS_ABSOLUTE_RE = re.compile(r"\b[A-Za-z]:[\\/][^\s|}\]]+")
 POSIX_ABSOLUTE_RE = re.compile(r"(?<![\w.])/(?:Users|home|tmp|var|etc|mnt|opt)/[^\s|}\]]*")
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\([^)]+\)")

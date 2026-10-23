@@ -487,3 +487,35 @@ def test_adapter_description_steps_come_from_facts_not_the_model(tmp_path: Path)
     ) in text
     assert "Error handling is not analysed for this service type." in text
     assert "cursor" not in text and "deadlock" not in text
+
+
+def test_connection_in_a_jdbc_folder_is_not_mistaken_for_a_jdbc_url(tmp_path: Path) -> None:
+    from wm_doc.disclosure import unsafe_disclosure_label
+
+    root = tmp_path / "packages"
+    _irt_node(
+        root,
+        "orders.jdbc",
+        "ordersConn",
+        "ConnectionData",
+        _blob([("adapterTypeName", "JDBCAdapter"), ("databaseName", "orders")]),
+    )
+    _adapter_service(
+        root,
+        "orders.db",
+        "selectOrders",
+        _blob(
+            [
+                ("serviceTemplateName", "com.wm.adapter.wmjdbc.services.Select"),
+                ("connectionName", "orders.jdbc:ordersConn"),
+                ("adapterType", "JDBCAdapter"),
+            ],
+            tables=["ORDERS"],
+        ),
+    )
+    facts = _facts(_analysis(root))["orders.db:selectOrders"]
+
+    where = facts.effects[0].where
+    assert "orders.jdbc:ordersConn" in where
+    assert unsafe_disclosure_label(f"It reads ORDERS through {where}.") is None
+    assert unsafe_disclosure_label("It uses jdbc:oracle:thin:@db:1521:X.") == "connection string"
