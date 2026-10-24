@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
@@ -31,12 +32,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from wm_doc.builtins import BuiltinFamily, builtin_effect, is_builtin_name
 from wm_doc.callgraph import summary_order
 from wm_doc.config import AppConfig
 from wm_doc.disclosure import unsafe_disclosure_label
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
-from wm_doc.ir import AnalysisResult, FlowService, ServiceType, SignatureField
+from wm_doc.ir import AnalysisResult, FlowService, Importance, ServiceType, SignatureField
 from wm_doc.ollama_provider import (
     HTTP_TIMEOUT_SECONDS,
     TEMPERATURE,
@@ -73,6 +75,7 @@ DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v3"
 # Room for the detailed flow: up to MAX_DETAILED_STEPS items of a few sentences each.
 DESCRIBE_NUM_PREDICT = 4096
 BRIEF_NUM_PREDICT = 1536
+THOROUGH_NUM_PREDICT = 6144
 DEEP_NUM_PREDICT = 8192
 MAX_STEPS = 8
 MAX_STEP_CHARS = 200
@@ -188,14 +191,69 @@ DISCLOSURE_RETRY_PROMPT_TEMPLATE = (
 class DetailLevel(StrEnum):
     """How much a service description says, and how long it takes to write.
 
-    brief: purpose, usage, data and main steps. standard: also the detailed flow. deep: the
-    detailed flow, written after the model reasons about the facts (thinking-capable models
-    only; several times slower).
+    brief: purpose, usage, data and main steps. standard: also the detailed flow. thorough:
+    standard, then the tool checks that the detailed flow mentions every call that matters
+    and, when some are missing, asks the model once to add them. deep: the detailed flow,
+    written after the model reasons about the facts (thinking-capable models only; several
+    times slower).
     """
 
     BRIEF = "brief"
     STANDARD = "standard"
+    THOROUGH = "thorough"
     DEEP = "deep"
+
+
+# Platform calls a thorough detailed flow must mention: those that move data or change the
+# server. String, date, list and similar helpers are left to the model's judgement.
+COVERAGE_FAMILIES = {
+    BuiltinFamily.TRANSACTION,
+    BuiltinFamily.DATABASE,
+    BuiltinFamily.MESSAGING,
+    BuiltinFamily.REMOTE,
+    BuiltinFamily.FILE,
+    BuiltinFamily.STORAGE,
+    BuiltinFamily.SERVER_ADMIN,
+    BuiltinFamily.SECURITY,
+}
+MAX_COVERAGE_NAMES = 12
+COVERAGE_PROMPT_TEMPLATE = (
+    "Your detailed_steps do not mention these calls the service makes: {calls}. Return the "
+    "complete JSON again. In detailed_steps, cover every call in execution order, at the "
+    "place it happens (inside a BRANCH, LOOP, CATCH or FINALLY), with its inputs and what it "
+    "returns. Keep the other fields, and use only names that appear in the facts."
+)
+
+
+def coverage_targets(service: FlowService) -> list[str]:
+    """Calls a complete detailed flow names: services and data-moving platform calls."""
+    targets: list[str] = []
+    for call in service.call_occurrences:
+        target = call.target
+        if target in targets:
+            continue
+        if is_builtin_name(target):
+            effect = builtin_effect(target)
+            if effect is None or effect.family not in COVERAGE_FAMILIES:
+                continue
+        elif call.target_classification.importance is Importance.LOW:
+            continue  # utilities such as *utils* (see the classification config)
+        targets.append(target)
+    return targets
+
+
+def missing_calls(service: FlowService, narrative: Narrative) -> list[str]:
+    """Coverage targets the detailed flow names neither in full nor by service name."""
+    text = "\n".join(narrative.detailed_steps).casefold()
+    missing: list[str] = []
+    for target in coverage_targets(service):
+        short = target.rsplit(":", 1)[-1].casefold()
+        named = target.casefold() in text or re.search(
+            rf"(?<![\w$]){re.escape(short)}(?![\w$])", text
+        )
+        if not named:
+            missing.append(target)
+    return missing
 
 
 MAX_INSTRUCTIONS_CHARS = 4000
@@ -263,6 +321,8 @@ class DescribeStats:
     model_calls: int = 0
     model_seconds: float = 0.0
     answer_tokens: int = 0
+    # Thorough level: second requests that asked the model to add calls it left out.
+    coverage_passes: int = 0
 
     def add(self, result: DescribeResult) -> None:
         self.counts[result.outcome] = self.counts.get(result.outcome, 0) + 1
@@ -939,6 +999,15 @@ class _Run:
         narrative, from_cache, failure = spec.ask(
             self.session, messages, prompt_facts, keep_unverified=self.options.keep_unverified
         )
+        if (
+            detail is DetailLevel.THOROUGH
+            and narrative is not None
+            and not opaque
+            and failure[0] is not DescribeOutcome.UNVERIFIED
+        ):
+            narrative, from_cache = self.complete_flow(
+                service, spec, messages, prompt_facts, narrative, from_cache
+            )
         seconds = None if from_cache else time.perf_counter() - started
         unverified: list[str] = []
         if narrative is not None and failure[0] is DescribeOutcome.UNVERIFIED:
@@ -990,6 +1059,34 @@ class _Run:
                 self.generated[name] = line
         outcome = DescribeOutcome.CACHED if from_cache else DescribeOutcome.GENERATED
         return DescribeResult(name, outcome, path, None, shortened, seconds)
+
+
+    def complete_flow(
+        self,
+        service: FlowService,
+        spec: AnswerSpec[Narrative],
+        messages: list[dict[str, str]],
+        prompt_facts: str,
+        narrative: Narrative,
+        from_cache: bool,
+    ) -> tuple[Narrative, bool]:
+        """Thorough level: ask once more when the detailed flow leaves out calls."""
+        missing = missing_calls(service, narrative)
+        if not missing:
+            return narrative, from_cache
+        with self.lock:
+            self.stats.coverage_passes += 1
+        calls = ", ".join(f"`{name}`" for name in missing[:MAX_COVERAGE_NAMES])
+        follow_up = [
+            *messages,
+            {"role": "assistant", "content": json.dumps(narrative_payload(narrative))},
+            {"role": "user", "content": COVERAGE_PROMPT_TEMPLATE.format(calls=calls)},
+        ]
+        better, better_cached, _failure = spec.ask(self.session, follow_up, prompt_facts)
+        # Keep the second answer only when it is valid and leaves out fewer calls.
+        if better is not None and len(missing_calls(service, better)) < len(missing):
+            return better, from_cache and better_cached
+        return narrative, from_cache
 
 
 def opaque_steps(service: FlowService) -> tuple[str, ...]:
@@ -1103,6 +1200,11 @@ DESCRIBE_SPECS: dict[DetailLevel, AnswerSpec[Narrative]] = {
         num_predict=BRIEF_NUM_PREDICT,
     ),
     DetailLevel.STANDARD: DESCRIBE_SPEC,
+    DetailLevel.THOROUGH: replace(
+        DESCRIBE_SPEC,
+        prompt_version=f"{DESCRIBE_PROMPT_VERSION}-thorough",
+        num_predict=THOROUGH_NUM_PREDICT,
+    ),
     # Reasoning tokens count against the answer budget, so deep needs far more room.
     DetailLevel.DEEP: replace(
         DESCRIBE_SPEC,
