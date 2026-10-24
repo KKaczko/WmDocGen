@@ -7,7 +7,12 @@ from wm_doc.ir import AnalysisResult
 
 
 def render_documentation_index(
-    analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
+    analysis: AnalysisResult,
+    graph_assets: list[GraphAsset] | None = None,
+    *,
+    catalogue_path: str | None = None,
+    packages_section: str | None = None,
+    server_section: str | None = None,
 ) -> str:
     graph_assets = graph_assets or []
     lines = [
@@ -18,10 +23,13 @@ def render_documentation_index(
             "descriptions, when present, come from `processes.yml`."
         ),
         "",
+        *([server_section] if server_section else []),
         "## Generated Inventory",
         "",
         "| Area | Count |",
         "| --- | ---: |",
+        f"| Packages analysed | {len(analysis.packages)} |",
+        f"| Packages skipped | {len(analysis.excluded_packages)} |",
         f"| Services | {sum(len(package.services) for package in analysis.packages)} |",
         f"| Document Types | {len(analysis.document_types)} |",
         f"| Process definitions | {len(analysis.processes)} |",
@@ -29,6 +37,7 @@ def render_documentation_index(
         f"| Service dependency edges | {len(analysis.unique_dependencies)} |",
         f"| Document dependency edges | {len(analysis.document_dependencies)} |",
         "",
+        *([packages_section] if packages_section else []),
         "## Links",
         "",
         "- [Analysis JSON](analysis.json)",
@@ -38,7 +47,11 @@ def render_documentation_index(
         "- [Technical entrypoint candidates](entrypoints.md)",
         "- [Services](services/)",
         "- [Document Types](documents/)",
+        "- [Other artifacts and skipped packages](artifacts.md)",
+        "- [Platform services called (pub.*, wm.*)](platform-services.md)",
     ]
+    if catalogue_path:
+        lines.append(f"- [Service catalogue (descriptions and review status)]({catalogue_path})")
     if analysis.processes:
         lines.append("- [Process catalog](processes/index.md)")
         lines.append("- [Process graphs](graphs/processes/)")
@@ -69,11 +82,53 @@ def render_documentation_index(
     return "\n".join(lines)
 
 
+ANALYSIS_LIMITATIONS = """# Analysis Limitations
+
+These limits apply to every generated page in this output. They were previously repeated
+in full at the bottom of each service page.
+
+wm-doc extracts observed FLOW, mapping, document-reference, Java Service source evidence,
+opaque service common metadata, and user-declared process catalog evidence with literal and
+free-text disclosure policies. It does not resolve mapped paths against document schemas,
+evaluate branch conditions, simulate loops or runtime state, infer dynamic Java invocation
+targets, promote nested Java executable bodies without a callback/control-flow model, execute
+Java code, compile Java source, connect to Integration Server, or parse JDBC, trigger,
+scheduler, messaging, BPM process-model, or database-resource semantics.
+
+Service summaries are synthesised deterministically from the signature, the ordered call
+occurrences and the platform effect catalog. They restate analysed facts and never infer
+business meaning. Platform (`pub.*` / `wm.*`) services are labelled from a fixed catalog of
+documented services; an uncatalogued platform service is left unlabelled rather than guessed.
+"""
+
+
+def write_analysis_limitations(output_dir: Path) -> Path:
+    """Write the shared limitations page that service and document pages link to."""
+    path = output_dir / "LIMITATIONS.md"
+    path.write_text(ANALYSIS_LIMITATIONS, encoding="utf-8")
+    return path
+
+
 def write_documentation_index(
-    output_dir: Path, analysis: AnalysisResult, graph_assets: list[GraphAsset] | None = None
+    output_dir: Path,
+    analysis: AnalysisResult,
+    graph_assets: list[GraphAsset] | None = None,
+    *,
+    catalogue_path: str | None = None,
+    packages_section: str | None = None,
+    server_section: str | None = None,
 ) -> Path:
     path = output_dir / "index.md"
-    path.write_text(render_documentation_index(analysis, graph_assets), encoding="utf-8")
+    path.write_text(
+        render_documentation_index(
+            analysis,
+            graph_assets,
+            catalogue_path=catalogue_path,
+            packages_section=packages_section,
+            server_section=server_section,
+        ),
+        encoding="utf-8",
+    )
     return path
 
 

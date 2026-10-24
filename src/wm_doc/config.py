@@ -3,7 +3,6 @@ from __future__ import annotations
 from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
@@ -33,7 +32,10 @@ class ExtractionMode(StrEnum):
 
 
 class LiteralExtractionConfig(BaseModel):
-    mode: ExtractionMode = ExtractionMode.REDACT
+    # Literal values are the filenames, keys and flags a reader needs to understand a
+    # service. The secret guard runs before this mode is consulted, so secret-like
+    # literals stay redacted regardless of the setting.
+    mode: ExtractionMode = ExtractionMode.INCLUDE
 
 
 class FreeTextExtractionConfig(BaseModel):
@@ -45,16 +47,46 @@ class ExtractionConfig(BaseModel):
     freeText: FreeTextExtractionConfig = Field(default_factory=FreeTextExtractionConfig)
 
 
+DEFAULT_PACKAGE_EXCLUDES = ("Wm*", "Default")
+
+
+class PackageSelectionConfig(BaseModel):
+    """Which package roots are analysed. Globs match the package directory name."""
+
+    # When non-empty, only packages matching one of these globs are analysed.
+    include: list[str] = Field(default_factory=list)
+    # Software AG / IBM product packages and the Default package are skipped by default.
+    exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_PACKAGE_EXCLUDES))
+    # Skip packages whose manifest.v3 declares system_package=yes.
+    skipSystemPackages: bool = True
+
+    def exclusion_reason(self, name: str, system_package: bool) -> str | None:
+        """Return why a package is excluded, or None when it is analysed."""
+        if self.include and not any(_glob_match(pattern, name) for pattern in self.include):
+            return "not matched by the include patterns"
+        for pattern in self.exclude:
+            if _glob_match(pattern, name):
+                return f"matches exclude pattern `{pattern}`"
+        if self.skipSystemPackages and system_package:
+            return "system package (manifest.v3 system_package=yes)"
+        return None
+
+
+ANALYZE_ALL_PACKAGES = PackageSelectionConfig(exclude=[], skipSystemPackages=False)
+
+
 class AppConfig(BaseModel):
     classification: ClassificationConfig = Field(default_factory=ClassificationConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    packages: PackageSelectionConfig = Field(default_factory=PackageSelectionConfig)
 
 
+# Generic defaults only. Project-specific namespace rules belong in a config file
+# (see examples/wm-doc.yml) passed with --config.
 DEFAULT_CONFIG = AppConfig(
     classification=ClassificationConfig(
         importance=ImportanceRules(
             important=ImportanceRuleSet(
-                fullName=["oa.*.channel:*", "di.*.adapter:*"],
                 serviceName=["*Service", "process*"],
             ),
             neverImportant=ImportanceRuleSet(
@@ -145,7 +177,3 @@ def _match_rule_set(
 
 def _glob_match(pattern: str, value: str) -> bool:
     return fnmatchcase(value.casefold(), pattern.casefold())
-
-
-def config_to_dict(config: AppConfig) -> dict[str, Any]:
-    return config.model_dump(mode="json", exclude_none=True)

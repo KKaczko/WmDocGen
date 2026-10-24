@@ -8,14 +8,26 @@ from pathlib import Path
 from lxml import etree
 
 from wm_doc import __version__
+from wm_doc.adapters import (
+    CONNECTION_NODE_TYPE,
+    NOTIFICATION_NODE_TYPE,
+    AdapterDecodeError,
+    decode_adapter_service,
+    decode_connection,
+    decode_notification,
+    is_jdbc,
+)
+from wm_doc.adapters import SERVICE_TYPE as ADAPTER_SERVICE_TYPE
 from wm_doc.config import AppConfig, ExtractionMode, classify_service
 from wm_doc.discovery import scan_path
 from wm_doc.ir import (
+    AdapterDetails,
     AnalysisFinding,
     AnalysisMetrics,
     AnalysisResult,
     AnalyzedPackage,
     ArtifactCandidate,
+    ArtifactReference,
     AttributeClassification,
     AttributeValue,
     CallOccurrence,
@@ -40,19 +52,18 @@ from wm_doc.ir import (
     FlowNodeType,
     FlowService,
     InterpretationConfidence,
-    JavaImport,
     JavaInvocationOccurrence,
     JavaInvocationTargetStatus,
     JavaPipelineAccess,
     JavaServiceAnalysis,
     JavaSourceStatus,
-    JavaTypeReference,
     LiteralDisclosure,
     LiteralValue,
     MappingEndpoint,
     MappingOperation,
     MappingOperationType,
     MapSchemaMetadata,
+    NamespaceArtifact,
     PackageInventory,
     PipelinePath,
     ProcessDefinition,
@@ -63,6 +74,7 @@ from wm_doc.ir import (
     ProcessEntrypointStatus,
     ProcessServiceMembership,
     ProcessUnresolvedCall,
+    ReferenceTargetKind,
     ServiceAnalysisStatus,
     ServiceDescriptionStatus,
     ServiceDocumentDependency,
@@ -72,18 +84,31 @@ from wm_doc.ir import (
     ServiceSummary,
     ServiceType,
     SignatureField,
+    SignatureOrigin,
     SourceReference,
     TechnicalEntrypointCandidate,
     TextDisclosure,
     TextValue,
     TransformerBinding,
     TransformerBindingDirection,
+    TriggerDetails,
     UniqueDependency,
+    call_sort_key,
+    document_type_sort_key,
+    flow_map_sort_key,
+    java_invocation_sort_key,
+    java_pipeline_access_sort_key,
+    java_service_analysis_sort_key,
+    mapping_operation_sort_key,
     stable_relative_path,
+    transformer_binding_sort_key,
+    unique_dependency_sort_key,
 )
 from wm_doc.java_analysis import analyze_java_service
 from wm_doc.process_analysis import build_process_analysis
 from wm_doc.process_catalog import ParsedProcessCatalog, load_process_catalog
+from wm_doc.references import find_references
+from wm_doc.triggers import TRIGGER_NODE_TYPE, read_trigger
 from wm_doc.values import parse_values_file, scalar_value
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
 
@@ -101,6 +126,8 @@ FLOW_NODE_TAGS = {
     "SEQUENCE": FlowNodeType.SEQUENCE,
     "BRANCH": FlowNodeType.BRANCH,
     "LOOP": FlowNodeType.LOOP,
+    # Designer's REPEAT step is serialized as <RETRY COUNT=.. BACK-OFF=.. LOOP-ON=..>.
+    "RETRY": FlowNodeType.REPEAT,
     "MAP": FlowNodeType.MAP,
     "EXIT": FlowNodeType.EXIT,
     "INVOKE": FlowNodeType.INVOKE,
@@ -155,6 +182,7 @@ FLOW_TECHNICAL_ATTRIBUTES: dict[str, set[str]] = {
     "SEQUENCE": {"EXIT-ON", "FORM", "TIMEOUT"},
     "BRANCH": {"LABELEXPRESSIONS", "SWITCH", "TIMEOUT"},
     "LOOP": {"IN-ARRAY", "OUT-ARRAY", "TIMEOUT"},
+    "RETRY": {"BACK-OFF", "COUNT", "LOOP-ON", "TIMEOUT"},
     "MAP": {"MODE", "TIMEOUT"},
     "INVOKE": {"INVOKE-ORDER", "SERVICE", "TIMEOUT", "VALIDATE-IN", "VALIDATE-OUT"},
     "MAPINVOKE": {"INVOKE-ORDER", "SERVICE", "TIMEOUT", "VALIDATE-IN", "VALIDATE-OUT"},
@@ -264,7 +292,7 @@ def analyze_path(
     processes_file_explicit: bool = False,
 ) -> AnalysisResult:
     scan_root = path.resolve()
-    inventory = scan_path(scan_root)
+    inventory = scan_path(scan_root, config.packages)
     process_catalog_path = processes_file or scan_root / "processes.yml"
     process_catalog = load_process_catalog(
         process_catalog_path,
@@ -272,6 +300,8 @@ def analyze_path(
         explicit=processes_file_explicit or processes_file is not None,
     )
     service_index = _build_service_index(inventory.packages)
+    specification_nodes = _specification_node_paths(scan_root, inventory.packages)
+    specification_signatures: dict[str, ServiceSignature] = {}
     extraction_policy = _extraction_policy_snapshot(config)
     id_factory = StableIdFactory()
     service_classifications: dict[str, ClassificationResult] = {}
@@ -344,10 +374,16 @@ def analyze_path(
                 name=package.name,
                 root=package.root,
                 services=[],
-                java_service_analyses=[],
                 document_types=[],
+                # Only this package's own services: listing every service in every package
+                # grew analysis.json with packages x services.
                 service_index=sorted(
-                    service_index.values(), key=lambda item: item.identity.full_name.casefold()
+                    (
+                        item
+                        for item in service_index.values()
+                        if item.identity.package == package.name
+                    ),
+                    key=lambda item: item.identity.full_name.casefold(),
                 ),
                 findings=package_findings,
             )
@@ -360,6 +396,9 @@ def analyze_path(
     all_mapping_operations: list[MappingOperation] = []
     all_transformer_bindings: list[TransformerBinding] = []
     for service in pending_services:
+        service = _with_specification_signature(
+            service, specification_nodes, specification_signatures, scan_root
+        )
         resolved_calls, unique_dependencies = _resolve_service_dependencies(
             service, service_index, service_classifications, config
         )
@@ -399,7 +438,7 @@ def analyze_path(
     document_index = {document.identity.full_name: document for document in all_document_types}
     all_document_reference_occurrences.extend(
         _parse_service_document_reference_occurrences(
-            scan_root, service_reference_inputs, id_factory
+            scan_root, service_reference_inputs, id_factory, specification_nodes
         )
     )
     all_document_reference_occurrences = _resolve_document_references(
@@ -430,14 +469,6 @@ def analyze_path(
                         services_with_document_refs,
                         key=lambda item: item.identity.full_name.casefold(),
                     ),
-                    "java_service_analyses": sorted(
-                        [
-                            service.java_analysis
-                            for service in services_with_document_refs
-                            if service.java_analysis is not None
-                        ],
-                        key=_java_service_analysis_key,
-                    ),
                     "document_types": sorted(
                         package_documents.get(analyzed_package.name, []),
                         key=_document_type_key,
@@ -465,14 +496,6 @@ def analyze_path(
             for analysis in package.java_service_analyses
         ],
         key=_java_service_analysis_key,
-    )
-    all_java_imports = sorted(
-        [item for analysis in all_java_analyses for item in analysis.imports],
-        key=_java_import_key,
-    )
-    all_java_type_references = sorted(
-        [item for analysis in all_java_analyses for item in analysis.referenced_types],
-        key=_java_type_reference_key,
     )
     all_java_pipeline_accesses = sorted(
         [item for analysis in all_java_analyses for item in analysis.pipeline_accesses],
@@ -521,25 +544,18 @@ def analyze_path(
         process_output.process_document_relationships,
         process_output.technical_entrypoint_candidates,
     )
+    namespace_artifacts = _namespace_artifacts(scan_root, inventory.packages, all_findings)
+    artifact_references = _artifact_references(
+        scan_root, service_index, all_document_types, namespace_artifacts, all_services
+    )
     return AnalysisResult(
         tool_version=__version__,
         packages=sorted(final_packages, key=lambda item: item.name.casefold()),
         metrics=top_level_metrics,
         extraction_policy=extraction_policy,
-        call_occurrences=all_calls,
-        unique_dependencies=all_unique_dependencies,
-        flow_maps=all_flow_maps,
-        mapping_operations=all_mapping_operations,
-        transformer_bindings=all_transformer_bindings,
-        document_types=all_document_types,
         document_reference_occurrences=all_document_reference_occurrences,
         document_dependencies=all_document_dependencies,
         service_document_dependencies=all_service_document_dependencies,
-        java_service_analyses=all_java_analyses,
-        java_imports=all_java_imports,
-        java_type_references=all_java_type_references,
-        java_pipeline_accesses=all_java_pipeline_accesses,
-        java_invocation_occurrences=all_java_invocations,
         processes=process_output.processes,
         process_entrypoints=process_output.process_entrypoints,
         process_service_memberships=process_output.process_service_memberships,
@@ -547,7 +563,143 @@ def analyze_path(
         process_unresolved_calls=process_output.process_unresolved_calls,
         process_document_relationships=process_output.process_document_relationships,
         technical_entrypoint_candidates=process_output.technical_entrypoint_candidates,
+        excluded_packages=inventory.excluded_packages,
+        namespace_artifacts=namespace_artifacts,
+        artifact_references=artifact_references,
         findings=_aggregate_findings(all_findings),
+    )
+
+
+# Inventory types that are analysed elsewhere, or are not namespace nodes at all.
+_NOT_LISTED_ARTIFACTS = (
+    SERVICE_INDEX_ARTIFACTS
+    | DOCUMENT_ARTIFACTS
+    | {
+        "namespace_folder",
+        "package_manifest",
+        "helper_backup_file",
+        "unsupported_file",
+    }
+)
+
+
+def _artifact_references(
+    scan_root: Path,
+    service_index: dict[str, ServiceSummary],
+    document_types: list[DocumentType],
+    namespace_artifacts: list[NamespaceArtifact],
+    services: list[FlowService],
+) -> list[ArtifactReference]:
+    """References from triggers, descriptors, connections and opaque services to known nodes."""
+    known: dict[str, ReferenceTargetKind] = {}
+    for artifact in namespace_artifacts:
+        known[artifact.full_name] = ReferenceTargetKind.ARTIFACT
+    for document in document_types:
+        known[document.identity.full_name] = ReferenceTargetKind.DOCUMENT
+    for name in service_index:
+        known[name] = ReferenceTargetKind.SERVICE
+    sources: list[tuple[str, str, SourceReference]] = [
+        (artifact.full_name, artifact.node_type or artifact.probable_type, artifact.source)
+        for artifact in namespace_artifacts
+        # Specification signatures are already analysed as service signatures.
+        if artifact.probable_type != "specification"
+    ]
+    sources.extend(
+        (
+            service.identity.full_name,
+            f"service ({service.source_service_type or 'opaque'})",
+            service.source,
+        )
+        for service in services
+        if service.service_type is ServiceType.OPAQUE
+    )
+    return find_references(scan_root, sources, known)
+
+
+def _namespace_artifacts(
+    scan_root: Path, packages: Iterable[PackageInventory], findings: list[AnalysisFinding]
+) -> list[NamespaceArtifact]:
+    """Non-service namespace nodes (triggers, descriptors, connections, ...).
+
+    Triggers and JDBC adapter connections and notifications are read by the approved
+    readers; every other node is listed by its node type only.
+    """
+    artifacts: list[NamespaceArtifact] = []
+    for package in packages:
+        for artifact in package.artifacts:
+            if artifact.probable_type in _NOT_LISTED_ARTIFACTS:
+                continue
+            full_name = (
+                artifact.identity.full_name
+                if artifact.identity is not None and artifact.identity.full_name
+                else artifact.relative_path
+            )
+            trigger, adapter = _artifact_details(
+                scan_root, artifact, full_name, findings
+            )
+            artifacts.append(
+                NamespaceArtifact(
+                    full_name=full_name,
+                    package=package.name,
+                    probable_type=artifact.probable_type,
+                    node_type=artifact.node_type,
+                    trigger=trigger,
+                    adapter=adapter,
+                    source=artifact.source,
+                )
+            )
+    return sorted(
+        artifacts,
+        key=lambda item: (
+            (item.node_type or item.probable_type).casefold(),
+            item.full_name.casefold(),
+        ),
+    )
+
+
+_READ_NODE_TYPES = {TRIGGER_NODE_TYPE, CONNECTION_NODE_TYPE, NOTIFICATION_NODE_TYPE}
+
+
+def _artifact_details(
+    scan_root: Path,
+    artifact: ArtifactCandidate,
+    full_name: str,
+    findings: list[AnalysisFinding],
+) -> tuple[TriggerDetails | None, AdapterDetails | None]:
+    if artifact.node_type not in _READ_NODE_TYPES:
+        return None, None
+    node_path = scan_root / artifact.source.path
+    if node_path.name != "node.ndf" or not node_path.is_file():
+        return None, None
+    try:
+        values = parse_values_file(node_path)
+    except (XmlParseError, XmlSecurityError) as exc:
+        findings.append(_xml_finding(exc, node_path, scan_root, "node_ndf"))
+        return None, None
+    if artifact.node_type == TRIGGER_NODE_TYPE:
+        return read_trigger(values), None
+    blob = scalar_value(values, "IRTNODE_PROPERTY")
+    if not blob:
+        return None, None
+    try:
+        details = (
+            decode_connection(blob)
+            if artifact.node_type == CONNECTION_NODE_TYPE
+            else decode_notification(blob, full_name)
+        )
+    except AdapterDecodeError:
+        findings.append(_adapter_unreadable(node_path, scan_root))
+        return None, None
+    return None, details if is_jdbc(details) else None
+
+
+def _adapter_unreadable(node_path: Path, scan_root: Path) -> AnalysisFinding:
+    return AnalysisFinding(
+        status=FindingStatus.PARTIALLY_SUPPORTED,
+        code="ADAPTER_CONFIGURATION_UNREADABLE",
+        message="IRTNODE_PROPERTY does not have the expected base64 binary layout.",
+        source=_node_value_source(node_path, scan_root, "adapter", "IRTNODE_PROPERTY"),
+        severity=FindingSeverity.INFO,
     )
 
 
@@ -917,10 +1069,71 @@ def _parse_document_field(
     )
 
 
+def _specification_node_paths(
+    scan_root: Path, packages: Iterable[PackageInventory]
+) -> dict[str, Path]:
+    """Map each specification's full name to its node.ndf (first occurrence wins)."""
+    paths: dict[str, Path] = {}
+    for package in packages:
+        for artifact in package.artifacts:
+            if artifact.probable_type != "specification":
+                continue
+            if artifact.identity is None or artifact.identity.full_name is None:
+                continue
+            paths.setdefault(artifact.identity.full_name, _artifact_node_path(scan_root, artifact))
+    return paths
+
+
+def _specification_signature(
+    name: str,
+    nodes: dict[str, Path],
+    cache: dict[str, ServiceSignature],
+    scan_root: Path,
+) -> ServiceSignature | None:
+    if name in cache:
+        return cache[name]
+    path = nodes.get(name)
+    if path is None:
+        return None
+    try:
+        root = parse_xml_file(path)
+    except (XmlParseError, XmlSecurityError):
+        return None
+    signature = _parse_signature(root, path, scan_root)
+    cache[name] = signature
+    return signature
+
+
+def _with_specification_signature(
+    service: FlowService,
+    nodes: dict[str, Path],
+    cache: dict[str, ServiceSignature],
+    scan_root: Path,
+) -> FlowService:
+    """Use the declared specification's signature when the service declares none itself."""
+    if not service.specification or service.signature.inputs or service.signature.outputs:
+        return service
+    signature = _specification_signature(service.specification, nodes, cache, scan_root)
+    if signature is None or not (signature.inputs or signature.outputs):
+        return service
+    return service.model_copy(
+        update={"signature": signature, "signature_origin": SignatureOrigin.SPECIFICATION}
+    )
+
+
+def _signature_record_has_fields(svc_sig: etree._Element | None) -> bool:
+    for direction in ("sig_in", "sig_out"):
+        rec_fields = _array_child(_record_child(svc_sig, direction), "rec_fields")
+        if rec_fields is not None and _direct_children(rec_fields, "record"):
+            return True
+    return False
+
+
 def _parse_service_document_reference_occurrences(
     scan_root: Path,
     service_inputs: list[tuple[str, ArtifactCandidate]],
     id_factory: StableIdFactory,
+    specification_nodes: dict[str, Path] | None = None,
 ) -> list[DocumentReferenceOccurrence]:
     occurrences: list[DocumentReferenceOccurrence] = []
     for package_name, artifact in service_inputs:
@@ -933,6 +1146,15 @@ def _parse_service_document_reference_occurrences(
         except (XmlParseError, XmlSecurityError):
             continue
         svc_sig = _record_child(root, "svc_sig")
+        spec_name = _value_child(root, "svc_spec")
+        spec_path = (specification_nodes or {}).get((spec_name or "").strip())
+        if spec_path is not None and not _signature_record_has_fields(svc_sig):
+            # The signature comes from the specification; so do its document references.
+            try:
+                svc_sig = _record_child(parse_xml_file(spec_path), "svc_sig")
+                node_path = spec_path
+            except (XmlParseError, XmlSecurityError):
+                pass
         service_name = artifact.identity.full_name
         for direction, role in (
             ("sig_in", ServiceDocumentUsageRole.INPUT),
@@ -1058,10 +1280,12 @@ def _parse_flow_service(
     description: TextValue | None = None
     description_status = ServiceDescriptionStatus.NO_DESCRIPTION
     source_service_type = artifact.source_service_type
+    specification: str | None = None
 
     try:
         values = parse_values_file(node_path)
         source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
+        specification = _normalized_scalar_value(values, "svc_spec")
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1077,6 +1301,7 @@ def _parse_flow_service(
     flow_maps: list[FlowMap] = []
     mapping_operations: list[MappingOperation] = []
     transformer_bindings: list[TransformerBinding] = []
+    disabled_steps = 0
     if flow_path.exists():
         try:
             (
@@ -1086,6 +1311,7 @@ def _parse_flow_service(
                 mapping_operations,
                 transformer_bindings,
                 flow_findings,
+                disabled_steps,
             ) = _parse_flow_xml(
                 flow_path, scan_root, identity, config, id_factory
             )
@@ -1112,6 +1338,7 @@ def _parse_flow_service(
         description_status=description_status,
         description=description,
         signature=signature,
+        specification=specification,
         classification=classification,
         flow_tree=flow_tree,
         metrics=_metrics(
@@ -1121,6 +1348,7 @@ def _parse_flow_service(
         flow_maps=flow_maps,
         mapping_operations=mapping_operations,
         transformer_bindings=transformer_bindings,
+        disabled_steps=disabled_steps,
         extraction_policy=extraction_policy,
         findings=findings,
         source=artifact.source,
@@ -1147,10 +1375,12 @@ def _parse_java_service(
     description: TextValue | None = None
     description_status = ServiceDescriptionStatus.NO_DESCRIPTION
     source_service_type = artifact.source_service_type
+    specification: str | None = None
 
     try:
         values = parse_values_file(node_path)
         source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
+        specification = _normalized_scalar_value(values, "svc_spec")
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1179,6 +1409,7 @@ def _parse_java_service(
         description_status=description_status,
         description=description,
         signature=signature,
+        specification=specification,
         classification=classification,
         metrics=_metrics(java_calls, [], None, [], [], [], java_analysis),
         call_occurrences=java_calls,
@@ -1208,10 +1439,20 @@ def _parse_opaque_service(
     description: TextValue | None = None
     description_status = ServiceDescriptionStatus.NO_DESCRIPTION
     source_service_type = artifact.source_service_type
+    specification: str | None = None
+    adapter: AdapterDetails | None = None
 
     try:
         values = parse_values_file(node_path)
         source_service_type = _normalized_scalar_value(values, "svc_type") or source_service_type
+        specification = _normalized_scalar_value(values, "svc_spec")
+        blob = scalar_value(values, "IRTNODE_PROPERTY")
+        if source_service_type == ADAPTER_SERVICE_TYPE and blob:
+            try:
+                decoded = decode_adapter_service(blob)
+                adapter = decoded if is_jdbc(decoded) else None
+            except AdapterDecodeError:
+                findings.append(_adapter_unreadable(node_path, scan_root))
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1243,8 +1484,10 @@ def _parse_opaque_service(
         description_status=description_status,
         description=description,
         signature=signature,
+        specification=specification,
         classification=classification,
         metrics=AnalysisMetrics(),
+        adapter=adapter,
         extraction_policy=extraction_policy,
         findings=findings,
         source=artifact.source,
@@ -1598,6 +1841,7 @@ def _parse_flow_xml(
     list[MappingOperation],
     list[TransformerBinding],
     list[AnalysisFinding],
+    int,
 ]:
     root = parse_xml_file(flow_path)
     findings: list[AnalysisFinding] = []
@@ -1606,7 +1850,7 @@ def _parse_flow_xml(
     mapping_operations: list[MappingOperation] = []
     transformer_bindings: list[TransformerBinding] = []
     unsupported_seen: set[str] = set()
-    counters = {"node": 0, "call": 0, "map": 0, "mapop": 0, "binding": 0}
+    counters = {"node": 0, "call": 0, "map": 0, "mapop": 0, "binding": 0, "disabled": 0}
 
     def next_node_id() -> str:
         counters["node"] += 1
@@ -1678,6 +1922,12 @@ def _parse_flow_xml(
                     )
                 )
             return child_nodes
+
+        if _is_disabled(element):
+            # A disabled step (and everything inside it) never runs: it adds no calls,
+            # mappings or effects, and is only counted.
+            counters["disabled"] += 1
+            return []
 
         node_id = next_node_id()
         structural_path_parts = [*parent_path, node_id]
@@ -1763,6 +2013,9 @@ def _parse_flow_xml(
                 and isinstance(child.tag, str)
                 and child.tag != "COMMENT"
             ):
+                if _is_disabled(child):
+                    counters["disabled"] += 1
+                    continue
                 label_source = _element_source(flow_path, scan_root, child, "branch_case")
                 raw_label = child.get("NAME")
                 label = _apply_free_text_policy(
@@ -1852,7 +2105,12 @@ def _parse_flow_xml(
         sorted(mapping_operations, key=_mapping_operation_key),
         sorted(transformer_bindings, key=_transformer_binding_key),
         sorted(findings, key=_finding_key),
+        counters["disabled"],
     )
+
+
+def _is_disabled(element: etree._Element) -> bool:
+    return (element.get("DISABLED") or "").strip().lower() == "true"
 
 
 def _parse_flow_map(
@@ -1930,6 +2188,9 @@ def _parse_flow_map(
             )
             continue
         if child_tag in MAPPING_OPERATION_TAGS:
+            if _is_disabled(child):
+                counters["disabled"] += 1
+                continue
             counters["mapop"] += 1
             map_operation_order += 1
             operation = _parse_mapping_operation(
@@ -3456,47 +3717,22 @@ def _is_secret_context(*values: str | None) -> bool:
     return any(term in combined for term in SECRET_TERMS)
 
 
-def _call_key(call: CallOccurrence) -> tuple[str, int, str, str]:
-    return (call.caller.casefold(), call.order, call.id, call.target.casefold())
+_call_key = call_sort_key
 
 
-def _unique_dependency_key(dependency: UniqueDependency) -> tuple[str, str, str]:
-    return (
-        dependency.source_service.casefold(),
-        dependency.dependency_kind.value,
-        dependency.target_service.casefold(),
-    )
+_unique_dependency_key = unique_dependency_sort_key
 
 
-def _flow_map_key(flow_map: FlowMap) -> tuple[str, int, str, str]:
-    return (
-        flow_map.service.casefold(),
-        flow_map.order,
-        flow_map.structural_path,
-        flow_map.id,
-    )
+_flow_map_key = flow_map_sort_key
 
 
-def _mapping_operation_key(operation: MappingOperation) -> tuple[str, int, str, str]:
-    return (
-        operation.service.casefold(),
-        operation.order,
-        operation.structural_path,
-        operation.id,
-    )
+_mapping_operation_key = mapping_operation_sort_key
 
 
-def _transformer_binding_key(binding: TransformerBinding) -> tuple[str, int, str, str]:
-    return (
-        binding.service.casefold(),
-        binding.order,
-        binding.structural_path,
-        binding.id,
-    )
+_transformer_binding_key = transformer_binding_sort_key
 
 
-def _document_type_key(document: DocumentType) -> tuple[str, str]:
-    return (document.identity.full_name.casefold(), document.id)
+_document_type_key = document_type_sort_key
 
 
 def _document_reference_key(
@@ -3530,32 +3766,17 @@ def _service_document_dependency_key(
     )
 
 
-def _java_service_analysis_key(analysis: JavaServiceAnalysis) -> tuple[str, str]:
-    return (analysis.identity.full_name.casefold(), analysis.id)
+_java_service_analysis_key = java_service_analysis_sort_key
 
 
-def _java_import_key(java_import: JavaImport) -> tuple[str, int, str]:
-    return (
-        java_import.service.casefold(),
-        java_import.declaration_order,
-        java_import.declaration.casefold(),
-    )
 
 
-def _java_type_reference_key(reference: JavaTypeReference) -> tuple[str, int, str]:
-    return (
-        reference.service.casefold(),
-        reference.token_ordinal,
-        reference.type_name.casefold(),
-    )
 
 
-def _java_pipeline_access_key(access: JavaPipelineAccess) -> tuple[str, int, str]:
-    return (access.service.casefold(), access.token_ordinal, access.id)
+_java_pipeline_access_key = java_pipeline_access_sort_key
 
 
-def _java_invocation_key(invocation: JavaInvocationOccurrence) -> tuple[str, int, str]:
-    return (invocation.caller.casefold(), invocation.token_ordinal, invocation.id)
+_java_invocation_key = java_invocation_sort_key
 
 
 def _finding_key(finding: AnalysisFinding) -> tuple[str, str, str]:

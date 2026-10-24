@@ -246,6 +246,12 @@ def _asset_for_dot(output_dir: Path, path: Path) -> GraphAsset:
             scope="Focused publication",
             dot_path=relative,
         )
+    if relative.startswith("graphs/services/"):
+        return GraphAsset(
+            title=f"Service call graph: {Path(relative).stem}",
+            scope="Service",
+            dot_path=relative,
+        )
     if relative.startswith("graphs/processes/"):
         process_id = Path(relative).stem
         return GraphAsset(

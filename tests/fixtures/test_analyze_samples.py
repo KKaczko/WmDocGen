@@ -152,7 +152,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v8"
+    assert analysis.schema_version == "analysis.v11"
     assert analysis.metrics.call_occurrence_count == 108
     assert analysis.metrics.flow_call_occurrence_count == 108
     assert analysis.metrics.java_static_call_occurrence_count == 0
@@ -195,7 +195,7 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
         "pgp.test.encrypt:testEncryptFile",
         "pgp.test.keys:testReadPublicKeys",
     }
-    assert analysis.extraction_policy.literal_mode == "redact"
+    assert analysis.extraction_policy.literal_mode == "include"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
     assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v1"
@@ -234,7 +234,7 @@ processes:
     analysis = analyze_path(_samples(), DEFAULT_CONFIG, processes_file)
     processes = {process.process_id: process for process in analysis.processes}
 
-    assert analysis.schema_version == "analysis.v8"
+    assert analysis.schema_version == "analysis.v11"
     assert set(processes) == {"geographic-address-validation", "pgp-key-lookup"}
     assert analysis.metrics.process_definition_count == 2
     assert analysis.metrics.declared_entrypoint_count == 3
@@ -243,7 +243,7 @@ processes:
     assert analysis.metrics.process_service_membership_count == 8
     assert analysis.metrics.process_dependency_edge_count == 7
     assert analysis.metrics.process_unresolved_call_count == 29
-    assert analysis.metrics.process_document_relationship_count == 12
+    assert analysis.metrics.process_document_relationship_count == 14  # + spec signatures
     assert analysis.metrics.services_in_multiple_processes_count == 0
 
     oa_memberships = [
@@ -414,7 +414,7 @@ def test_java_pipeline_access_counts_and_scopes() -> None:
 
 def test_java_markdown_sections_are_rendered_without_source_bodies() -> None:
     service = _service("pgp.services.encrypt:encryptAndSign")
-    markdown = render_service_markdown(service)
+    markdown = render_service_markdown(service, verbose=True)
 
     assert "## Java Analysis" in markdown
     assert "### Source Consistency" in markdown
@@ -482,11 +482,13 @@ def test_document_types_are_extracted_with_ordered_fields() -> None:
 def test_document_reference_dependencies_are_resolved_exactly() -> None:
     analysis = _analysis()
 
-    assert analysis.metrics.document_reference_occurrence_count == 12
-    assert analysis.metrics.resolved_document_reference_count == 10
+    # M12: readPrivateKeys/readPublicKeys take their signatures from specifications,
+    # which add one resolved document reference each.
+    assert analysis.metrics.document_reference_occurrence_count == 14
+    assert analysis.metrics.resolved_document_reference_count == 12
     assert analysis.metrics.unresolved_document_reference_count == 2
     assert analysis.metrics.unique_document_dependency_count == 5
-    assert analysis.metrics.service_document_dependency_count == 7
+    assert analysis.metrics.service_document_dependency_count == 9
 
     document_edges = {
         (dependency.source_document, dependency.target_document, dependency.resolved)
@@ -605,8 +607,10 @@ def test_mapping_operations_and_transformer_bindings_are_extracted() -> None:
     assert set_operation.literal is not None
     assert set_operation.literal.declared_type == "string"
     assert set_operation.literal.length == 1
-    assert set_operation.literal.disclosure == "REDACTED"
-    assert set_operation.literal.value is None
+    assert set_operation.literal.disclosure == "INCLUDED"
+    # M9: non-secret literals are disclosed by default so readers can see the value.
+    assert set_operation.literal.value == "0"
+    assert set_operation.literal.marker is None
 
     indexed_copy = next(
         operation
@@ -710,7 +714,12 @@ def test_parsed_map_and_exit_constructs_do_not_emit_deferred_findings() -> None:
 
 
 def test_markdown_separates_calls_and_summarizes_mappings() -> None:
-    markdown = render_service_markdown(_service(OA_FULL_NAME))
+    """Verbose mode must still carry the full evidence detail.
+
+    These sections moved behind --verbose in M9; the default page now leads with a
+    deterministic summary instead of the full mapping and FLOW dumps.
+    """
+    markdown = render_service_markdown(_service(OA_FULL_NAME), verbose=True)
 
     assert "## Document Type Usage" in markdown
     assert "## FLOW Overview" in markdown
@@ -720,16 +729,16 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     assert "## Mapping Overview" in markdown
     assert "## Mapping Copies" in markdown
     assert "## Mapping Sets" in markdown
+    assert "## Mapping Deletes" not in markdown
     assert "## Transformer Bindings" in markdown
     assert "Transformer input bindings | 112" in markdown
     assert "Transformer output bindings | 56" in markdown
-    assert "## Normal Service Dependencies" in markdown
-    assert "## Transformer Dependencies" in markdown
+    assert "## Calls" in markdown
+    assert "| transformer |" in markdown
     assert "## Call Occurrences" in markdown
     assert "## Transformer Call Occurrences" in markdown
-    assert "<redacted:literal>" in markdown
-    assert "`OK`" not in markdown
-    assert "M6 extracts observed FLOW, mapping, document-reference, Java Service" in markdown
+    assert "<redacted:literal>" not in markdown
+    assert "See [analysis limitations](../LIMITATIONS.md)." in markdown
 
 
 def test_deterministic_analysis_json_markdown_and_dot() -> None:
@@ -775,10 +784,10 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v8" in payload
+    assert "analysis.v11" in payload
     assert "## Disclosure Policies" in document_markdown
     assert "- Free text mode: include" in document_markdown
-    assert "- Literal mode: redact" in document_markdown
+    assert "- Literal mode: include" in document_markdown
     assert "- Secret guard: enabled" in document_markdown
     assert "- Secret guard strategy: secret-guard.v1" in document_markdown
 
@@ -831,7 +840,7 @@ def test_analyze_cli_writes_expected_outputs(tmp_path) -> None:
     assert len(list((output / "services").glob("*.md"))) == 35
     assert len(list((output / "documents").glob("*.md"))) == 7
     assert not (output / "processes").exists()
-    assert sum(1 for path in output.rglob("*") if path.is_file()) == 48
+    assert sum(1 for path in output.rglob("*") if path.is_file()) == 53  # + site pages
 
 
 def test_pgp_and_oaadapter_fixture_formats_differ() -> None:

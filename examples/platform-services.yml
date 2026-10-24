@@ -1,0 +1,28 @@
+# Your own descriptions of platform services (pub.*, wm.*), for services the shipped catalog
+# does not know or that you want worded differently. Pass the file with
+# `--platform-services platform-services.yml` to stats, analyze, describe, overview and status.
+#
+# `stats` lists every platform service your code calls that has no description yet. The format
+# is the same as the shipped catalog (src/wm_doc/data/platform_services.yml); your entries win.
+# Only pub.* and wm.* names are accepted; name the systems behind your own namespaces in
+# external-systems.yml instead.
+
+services:
+  # A description only: shown in pseudo-code, on pages and in summaries.
+  - name: pub.math:max
+    description: "returns the largest number in a list"
+    family: NUMERIC
+
+  # With a data effect: when a FLOW sets or maps `url` or `method` on the call, the value or
+  # its source path is shown under "Data and systems touched".
+  - name: pub.client:restClient
+    description: "calls an external REST endpoint"
+    family: REMOTE
+    data:
+      object: "REST request"
+      system: "HTTP"
+      where_inputs: ["url", "method"]
+
+# Families: TRANSACTION, DATABASE, MESSAGING, REMOTE, FILE, IO, XML, JSON, FLAT_FILE, DOCUMENT,
+# STRING, DATE, NUMERIC, LIST, ERROR_HANDLING, LOGGING, STORAGE, FLOW_CONTROL, SECURITY, SCHEMA,
+# SERVER_ADMIN.

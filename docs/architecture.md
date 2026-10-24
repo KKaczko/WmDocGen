@@ -1,12 +1,14 @@
 # Architecture
 
-M8a implements package/artifact inventory plus FLOW Service, Document Type, Java Service, opaque
-service, and user-maintained process static-analysis slices focused on traceable calls, unique
-dependencies, observed control-flow structure, observed mapping evidence, ordered document field
-trees, exact document-reference resolution, source-first Java Service evidence, opaque service
-identity, optional `processes.yml` catalogs, policy-safe disclosure, and optional derived graph
-publishing for Markdown-oriented repository viewers. It also adds focused publication scopes that
-limit generated Markdown and focused graph output after the complete M7 analysis result is built.
+wm-doc (M12) implements package/artifact inventory plus FLOW Service, Document Type, Java Service,
+opaque service, and user-maintained process static-analysis slices focused on traceable calls,
+unique dependencies, observed control-flow structure, observed mapping evidence, ordered document
+field trees, exact document-reference resolution, source-first Java Service evidence, opaque
+service identity, optional `processes.yml` catalogs, policy-safe disclosure, and optional derived
+graph publishing for Markdown-oriented repository viewers. It adds focused publication scopes,
+deterministic usage and data-effect facts per service, and per-service description files drafted
+by a local Ollama model and reviewed by people (`wm-doc describe`). The earlier M8b/M8c
+business-context and business-enrichment path was removed in M12.
 
 Subsystems:
 
@@ -41,6 +43,20 @@ Subsystems:
   static dependencies, dynamic invocation evidence, and unsupported call-like findings, computes
   document closure from canonical service/document relationships, and writes `scope.v1` separately
   from canonical analysis.
+- Usage and data facts in `wm_doc.effects` (with `wm_doc.references`, `wm_doc.builtins` and
+  `wm_doc.external_systems`) derive per service the direct callers, entry points, and data objects
+  and systems touched, each with how it is known. Artifact references are exact full-name matches
+  of string values in non-service `node.ndf` files.
+- Per-service descriptions: `wm_doc.pseudocode` renders the facts as compact pseudo-code,
+  `wm_doc.callgraph` orders services callees first, `wm_doc.summarizer` fits prompts to the
+  context window and checks name grounding, `wm_doc.service_docs` reads and writes description
+  files, `wm_doc.describer` runs describe/approve/status/export, and `wm_doc.disclosure` scans
+  model text before it is cached or written.
+- `wm_doc.ollama_provider` talks to Ollama `/api/chat` with `stream:false`, JSON schema
+  `format`, `temperature=0`, per-request `num_ctx`, safe URL validation, disabled
+  redirects/proxies, bounded diagnostics, loopback-only defaults, and an optional base path and
+  bearer token for a proxied server. `wm_doc.openai_compatible_provider` reaches the `/v1` API of
+  the same kind of server; `wm_doc.provider_probe` reports which one works.
 - Classification in `wm_doc.config` applies deterministic, case-insensitive glob rules. `neverImportant`
   rules take precedence over important service rules.
 - Dependency resolution is exact-name only. It resolves static `INVOKE`, `MAPINVOKE`, and
@@ -59,9 +75,10 @@ Subsystems:
   extraction policies, and typed findings.
 - Renderers produce deterministic inventory JSON/Markdown and deterministic analysis JSON,
   top-level index Markdown, entrypoint candidate Markdown, per-service Markdown, per-document
-  Markdown, process Markdown, graph catalog Markdown, Graphviz DOT, and optional derived SVG/PNG
-  graph assets.
-- The CLI exposes `wm-doc scan` and `wm-doc analyze`.
+  Markdown, process Markdown, graph catalog Markdown, artifact inventory, service catalogue,
+  Graphviz DOT, and optional derived SVG/PNG graph assets.
+- The CLI exposes `wm-doc scan`, `stats`, `analyze`, `describe`, `approve`, `status`,
+  `export-comments`, `provider-probe` and `probe-shapes`.
 
 ## Analysis Schema
 
@@ -277,24 +294,42 @@ M8a keeps `analysis.v8` and adds `scope.v1` for focused publication:
   `graphs/scope-documents.dot`. It does not write global `graphs/dependencies.dot` or
   `graphs/documents.dot` in scoped mode. No-selector mode remains the accepted M7 publication path.
 
-M8b keeps `analysis.v8` and `scope.v1` unchanged and adds a separate deterministic context package:
+M8b (`build-business-context`, `business-context.v*`) and M8c (`enrich-business`, `ollama-test`,
+`business-result.v*`) were removed in M12; per-service description files replaced them.
 
-- `wm-doc build-business-context` consumes generated focused artifacts rather than reparsing package
-  snapshots. It accepts either `--input <focused-output-dir>` or explicit `--analysis` and
-  `--scope` paths.
-- The command validates supported schemas and cross-references before writing output. Invalid or
-  incompatible inputs fail without emitting a context bundle.
-- `business-context/context.json` uses schema `business-context.v1`; `business-context/context.md`
-  is a deterministic human review preview, not model-authored business documentation.
-- The context pack separates canonical technical facts, approved process metadata, deterministic
-  summaries, boundaries, unknowns, limitations, omissions, and evidence records. Evidence IDs refer
-  to stable canonical or context-specific identifiers and never to Markdown filenames or absolute
-  paths.
-- M8b is allowlist-based: it does not serialize raw XML, Java bodies, MAP literal values, arbitrary
-  constants, absolute local paths, Graphviz diagnostics, provider settings, prompts, model
-  responses, or cache metadata.
-- `COMPLETE` and `PARTIAL` describe the deterministic context package. Built-in `pub.*`/`wm.*`
-  boundaries are retained as limitations but do not make a context partial by themselves.
+M12 migrates to `analysis.v9`:
+
+- Services record `specification` (`svc_spec`) and `signature_origin`; a service without its own
+  signature takes its specification's signature and document references.
+- FLOW trees model Designer's REPEAT step (`<RETRY>`) as `REPEAT` with COUNT, BACK-OFF and LOOP-ON.
+- Each package's `service_index` lists only its own services (it used to list every service in
+  every package).
+- `excluded_packages`, `namespace_artifacts` (with declared `node_type`) and
+  `artifact_references` (exact full-name references from non-service `node.ndf` files, with the
+  key path) are recorded.
+
+M12 then migrates to `analysis.v10`: each fact is stored once. The top-level `call_occurrences`,
+`unique_dependencies`, `flow_maps`, `mapping_operations`, `transformer_bindings`,
+`document_types`, `java_service_analyses`, `java_imports`, `java_type_references`,
+`java_pipeline_accesses` and `java_invocation_occurrences` lists, and each package's
+`java_service_analyses`, were sorted copies of data held by services and packages. They are no
+longer serialized; `AnalysisResult` and `AnalyzedPackage` expose them as derived properties with
+the same ordering, so in-memory readers are unchanged. `document_reference_occurrences`,
+`document_dependencies` and `service_document_dependencies` stay at top level.
+
+M12 then migrates to `analysis.v11` for the approved readers:
+
+- FLOW steps and mapping lines with `DISABLED="true"` are left out of the tree, calls, mappings
+  and effects; each service records how many in `disabled_steps`.
+- JDBC adapter services carry `adapter` (operation template, tables, connection) and
+  `namespace_artifacts` entries carry `adapter` for JDBC connections (datasource class and
+  product, database name, transaction type) and notifications (type, tables, connection,
+  published document), decoded from the binary `IRTNODE_PROPERTY` by `adapters.py`. Only these
+  allow-listed keys are read, and each value must match the shape of a name.
+- Trigger entries carry `trigger` (`triggers.py`): trigger type, JMS alias, destinations with
+  queue or topic, and per condition or routing rule the subscribed document and handler.
+- Entry points also come from legacy REST v1 handlers (`_get`, `_post`, ... at
+  `/rest/<namespace as path>`).
 
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
@@ -306,8 +341,7 @@ M3 document parsing is also feature-based. It maps only observed field types (`s
 document schemas, recursively expand referenced documents, interpret field names as business
 semantics, or model Specification artifacts as Document Types.
 
-Later milestones may add broad Java external-effect classification, fuller FLOW semantics, detailed
-adapter fixtures, JDBC/database resources, trigger fixtures, scheduler fixtures, native BPM
-process-model parsing, Service Specification IR, package dependency graphs, snapshot diffing, and
-Ollama/model-generated business documentation. Those are intentionally outside M8b and require a
-separate gate.
+Later milestones may add broad Java external-effect classification, fuller FLOW semantics, semantic
+parsers for JDBC adapter services, triggers and REST/SOAP descriptors (from real `probe-shapes`
+output), scheduler entries, native BPM process-model parsing, package dependency graphs and snapshot
+diffing. Those require a separate approval.

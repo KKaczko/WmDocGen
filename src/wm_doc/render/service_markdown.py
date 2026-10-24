@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jinja2 import Template
 
+from wm_doc.builtins import builtin_effect, is_builtin_name
 from wm_doc.ir import (
     CallOccurrence,
     DependencyKind,
@@ -24,6 +27,7 @@ from wm_doc.ir import (
     ProcessDefinition,
     ProcessServiceMembership,
     ServiceDocumentDependency,
+    ServiceType,
     SignatureField,
     SourceReference,
     TextValue,
@@ -31,6 +35,11 @@ from wm_doc.ir import (
     UniqueDependency,
 )
 from wm_doc.render.document_markdown import document_markdown_filename
+from wm_doc.render.service_summary import derived_layer, render_service_summary
+
+if TYPE_CHECKING:
+    from wm_doc.effects import ServiceFacts
+    from wm_doc.service_docs import ServiceDoc
 
 IMPORTANCE_ORDER = {"IMPORTANT": 0, "NORMAL": 1, "LOW": 2}
 MAX_OUTLINE_DEPTH = 5
@@ -40,6 +49,18 @@ MAX_MAPPING_ROWS = 50
 _TEMPLATE = Template(
     """# {{ service.identity.full_name }}
 
+## Summary
+
+{{ summary_text }}
+
+{% if doc %}
+## Description
+
+> {{ doc_badge }}
+
+{{ doc_body }}
+
+{% endif %}
 ## Identity
 
 | Field | Value |
@@ -52,8 +73,11 @@ _TEMPLATE = Template(
 | Analysis support | `{{ service.analysis_status }}` |
 | Description status | `{{ service.description_status }}` |
 | Importance | `{{ service.classification.importance }}` |
-| Layer | `{{ service.classification.layer }}` |
+| Layer | `{{ layer_text }}` |
 | Identity basis | `{{ service.identity.basis }}` |
+{% if service.specification %}
+| Specification | `{{ service.specification }}` |
+{% endif %}
 
 ## Analysis Support
 
@@ -66,25 +90,49 @@ service-level findings describe unavailable or malformed evidence.
 {% else -%}
 The artifact was analyzed by the supported parser for its service type.
 {% endif %}
+{% if service.adapter %}
 
-## Description
+## Adapter Configuration
+
+Read from the JDBC adapter service's configuration (allow-listed fields only; the SQL text,
+server and credentials are not read).
+
+| Field | Value |
+| --- | --- |
+| Adapter type | `{{ service.adapter.adapter_type or "not determined" }}` |
+| Template | `{{ service.adapter.template or "not determined" }}` |
+| Tables | {{ adapter_tables }} |
+| Connection | `{{ service.adapter.connection or "not determined" }}` |
+{% endif %}
+{% if service.disabled_steps %}
+
+{{ service.disabled_steps }} disabled step(s) (`DISABLED="true"`) never run and are left out of
+the steps, calls, mappings and effects on this page.
+{% endif %}
+
+## Designer Comment
 
 {% if description_text -%}
-Extracted description:
+The service's Comments field in Designer (`node_comment`):
 
 {{ description_text }}
 {% else -%}
-No description was declared in supported metadata.
+The service's Comments field in Designer is empty.
 {% endif %}
 
 ## Input Signature
 
+{% if service.signature_origin.value == "SPECIFICATION" %}
+Signature from specification `{{ service.specification }}`.
+
+{% endif %}
 {{ render_fields(service.signature.inputs) }}
 
 ## Output Signature
 
 {{ render_fields(service.signature.outputs) }}
 
+{% if input_document_dependencies or output_document_dependencies or verbose %}
 ## Document Type Usage
 
 ### Input Document Types
@@ -94,7 +142,9 @@ No description was declared in supported metadata.
 ### Output Document Types
 
 {{ render_document_usage(output_document_dependencies) }}
+{% endif %}
 
+{% if verbose %}
 ### Resolved Document References
 
 {{ render_document_references(resolved_document_references) }}
@@ -103,6 +153,8 @@ No description was declared in supported metadata.
 
 {{ render_document_references(unresolved_document_references) }}
 
+{% endif %}
+{% if verbose %}
 {% if service.java_analysis %}
 ## Java Analysis
 
@@ -139,6 +191,8 @@ No description was declared in supported metadata.
 {{ render_java_types(service.java_analysis.referenced_types) }}
 {% endif %}
 
+{% endif %}
+{% if verbose %}
 ## FLOW Overview
 
 | Metric | Count |
@@ -173,22 +227,29 @@ No description was declared in supported metadata.
 
 {{ render_mapping_operations(set_operations, "SET") }}
 
-## Mapping Deletes
-
-{{ render_mapping_operations(delete_operations, "DELETE") }}
-
 ## Transformer Bindings
 
 {{ render_transformer_bindings(service.transformer_bindings) }}
 
-## Normal Service Dependencies
+{% endif %}
+## Calls
 
-{{ render_dependencies(normal_dependencies) }}
+{{ render_calls_table(service) }}
 
-## Transformer Dependencies
+{% if call_graph %}
+## Call Graph
 
-{{ render_dependencies(transformer_dependencies) }}
+![Call graph of {{ service.identity.full_name }}]({{ call_graph[0] }})
 
+[DOT source]({{ call_graph[1] }})
+
+{% endif %}
+{% if facts %}
+## Data and Systems Touched
+
+{{ render_effects(facts) }}
+
+{% endif %}
 ## Called By
 
 {{ render_incoming_dependencies(incoming_dependencies) }}
@@ -197,6 +258,13 @@ No description was declared in supported metadata.
 
 {{ render_process_memberships(process_memberships, process_definitions) }}
 
+{% if facts %}
+## Entry Points
+
+{{ render_entry_points(facts) }}
+
+{% endif %}
+{% if verbose %}
 ## Call Occurrences
 
 {{ render_calls(service_calls, "INVOKE") }}
@@ -209,6 +277,7 @@ No description was declared in supported metadata.
 
 {{ flow_outline }}
 
+{% endif %}
 ## Unsupported Or Unknown Constructs
 
 {% if service.findings %}
@@ -219,28 +288,24 @@ No description was declared in supported metadata.
 No service-level findings.
 {% endif %}
 
+{% if verbose %}
 ## Source Evidence
 
 - Service metadata: `{{ service.source.path }}`
 - Signature metadata: `{{ service.signature.source.path }}`
 {% for call in service.call_occurrences[:20] %}
 - {{ call.call_type }} `{{ call.id }}` target `{{ call.target }}`:
-  `{{ call.source.path }}`{% if call.source.line %}:{{ call.source.line }}{% endif %}
+  `{{ call.source.path }}`{{ ":" ~ call.source.line if call.source.line else "" }}
 {% endfor %}
 {% if service.call_occurrences|length > 20 %}
 - Source evidence list truncated after 20 call occurrences in Markdown.
   Full evidence is in `analysis.json`.
 {% endif %}
 
+{% endif %}
 ## Analysis Limitations
 
-M6 extracts observed FLOW, mapping, document-reference, Java Service source evidence, opaque service
-common metadata, and user-declared process catalog evidence with literal and free-text disclosure
-policies. It does not resolve mapped paths against document schemas, evaluate branch conditions,
-simulate loops or runtime state, infer dynamic Java invocation targets, promote nested Java
-executable bodies without a callback/control-flow model, execute Java code, compile Java source,
-connect to Integration Server, or parse JDBC, trigger, scheduler, messaging, BPM process-model, or
-database-resource semantics.
+See [analysis limitations](../LIMITATIONS.md).
 """,
     trim_blocks=True,
     lstrip_blocks=True,
@@ -252,12 +317,15 @@ def render_service_markdown(
     incoming_dependencies: list[UniqueDependency] | None = None,
     process_memberships: list[ProcessServiceMembership] | None = None,
     process_definitions: dict[str, ProcessDefinition] | None = None,
+    *,
+    verbose: bool = False,
+    doc: ServiceDoc | None = None,
+    facts: ServiceFacts | None = None,
+    call_graph: tuple[str, str] | None = None,
 ) -> str:
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
     process_definitions = process_definitions or {}
-    normal_dependencies = _dependencies_for_kind(service, DependencyKind.INVOKES)
-    transformer_dependencies = _dependencies_for_kind(service, DependencyKind.USES_TRANSFORMER)
     service_calls = _calls_for_type(service, "INVOKE")
     transformer_calls = _calls_for_type(service, "MAPINVOKE")
     input_document_dependencies = [
@@ -287,10 +355,23 @@ def render_service_markdown(
     description_text = _text_display(service.description)
     return _TEMPLATE.render(
         service=service,
+        verbose=verbose,
+        doc=doc,
+        doc_badge=doc_badge(doc) if doc is not None else "",
+        doc_body=doc_body(doc) if doc is not None else "",
+        facts=facts,
+        call_graph=call_graph,
+        render_effects=render_effects_table,
+        render_entry_points=render_entry_points_table,
+        summary_text=render_service_summary(service, facts),
+        layer_text=derived_layer(service) or service.classification.layer,
         description_text=description_text,
         source_service_type=service.source_service_type or "<not declared>",
-        normal_dependencies=normal_dependencies,
-        transformer_dependencies=transformer_dependencies,
+        adapter_tables=(
+            ", ".join(f"`{table}`" for table in service.adapter.tables) or "not determined"
+            if service.adapter is not None
+            else ""
+        ),
         incoming_dependencies=incoming_dependencies,
         process_memberships=process_memberships,
         process_definitions=process_definitions,
@@ -315,7 +396,7 @@ def render_service_markdown(
             name, 0
         ),
         render_fields=_render_fields,
-        render_dependencies=_render_dependencies,
+        render_calls_table=_render_calls_table,
         render_incoming_dependencies=_render_incoming_dependencies,
         render_process_memberships=_render_process_memberships,
         render_document_usage=_render_document_usage,
@@ -331,27 +412,158 @@ def render_service_markdown(
     )
 
 
+def service_markdown_filenames(services: list[FlowService]) -> dict[str, str]:
+    """Map each service full name to its page filename, disambiguating slug collisions."""
+    slug_counts = Counter(
+        service_markdown_filename(service.identity.full_name) for service in services
+    )
+    filenames: dict[str, str] = {}
+    for service in services:
+        full_name = service.identity.full_name
+        filename = service_markdown_filename(full_name)
+        if slug_counts[filename] > 1:
+            stem = filename.removesuffix(".md")
+            digest = hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:12]
+            filename = f"{stem}__{digest}.md"
+        filenames[full_name] = filename
+    return filenames
+
+
+def _chain(names: tuple[str, ...]) -> str:
+    return " → ".join(f"`{name}`" for name in names)
+
+
+def render_effects_table(facts: ServiceFacts) -> str:
+    """Data objects and systems this service touches, itself or through local callees."""
+    if not facts.effects:
+        return "No data objects or external systems were found for this service.\n"
+    lines = [
+        "| Object | Action | Where | Via | Known from |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for effect in facts.effects:
+        via = _chain(effect.via) if effect.via else "this service"
+        lines.append(
+            f"| {_escape_table(effect.object)} | {_escape_table(effect.action)} "
+            f"| {_escape_table(effect.where)} | {via} | {effect.known_from} |"
+        )
+    if facts.hidden_effects:
+        lines.append(f"| ... {facts.hidden_effects} more | | | | |")
+    return "\n".join(lines) + "\n"
+
+
+def render_entry_points_table(facts: ServiceFacts) -> str:
+    """What reaches this service: artifacts naming a caller, processes, uncalled callers."""
+    if not facts.entry_points:
+        if facts.callers:
+            return "No entry point was found within the depth limit.\n"
+        return (
+            "Nothing in the analysed packages calls or references this service. It may be "
+            "invoked from outside them (for example over HTTP, by a scheduler, or by a trigger "
+            "in a package that was not analysed).\n"
+        )
+    lines = ["| Entry point | Kind | Path |", "| --- | --- | --- |"]
+    for entry in facts.entry_points:
+        lines.append(f"| {entry.name} | {_escape_table(entry.kind)} | {_chain(entry.path)} |")
+    return "\n".join(lines) + "\n"
+
+
+def doc_badge(doc: ServiceDoc) -> str:
+    """One line saying who wrote the description and whether it was reviewed."""
+    from wm_doc.service_docs import DocState
+
+    state = doc.state()
+    model = f"`{doc.model}`" if doc.model else "a local language model"
+    if state is DocState.APPROVED:
+        return "**Approved.** Reviewed description from `service-docs`."
+    if state is DocState.STALE:
+        return (
+            "**Approved, but the facts have changed since.** Review the description against "
+            "the facts below."
+        )
+    unverified = ", ".join(f"`{name}`" for name in doc.unverified_names)
+    if unverified:
+        return (
+            f"**Draft with unverified names, not reviewed.** Written by {model}; it names "
+            f"things that are not in the facts ({unverified}). Check it before relying on it."
+        )
+    if state is DocState.EDITED:
+        return f"**Edited draft, not yet approved.** First written by {model}."
+    return (
+        f"**Draft, not reviewed.** Written by {model} from the facts on this page; check it "
+        "before relying on it."
+    )
+
+
+def doc_body(doc: ServiceDoc) -> str:
+    """The narrative with its headings moved one level down, plus any human notes."""
+    from wm_doc.service_docs import NOTES_PLACEHOLDER
+
+    body = "\n".join(
+        f"#{line}" if line.startswith("## ") else line for line in doc.narrative.splitlines()
+    ).strip()
+    notes = doc.notes.strip()
+    if notes and notes != NOTES_PLACEHOLDER:
+        body += f"\n\n### Notes\n\n{notes}"
+    return body
+
+
 def service_markdown_filename(full_name: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", full_name)
     return f"{slug}.md"
 
 
-def _dependencies_for_kind(
-    service: FlowService, dependency_kind: DependencyKind
-) -> list[UniqueDependency]:
-    dependencies = [
-        dependency
-        for dependency in service.unique_dependencies
-        if dependency.dependency_kind == dependency_kind
-    ]
+def _sorted_dependencies(service: FlowService) -> list[UniqueDependency]:
     return sorted(
-        dependencies,
+        service.unique_dependencies,
         key=lambda dependency: (
             IMPORTANCE_ORDER.get(dependency.target_classification.importance.value, 99),
             dependency.target_service.casefold(),
+            dependency.dependency_kind.value,
             dependency.id,
         ),
     )
+
+
+def _call_how(service: FlowService, dependency: UniqueDependency) -> str:
+    if dependency.dependency_kind is DependencyKind.USES_TRANSFORMER:
+        return "transformer"
+    if service.service_type is ServiceType.JAVA:
+        return "Java call"
+    return "step"
+
+
+def _render_calls_table(service: FlowService) -> str:
+    """Every service this one calls, whether from a FLOW step, a transformer or Java."""
+    dependencies = _sorted_dependencies(service)
+    if not dependencies:
+        if service.service_type is ServiceType.JAVA:
+            return "No statically confirmed service calls were found in the Java source.\n"
+        if service.service_type is ServiceType.OPAQUE:
+            return "Calls are not analysed for this service type.\n"
+        return "This service calls no other service.\n"
+    lines = [
+        "| Occurrences | Target | How | Kind | Effect |",
+        "| ---: | --- | --- | --- | --- |",
+    ]
+    for dependency in dependencies:
+        target = dependency.target_service
+        effect = builtin_effect(target)
+        if effect is not None:
+            kind, description = "PLATFORM", effect.label
+        elif is_builtin_name(target):
+            # A platform service outside the catalog: say so rather than guess.
+            kind, description = "PLATFORM", "uncatalogued platform service"
+        elif dependency.resolved:
+            kind = str(dependency.target_type or "UNKNOWN")
+            description = f"in analysed packages ({dependency.target_analysis_status or 'UNKNOWN'})"
+        else:
+            kind, description = "EXTERNAL", "outside the analysed packages"
+        lines.append(
+            f"| {dependency.occurrence_count} | `{target}` | {_call_how(service, dependency)} "
+            f"| `{kind}` | {description} |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _calls_for_type(service: FlowService, call_type: str) -> list[CallOccurrence]:
@@ -388,25 +600,6 @@ def _java_invocations_for_static(
         for invocation in java_analysis.invocation_occurrences
         if (invocation.target_status.value == "STATIC_TARGET") == static
     ]
-
-
-def _render_dependencies(dependencies: list[UniqueDependency]) -> str:
-    if not dependencies:
-        return "No static targets were extracted for this dependency kind.\n"
-    lines = [
-        "| Occurrences | Resolved | Target Type | Target Support | Target |",
-        "| ---: | --- | --- | --- | --- |",
-    ]
-    for dependency in dependencies:
-        lines.append(
-            "| "
-            f"{dependency.occurrence_count} | "
-            f"{dependency.resolved} | "
-            f"`{dependency.target_type or 'UNKNOWN'}` | "
-            f"`{dependency.target_analysis_status or 'UNKNOWN'}` | "
-            f"`{dependency.target_service}` |"
-        )
-    return "\n".join(lines) + "\n"
 
 
 def _render_incoming_dependencies(dependencies: list[UniqueDependency]) -> str:
@@ -801,10 +994,15 @@ def _append_field(lines: list[str], field: SignatureField, depth: int) -> None:
         f"`{field.data_type or ''}` | "
         f"{field.dimensions if field.dimensions is not None else ''} | "
         f"{field.optional if field.optional is not None else ''} | "
-        f"`{field.document_reference or ''}` |"
+        f"{_code(field.document_reference)} |"
     )
     for child in field.children:
         _append_field(lines, child, depth + 1)
+
+
+def _code(value: str | None) -> str:
+    """Inline code for a value, or an empty cell (an empty code span renders as ``)."""
+    return f"`{value}`" if value else ""
 
 
 def _text_display(text: TextValue | None) -> str | None:
@@ -822,6 +1020,11 @@ def write_service_markdown(
     services: list[FlowService],
     process_memberships: list[ProcessServiceMembership] | None = None,
     processes: list[ProcessDefinition] | None = None,
+    *,
+    verbose: bool = False,
+    service_docs: Mapping[str, ServiceDoc] | None = None,
+    service_facts: Mapping[str, ServiceFacts] | None = None,
+    service_graphs: Mapping[str, tuple[str, str]] | None = None,
 ) -> list[Path]:
     service_dir = output_dir / "services"
     service_dir.mkdir(parents=True, exist_ok=True)
@@ -829,22 +1032,20 @@ def write_service_markdown(
     incoming_dependencies = _incoming_dependencies_by_target(services)
     memberships_by_service = _process_memberships_by_service(process_memberships or [])
     process_definitions = {process.process_id: process for process in processes or []}
-    slug_counts = Counter(
-        service_markdown_filename(service.identity.full_name) for service in services
-    )
+    filenames = service_markdown_filenames(services)
+    service_docs = service_docs or {}
     for service in sorted(services, key=lambda item: item.identity.full_name.casefold()):
-        filename = service_markdown_filename(service.identity.full_name)
-        if slug_counts[filename] > 1:
-            stem = filename.removesuffix(".md")
-            digest = hashlib.sha256(service.identity.full_name.encode("utf-8")).hexdigest()[:12]
-            filename = f"{stem}__{digest}.md"
-        path = service_dir / filename
+        path = service_dir / filenames[service.identity.full_name]
         path.write_text(
             render_service_markdown(
                 service,
                 incoming_dependencies.get(service.identity.full_name, []),
                 memberships_by_service.get(service.identity.full_name, []),
                 process_definitions,
+                verbose=verbose,
+                doc=service_docs.get(service.identity.full_name),
+                facts=(service_facts or {}).get(service.identity.full_name),
+                call_graph=(service_graphs or {}).get(service.identity.full_name),
             ),
             encoding="utf-8",
         )

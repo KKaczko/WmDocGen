@@ -1,6 +1,6 @@
 # Unsupported Constructs
 
-Unsupported or only partially supported in M8b:
+Unsupported or only partially supported in M12:
 
 - Full FLOW execution semantics
 - Full MAP operation semantics beyond observed evidence extraction
@@ -21,11 +21,12 @@ Unsupported or only partially supported in M8b:
 - Broad Java external-effect classification
 - Java helper method/body effect analysis
 - Java execution, compilation, class loading, reflection modeling, or full semantic analysis
-- Detailed JDBC Adapter Service parsing
-- JDBC SQL, table, view, procedure, connection-alias, or database-resource extraction
-- Adapter service family semantics beyond opaque service identity
-- Universal Messaging triggers
-- JMS triggers
+- JDBC adapter fields beyond the approved allow-list (operation template, tables, connection;
+  for connections the datasource class, database name and transaction type; for notifications
+  the type, tables, connection and published document): SQL text, procedure names, columns,
+  server, port, user, password, URL and other connection properties are never read
+- Configuration of adapter types other than JDBC
+- Trigger filters, message selectors, join conditions and tuning values
 - Schedulers
 - Native webMethods BPM/process-model parsing
 - Automatic business process discovery from technical graph shape
@@ -38,8 +39,11 @@ Unsupported or only partially supported in M8b:
 - Interactive graph viewers, Mermaid output, JavaScript graph rendering, and static-site framework
   generation
 - Runtime-only Integration Server configuration
-- Ollama documentation generation
-- Model-generated business documentation, impact analysis, and snapshot comparison
+- Cloud provider defaults, RAG, arbitrary external documents, prompt editing UI, model fine-tuning,
+  impact analysis, and snapshot comparison
+- Model-written text that names anything absent from the facts sent with its prompt
+- REST v2 resource paths and scheduler entries; only exact name references found in their
+  `node.ndf` are used
 
 M5-lite keeps parseable service artifacts with explicit unsupported `svc_type` values, after
 surrounding whitespace is trimmed, as `OPAQUE` services. Missing, empty, whitespace-only,
@@ -47,6 +51,8 @@ malformed, or non-scalar service-type metadata is not promoted to a service. Opa
 resolve exact incoming calls and appear in the service dependency graph, but their
 implementation-specific body is not interpreted. The analyzer does not infer database, messaging,
 scheduler, trigger, process, file, network, or other external behavior from an opaque service.
+M12 adds one exception approved by the owner: JDBC adapter services, connections and
+notifications have the allow-listed fields of their `IRTNODE_PROPERTY` decoded (`adapters.py`).
 
 M6 supports only user-maintained `processes.yml` catalog declarations. Declared entrypoints must be
 exact canonical service full names, and traversal follows only resolved local service dependencies.
@@ -76,11 +82,12 @@ selector values, fuzzy matching, short service-name fallback, package path subst
 filesystem-folder targeting. Target namespace matching is canonical namespace segment-prefix
 matching only.
 
-M8b supports deterministic `business-context.v1` packs from focused M8a artifacts only. It does not
-call Ollama, select models, build prompts, validate model responses, cache LLM output, or infer
-business owners, actors, outcomes, external-system names, SLAs, database technologies, or legal
-meaning from technical names. It also does not extend `processes.yml` with owner/actor/outcome
-metadata.
+M12 descriptions (`wm-doc describe`) use only facts the tool established from package files: the
+pseudo-code view, usage and data-effect facts, declared external systems and developer step
+comments. They do not read arbitrary external documents, use RAG, call cloud providers, persist raw
+prompts or raw model responses, or cache rejected output. They do not infer owners, actors,
+schedules, tables or legal meaning from names. The earlier M8b/M8c business-context and
+business-enrichment path was removed in M12.
 
 M3 extracts static `INVOKE` and `MAPINVOKE` targets when a literal `SERVICE` attribute is present.
 Targets that are not present in the analyzed snapshot are retained as unresolved call occurrences
