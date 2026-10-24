@@ -24,7 +24,8 @@ def test_scan_samples_discovers_expected_artifact_counts() -> None:
 
     pgp = next(package for package in inventory.packages if package.name == "PGP")
     assert pgp.aliases == ["GCS_PGP", "WxPGP"]
-    assert any(finding.code == "PGP_PROVENANCE_UNKNOWN" for finding in pgp.findings)
+    # Fixture provenance is documented in docs/fixture-provenance.md, not reported by the tool.
+    assert not any(finding.code == "PGP_PROVENANCE_UNKNOWN" for finding in pgp.findings)
 
 
 def test_scan_samples_json_is_deterministic() -> None:

@@ -1,73 +1,140 @@
 # Repository Guidance
 
-This project builds an offline static-analysis tool for webMethods Integration Server packages.
+This project builds an offline tool that documents webMethods Integration Server packages
+(built against 10.15): a deterministic technical documentation site, and one reviewed
+description file per service drafted by a local Ollama model from facts the tool established.
+The target production server has about 200 packages and 7,300 services (6,000 FLOW, 1,100
+adapter services) and 9,600 document types.
 
-Current implementation milestone is M8b: deterministic business context packs on top of the
-accepted M8a focused-publication baseline. M8a performs the complete M7 technical analysis first,
-keeps `analysis.json` as the full `analysis.v8` snapshot, and then optionally limits generated
-Markdown and focused graph publication through one selector. Focused publication reduces generated
-documentation and graph scope; it does not reduce the initial parsing or analysis cost. M8b consumes
-focused `analysis.json` and `scope.json` artifacts through `wm-doc build-business-context` and
-writes bounded `business-context.v1` JSON plus a deterministic preview Markdown file. M8b does not
-call Ollama, generate business prose, add prompts, select models, or cache model responses. M4a
-associates Java Services with generated source under
-`code/source`, checks each matched method against `java.frag` with normalized Java tokens, extracts
-imports, referenced types, observed pipeline READ/WRITE/REMOVE accesses, and narrowly supported
-static or dynamic `Service.doInvoke` sites, and integrates only statically confirmed Java calls into
-service dependencies.
+Current milestone: M12 (approved by the repository owner). The earlier business-context /
+business-enrichment path (`build-business-context`, `enrich-business`, `ollama-test`,
+`business-context.v*`, `business-result.v*`) was removed in M12; do not reintroduce it.
 
-M5-lite adds deterministic inventory for parseable service-like `node.ndf` artifacts whose
-top-level `svc_type` is explicit after whitespace trimming but not a supported FLOW, Java, or
-Specification type. These services are retained as `OPAQUE`, may resolve as exact service-call
-targets, and expose only common metadata such as identity, trimmed source `svc_type`, safe
-`node_comment`, and signatures. Do not infer database, adapter, trigger, scheduler, UM/JMS,
-process, or external-resource behavior from opaque artifacts.
+## Pipeline and modules
 
-M6 adds optional `processes.yml` parsing, exact declared entrypoint validation, deterministic
-process traversal over resolved service dependencies, technical entrypoint candidates, process
-Markdown, top-level documentation index, and per-process DOT graphs. It does not parse native
-webMethods BPM/process-model artifacts and does not infer business processes from technical root
-candidates.
+- Discovery (`discovery.py`): finds package roots without descending into a package once found,
+  applies package selection (`config.PackageSelectionConfig`: include/exclude globs; `Wm*`,
+  `Default` and `system_package=yes` skipped by default) and records excluded packages with a
+  reason. Non-service namespace nodes keep their declared `node_type`.
+- Analysis (`analysis.py`, `java_analysis.py`, `values.py`, `xmlsafe.py`): FLOW services (ordered
+  FLOW tree incl. TRY/CATCH via `SEQUENCE FORM`, REPEAT via `<RETRY>`, maps, transformers;
+  `DISABLED="true"` steps and mapping lines are left out and counted in `disabled_steps`),
+  Java services (source-first, checked against `java.frag`; only statically confirmed
+  `Service.doInvoke` calls become dependencies), opaque services (explicit unsupported `svc_type`:
+  identity, signature and description; JDBC adapter services also their decoded
+  configuration), document types, and specification signatures through `svc_spec`.
+- Readers (`adapters.py`, `triggers.py`): the approved JDBC adapter decoder and trigger reader
+  (see "Approved readers"); their results sit on `FlowService.adapter` and
+  `NamespaceArtifact.adapter` / `.trigger`.
+- Platform catalog (`builtins.py`, `data/platform_services.yml`): one-line description, effect
+  family and optional data-effect inputs per `pub.*` / `wm.*` service, written for wm-doc (never
+  copied documentation); `--platform-services` adds or overrides entries for one command.
+- Facts (`effects.py`, `references.py`, `builtins.py`, `external_systems.py`): per service, the
+  direct callers, entry points (artifacts whose node.ndf contains a service's exact name,
+  `processes.yml`, uncalled callers), and data and systems touched (signature documents; platform
+  calls with object and location read from the literal or mapped documented input field; JDBC
+  adapter services with operation, tables and connection; other opaque callees with the
+  connections their node.ndf names; calls leaving the analysed packages, named by
+  `external-systems.yml`). Effects of local callees are included with the call chain. Entry
+  points also include trigger details and legacy REST v1 handlers.
+- Prompts (`pseudocode.py`, `callgraph.py`, `summarizer.py`): a per-service pseudo-code view,
+  callee-first ordering (Tarjan SCC), context fitting and the name-grounding check.
+- Descriptions (`service_docs.py`, `describer.py`, `disclosure.py`): description files, the
+  describe/approve/status/export workflow, the shared validated model call (`AnswerSpec`,
+  `ModelSession`), and the disclosure scan for model text.
+- Overviews (`overviews.py`, `render/package_markdown.py`): deterministic package facts
+  (entry points, services, own data effects, calls between packages), package pages, and the
+  package and server overview files written by `overview`.
+- Analysis cache (`analysis_cache.py`): reuses the last `AnalysisResult` of a packages
+  directory while the tool version, configuration, `processes.yml` and every file's path,
+  size and mtime are unchanged. Per-service call graphs (`render/service_graph.py`) are
+  written only when `--render-graphs` asks for images.
+- Providers (`ollama_provider.py`, `openai_compatible_provider.py`, `provider_probe.py`).
+- Rendering (`render/`), `stats.py`, `shapes.py`, `scope_analysis.py` (focused publication).
 
-M7 keeps `analysis.json` at schema `analysis.v8` and keeps DOT files canonical. It adds optional
-Graphviz-derived SVG/PNG publishing behind `wm-doc analyze --render-graphs`, a generated
-`graphs/index.md`, stale generated-output cleanup, and Markdown links/previews suitable for Gitea.
-Graphviz is an optional external executable, not a Python dependency or a default-analysis
-requirement. Render failures must leave canonical analysis and DOT outputs available, report safe
-relative diagnostics, and exit non-zero only when rendering was explicitly requested.
-Managed output cleanup is limited to generated root files and generated directories. Shape conflicts
-at those paths may be replaced, but unrelated output-root files must be preserved and symlinks must
-be unlinked rather than traversed.
+## Contracts
 
-M8a focused publication supports exactly one selector per run: `--target-service`,
-`--target-namespace`, `--target-package`, or `--target-process`, plus optional
-`--dependency-depth`. Selector unions and repeated selectors are intentionally deferred. In focused
-mode `scope.json` uses `scope.v1`; `analysis.json` remains the complete snapshot. Scoped outputs
-use focused graph names such as `graphs/scope.dot` and do not write global
-`graphs/dependencies.dot` or `graphs/documents.dot`.
+- `analysis.json` is schema `analysis.v11`: each fact is stored once, on the service, package or
+  document it belongs to. Server-wide lists (`AnalysisResult.call_occurrences`,
+  `unique_dependencies`, `mapping_operations`, Java lists, `document_types`, ...) are derived
+  properties, not serialized. Each package's `service_index` lists only its own services.
+- Focused publication (`analyze --target-service|--target-namespace|--target-package|
+  --target-process`, one selector, optional `--dependency-depth`) writes `scope.json` (`scope.v1`)
+  and focused graphs; `analysis.json` stays complete.
+- Service page headings `## Input Signature`, `## Called By` and `## Processes` are load-bearing
+  for scoped publication string surgery and must exist in default and `--verbose` modes.
+- Description files: `service-docs/<Package>/<namespace folders>/<service>.md` with front matter
+  (`status` draft|approved, `model`, `facts_hash`, `text_hash`), a narrative, a Notes section the
+  tool never writes, and a facts block between `wm-doc:facts` markers that is always refreshed.
+  An approved narrative, or one whose text differs from `text_hash`, is never overwritten. No
+  timestamps. Package and server overviews use the same format at `<Package>/_package.md`
+  (`service: package:<Package>`) and `_server.md` (`service: server`); their facts hash covers
+  the package or server facts without the Purpose lines sent as context.
+- Model use is limited to `describe` and `overview`: one service, package or the server per
+  prompt, sized to `--num-ctx`; every
+  identifier-shaped name in the answer must occur in the facts sent; the disclosure scan must pass;
+  one corrective retry; otherwise the answer is rejected. Only validated drafts are cached.
+  Owner decision (M12): with `describe --keep-unverified`, an answer that passes the disclosure
+  scan but still names things outside the facts after the retry is written as a draft marked
+  `unverified_names` (front matter and a notice); it is never cached, is asked again on the
+  next run, is not used as callee context, and approving it clears the mark.
+  Owner decision (M12): `describe --detail brief|standard|thorough|deep` sets how much is
+  written (thorough adds one request when the detailed flow leaves out calls that matter)
+  and deep lets the model think first (only the final answer is read, the reasoning is never
+  kept); `--instructions FILE` (describe and overview, at most 4,000 characters) appends
+  the owner's own instructions to the fixed system prompt; they never override its rules.
+  Timings are printed to the console only, never written to files.
+  For adapter and other opaque services the tool, not the model, writes Main steps and Error
+  handling.
+- Facts are never inferred from names. Every data-effect row states how it is known. Artifact
+  references are exact full-name matches only; no other value from those files is kept.
+- Defaults: literal and free-text disclosure `include`, with the secret guard evaluated first in
+  every mode; description language English.
 
-Do not add M4b, detailed JDBC/M5, native BPM process parsing, M8c Ollama/business generation, or
-later work without later explicit
-milestone approval. In particular, do not add broad Java external-effect classification, adapter
-parsers, trigger parsers, runtime simulation, Ollama integration, LLM prompts, model selection,
-snapshot diffing, Java execution, Java compilation, Java class loading, Mermaid, JavaScript graph
-viewers, static-site frameworks, or ZIP publishing.
+## Approved readers (owner approval, M12, after checking real public 10.x packages)
 
-Important constraints:
+- JDBC adapter decoder (`adapters.py`): decodes the binary `IRTNODE_PROPERTY` value of
+  `AdapterService` services, `ConnectionData` connections and adapter notifications and keeps
+  only an allow-list of fields: operation template, connection name, tables, adapter type, and
+  for connections the datasource class (database product), database name and transaction type;
+  for notifications the notification type, connection, table and published document. Server,
+  host, port, user, password, URL and any other connection property are never read or kept.
+- Trigger reader: `trigger_type` (JMS or webMethods messaging), JMS connection alias,
+  destinations (name and queue/topic), subscribed document types and handler services.
+- Legacy REST handlers: services named `_get`, `_post`, `_put`, `_patch`, `_delete` or
+  `_default` are IS REST v1 endpoints at `/rest/<namespace as path>`.
+
+## Out of scope without explicit owner approval
+
+Semantic parsers for REST/SOAP descriptor details beyond service references, other adapter
+types' configuration, native BPM process models, runtime simulation, Java execution,
+compilation or class loading, broad Java external-effect classification, non-Ollama or cloud model
+providers, RAG or arbitrary external documents, a prompt editing UI (beyond the approved
+`--instructions` file), fine-tuning, snapshot diffing,
+Mermaid, JavaScript graph viewers, static-site frameworks, ZIP publishing.
+
+## Important constraints
 
 - Never execute code from analyzed packages.
-- Never modify analyzed packages.
+- Never modify analyzed packages. Designer comment text is exported to files only.
 - Parse XML with the secure parser in `wm_doc.xmlsafe`.
 - Keep XML parser diagnostics disclosure-safe: findings use relative `SourceReference.path` for
   location and must not repeat absolute local paths in messages.
 - Treat unknown, malformed, unsupported, or backup files as explicit findings or inventory entries.
-- Keep JSON, Markdown, and DOT outputs deterministic.
-- Keep SVG/PNG as derived publishing artifacts; do not make them inputs to analysis.
-- Normalize Graphviz SVG output before publishing, reject malformed or unsafe SVG/PNG output, and
-  never serialize absolute Graphviz executable paths or raw Graphviz diagnostics containing
-  secret-like values.
-- Keep cleanup and Graphviz failure diagnostics bounded, relative/path-scrubbed, and redacted for
+- Keep JSON, Markdown, DOT and description-file outputs deterministic.
+- Keep SVG/PNG as derived publishing artifacts; do not make them inputs to analysis. Normalize
+  Graphviz SVG output, reject malformed or unsafe SVG/PNG output, and never serialize absolute
+  Graphviz executable paths or raw Graphviz diagnostics containing secret-like values.
+- Managed output cleanup is limited to generated root files and generated directories; unrelated
+  output-root files must be preserved and symlinks unlinked rather than traversed.
+- Keep cleanup, provider and Graphviz diagnostics bounded, relative/path-scrubbed, and redacted for
   key names such as `password`, `passwd`, `token`, `access_token`, `api-key`, and bearer values.
 - Do not expose secret values from package files.
+- Never persist raw prompts, raw model responses, provider URLs, auth material, chain-of-thought,
+  or invalid model output (except the marked unverified drafts above, kept on request). A
+  server token is read from the environment variable named by
+  `--api-key-env`, never from a flag, and is only sent over https or to loopback.
+- Developer `<COMMENT>` text from `flow.xml` is used in prompts only, through the free-text policy,
+  and is not added to `analysis.json`.
 - Do not serialize complete Java bodies, decoded `java.frag` bodies, raw token streams, arbitrary
   Java string literals, absolute local paths, or wrapper-only source coordinates.

@@ -1,0 +1,21 @@
+# Systems the analysed packages call but do not contain.
+# Pass with `--external-systems examples/external-systems.yml` to analyze, describe and status.
+# A call target matches when its namespace (or full name) matches one of the glob patterns.
+# Use `wm-doc stats` ("Calls leaving the analysed packages") to find the namespaces to declare.
+
+systems:
+  - id: crm
+    name: Customer CRM
+    kind: CORE_SYSTEM          # CORE_SYSTEM, GOVERNMENT_REGISTRY, PROCESS_ENGINE, PARTNER,
+                               # MESSAGING, DATABASE or OTHER
+    vendor: Salesforce
+    description: Customer master data and contact history.
+    namespaces:
+      - "crm.*"
+
+  - id: billing
+    name: Billing core
+    kind: CORE_SYSTEM
+    namespaces:
+      - "billing.core.*"
+      - "billing.api:createInvoice"

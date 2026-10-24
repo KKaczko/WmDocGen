@@ -28,7 +28,8 @@ wm-doc analyze samples --output out\m7-analysis
 wm-doc analyze samples --render-graphs both --output out\m7-analysis-graphs
 wm-doc analyze samples --target-service pgp.services.common:readConfig --dependency-depth 1 --output out\m8a-read-config-scope
 wm-doc analyze samples --target-namespace pgp.services.common --dependency-depth 0 --output out\m8a-common-namespace-scope
-wm-doc build-business-context --input out\m8a-read-config-scope --output out\m8a-read-config-scope\business-context
+wm-doc describe samples --service pgp.services.common:readConfig --with-callees --model qwen3.5:4b --docs-dir out\service-docs
+wm-doc analyze samples --output out\site --docs-dir out\service-docs
 ```
 
 Current analysis observations:
@@ -59,9 +60,11 @@ Current analysis observations:
 - M7 graph publishing is validated from generated DOT files. The checked-in fixtures do not require
   Graphviz, and the normal test suite uses a deterministic fake renderer with valid SVG/PNG output
   structures for publishing behavior.
-- M8b business context tests consume generated focused M8a fixture outputs. They validate
-  `business-context.v1` service, package, and process contexts without modifying `samples/` or
-  adding LLM/Ollama behavior.
+- M12 description tests run `describe` over the samples and synthetic packages with a
+  deterministic fake provider. They cover description files, approval, edits, status, Designer
+  comment export, caching, parallel runs and the name-grounding check without requiring Ollama
+  or modifying `samples/`. Trigger, descriptor and adapter references are tested with synthetic
+  `node.ndf` files only.
 
 M2b observed active mapping tag counts:
 

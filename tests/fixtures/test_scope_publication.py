@@ -39,7 +39,7 @@ def test_focused_service_scope_publishes_subset_and_full_analysis(tmp_path) -> N
     analysis_payload = json.loads((output / "analysis.json").read_text(encoding="utf-8"))
     scope_payload = json.loads((output / "scope.json").read_text(encoding="utf-8"))
 
-    assert analysis_payload["schema_version"] == "analysis.v8"
+    assert analysis_payload["schema_version"] == "analysis.v11"
     assert len(
         [
             service
@@ -79,7 +79,7 @@ def test_no_selector_remains_global_m7_output_shape(tmp_path) -> None:
     assert (output / "graphs" / "dependencies.dot").exists()
     assert (output / "graphs" / "documents.dot").exists()
     assert not (output / "graphs" / "scope.dot").exists()
-    assert sum(1 for path in output.rglob("*") if path.is_file()) == 48
+    assert sum(1 for path in output.rglob("*") if path.is_file()) == 53  # + site pages
 
 
 def test_scope_selector_validation_rejects_conflicts_and_repetition(tmp_path) -> None:

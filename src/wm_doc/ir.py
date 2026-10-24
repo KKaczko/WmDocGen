@@ -96,6 +96,16 @@ class DependencyKind(StrEnum):
     USES_TRANSFORMER = "USES_TRANSFORMER"
 
 
+ANALYSIS_SCHEMA_VERSION = "analysis.v11"
+
+
+class SignatureOrigin(StrEnum):
+    """Where a service's signature came from."""
+
+    SERVICE = "SERVICE"
+    SPECIFICATION = "SPECIFICATION"
+
+
 class DocumentDependencyKind(StrEnum):
     REFERENCES_DOCUMENT = "REFERENCES_DOCUMENT"
     USES_DOCUMENT = "USES_DOCUMENT"
@@ -198,6 +208,8 @@ class FlowNodeType(StrEnum):
     BRANCH = "BRANCH"
     BRANCH_CASE = "BRANCH_CASE"
     LOOP = "LOOP"
+    # Designer's REPEAT step, serialized as <RETRY> in flow.xml.
+    REPEAT = "REPEAT"
     MAP = "MAP"
     INVOKE = "INVOKE"
     MAPINVOKE = "MAPINVOKE"
@@ -929,6 +941,69 @@ class ServiceSummary(BaseModel):
     source: SourceReference
 
 
+class TriggerDestination(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    kind: str  # "queue", "topic" or "not determined"
+
+
+class TriggerSubscription(BaseModel):
+    """One condition or routing rule: the document it subscribes to and its handler."""
+
+    model_config = ConfigDict(frozen=True)
+
+    handler: str | None = None
+    document_type: str | None = None
+
+
+class TriggerDetails(BaseModel):
+    """Owner-approved trigger facts (`triggers.py`).
+
+    Kept: the trigger type, the JMS connection alias, destinations with queue or topic,
+    subscribed document types and handler services. Filters, message selectors, users and
+    tuning values are not read.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    trigger_type: str | None = None
+    kind: str
+    connection_alias: str | None = None
+    destinations: list[TriggerDestination] = Field(default_factory=list)
+    subscriptions: list[TriggerSubscription] = Field(default_factory=list)
+
+
+class AdapterRole(StrEnum):
+    SERVICE = "SERVICE"
+    CONNECTION = "CONNECTION"
+    NOTIFICATION = "NOTIFICATION"
+
+
+class AdapterDetails(BaseModel):
+    """Allow-listed fields decoded from a JDBC adapter node's `IRTNODE_PROPERTY` (`adapters.py`).
+
+    Services: operation template, connection and tables. Connections: datasource class
+    (database product), database name and transaction type. Notifications: notification
+    type, connection, tables and published document. Server, host, port, user, password,
+    URL, SQL text and every other property are never read.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    role: AdapterRole
+    adapter_type: str | None = None
+    template: str | None = None
+    operation: str | None = None
+    connection: str | None = None
+    tables: list[str] = Field(default_factory=list)
+    datasource_class: str | None = None
+    database_product: str | None = None
+    database_name: str | None = None
+    transaction_type: str | None = None
+    published_document: str | None = None
+
+
 class FlowService(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -939,6 +1014,9 @@ class FlowService(BaseModel):
     description_status: ServiceDescriptionStatus = ServiceDescriptionStatus.NO_DESCRIPTION
     description: TextValue | None = None
     signature: ServiceSignature
+    # `svc_spec` from node.ndf: the specification the service declares it implements.
+    specification: str | None = None
+    signature_origin: SignatureOrigin = SignatureOrigin.SERVICE
     classification: ClassificationResult
     flow_tree: FlowNode | None = None
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
@@ -947,6 +1025,11 @@ class FlowService(BaseModel):
     flow_maps: list[FlowMap] = Field(default_factory=list)
     mapping_operations: list[MappingOperation] = Field(default_factory=list)
     transformer_bindings: list[TransformerBinding] = Field(default_factory=list)
+    # FLOW steps and mapping lines marked DISABLED="true": left out of the tree and of every
+    # call, mapping and effect, because they never run.
+    disabled_steps: int = 0
+    # JDBC adapter services: the allow-listed configuration (see AdapterDetails).
+    adapter: AdapterDetails | None = None
     java_analysis: JavaServiceAnalysis | None = None
     document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
     service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
@@ -961,34 +1044,83 @@ class AnalyzedPackage(BaseModel):
     name: str
     root: str
     services: list[FlowService] = Field(default_factory=list)
-    java_service_analyses: list[JavaServiceAnalysis] = Field(default_factory=list)
     document_types: list[DocumentType] = Field(default_factory=list)
     service_index: list[ServiceSummary] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
+
+    @property
+    def java_service_analyses(self) -> list[JavaServiceAnalysis]:
+        """Derived from the services; stored once, on each Java service."""
+        return sorted(
+            (service.java_analysis for service in self.services if service.java_analysis),
+            key=java_service_analysis_sort_key,
+        )
+
+
+class ExcludedPackage(BaseModel):
+    """A package root that was found but deliberately not analysed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    root: str
+    reason: str
+
+
+class NamespaceArtifact(BaseModel):
+    """A namespace node that is neither a supported service nor a document type.
+
+    Triggers, REST/SOAP descriptors, adapter connections and notifications land here. They
+    are listed by their declared node type. Only triggers and JDBC adapter connections and
+    notifications have their content read, through the approved readers.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    full_name: str
+    package: str
+    probable_type: str
+    node_type: str | None = None
+    trigger: TriggerDetails | None = None
+    adapter: AdapterDetails | None = None
+    source: SourceReference
+
+
+class ReferenceTargetKind(StrEnum):
+    SERVICE = "SERVICE"
+    DOCUMENT = "DOCUMENT"
+    ARTIFACT = "ARTIFACT"
+
+
+class ArtifactReference(BaseModel):
+    """A value inside an artifact's node.ndf that exactly names a known node.
+
+    Found without knowing the artifact's schema: any string value equal to the full name
+    of an analysed service, document type or other namespace node counts. The key path
+    (names only, no values) shows where in node.ndf the reference sits.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_name: str
+    source_kind: str
+    target_name: str
+    target_kind: ReferenceTargetKind
+    key_path: str
+    source: SourceReference
 
 
 class AnalysisResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: str = "analysis.v8"
+    schema_version: str = ANALYSIS_SCHEMA_VERSION
     tool_version: str
     packages: list[AnalyzedPackage] = Field(default_factory=list)
     metrics: AnalysisMetrics = Field(default_factory=AnalysisMetrics)
     extraction_policy: ExtractionPolicySnapshot = Field(default_factory=ExtractionPolicySnapshot)
-    call_occurrences: list[CallOccurrence] = Field(default_factory=list)
-    unique_dependencies: list[UniqueDependency] = Field(default_factory=list)
-    flow_maps: list[FlowMap] = Field(default_factory=list)
-    mapping_operations: list[MappingOperation] = Field(default_factory=list)
-    transformer_bindings: list[TransformerBinding] = Field(default_factory=list)
-    document_types: list[DocumentType] = Field(default_factory=list)
     document_reference_occurrences: list[DocumentReferenceOccurrence] = Field(default_factory=list)
     document_dependencies: list[DocumentDependency] = Field(default_factory=list)
     service_document_dependencies: list[ServiceDocumentDependency] = Field(default_factory=list)
-    java_service_analyses: list[JavaServiceAnalysis] = Field(default_factory=list)
-    java_imports: list[JavaImport] = Field(default_factory=list)
-    java_type_references: list[JavaTypeReference] = Field(default_factory=list)
-    java_pipeline_accesses: list[JavaPipelineAccess] = Field(default_factory=list)
-    java_invocation_occurrences: list[JavaInvocationOccurrence] = Field(default_factory=list)
     processes: list[ProcessDefinition] = Field(default_factory=list)
     process_entrypoints: list[ProcessEntrypoint] = Field(default_factory=list)
     process_service_memberships: list[ProcessServiceMembership] = Field(default_factory=list)
@@ -998,7 +1130,132 @@ class AnalysisResult(BaseModel):
     technical_entrypoint_candidates: list[TechnicalEntrypointCandidate] = Field(
         default_factory=list
     )
+    excluded_packages: list[ExcludedPackage] = Field(default_factory=list)
+    namespace_artifacts: list[NamespaceArtifact] = Field(default_factory=list)
+    artifact_references: list[ArtifactReference] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
+
+    # Server-wide views. Each item is stored once in analysis.json, on the service or
+    # package it belongs to; these properties rebuild the sorted cross-service lists.
+
+    @property
+    def services(self) -> list[FlowService]:
+        return [service for package in self.packages for service in package.services]
+
+    @property
+    def call_occurrences(self) -> list[CallOccurrence]:
+        items = [item for service in self.services for item in service.call_occurrences]
+        return sorted(items, key=call_sort_key)
+
+    @property
+    def unique_dependencies(self) -> list[UniqueDependency]:
+        items = [item for service in self.services for item in service.unique_dependencies]
+        return sorted(items, key=unique_dependency_sort_key)
+
+    @property
+    def flow_maps(self) -> list[FlowMap]:
+        items = [item for service in self.services for item in service.flow_maps]
+        return sorted(items, key=flow_map_sort_key)
+
+    @property
+    def mapping_operations(self) -> list[MappingOperation]:
+        items = [item for service in self.services for item in service.mapping_operations]
+        return sorted(items, key=mapping_operation_sort_key)
+
+    @property
+    def transformer_bindings(self) -> list[TransformerBinding]:
+        items = [item for service in self.services for item in service.transformer_bindings]
+        return sorted(items, key=transformer_binding_sort_key)
+
+    @property
+    def document_types(self) -> list[DocumentType]:
+        items = [item for package in self.packages for item in package.document_types]
+        return sorted(items, key=document_type_sort_key)
+
+    @property
+    def java_service_analyses(self) -> list[JavaServiceAnalysis]:
+        items = [item for package in self.packages for item in package.java_service_analyses]
+        return sorted(items, key=java_service_analysis_sort_key)
+
+    @property
+    def java_imports(self) -> list[JavaImport]:
+        items = [item for analysis in self.java_service_analyses for item in analysis.imports]
+        return sorted(items, key=java_import_sort_key)
+
+    @property
+    def java_type_references(self) -> list[JavaTypeReference]:
+        items = [
+            item for analysis in self.java_service_analyses for item in analysis.referenced_types
+        ]
+        return sorted(items, key=java_type_reference_sort_key)
+
+    @property
+    def java_pipeline_accesses(self) -> list[JavaPipelineAccess]:
+        items = [
+            item for analysis in self.java_service_analyses for item in analysis.pipeline_accesses
+        ]
+        return sorted(items, key=java_pipeline_access_sort_key)
+
+    @property
+    def java_invocation_occurrences(self) -> list[JavaInvocationOccurrence]:
+        items = [
+            item
+            for analysis in self.java_service_analyses
+            for item in analysis.invocation_occurrences
+        ]
+        return sorted(items, key=java_invocation_sort_key)
+
+
+def call_sort_key(call: CallOccurrence) -> tuple[str, int, str, str]:
+    return (call.caller.casefold(), call.order, call.id, call.target.casefold())
+
+
+def unique_dependency_sort_key(dependency: UniqueDependency) -> tuple[str, str, str]:
+    return (
+        dependency.source_service.casefold(),
+        dependency.dependency_kind.value,
+        dependency.target_service.casefold(),
+    )
+
+
+def flow_map_sort_key(flow_map: FlowMap) -> tuple[str, int, str, str]:
+    return (flow_map.service.casefold(), flow_map.order, flow_map.structural_path, flow_map.id)
+
+
+def mapping_operation_sort_key(operation: MappingOperation) -> tuple[str, int, str, str]:
+    return (operation.service.casefold(), operation.order, operation.structural_path, operation.id)
+
+
+def transformer_binding_sort_key(binding: TransformerBinding) -> tuple[str, int, str, str]:
+    return (binding.service.casefold(), binding.order, binding.structural_path, binding.id)
+
+
+def document_type_sort_key(document: DocumentType) -> tuple[str, str]:
+    return (document.identity.full_name.casefold(), document.id)
+
+
+def java_service_analysis_sort_key(analysis: JavaServiceAnalysis) -> tuple[str, str]:
+    return (analysis.identity.full_name.casefold(), analysis.id)
+
+
+def java_import_sort_key(java_import: JavaImport) -> tuple[str, int, str]:
+    return (
+        java_import.service.casefold(),
+        java_import.declaration_order,
+        java_import.declaration.casefold(),
+    )
+
+
+def java_type_reference_sort_key(reference: JavaTypeReference) -> tuple[str, int, str]:
+    return (reference.service.casefold(), reference.token_ordinal, reference.type_name.casefold())
+
+
+def java_pipeline_access_sort_key(access: JavaPipelineAccess) -> tuple[str, int, str]:
+    return (access.service.casefold(), access.token_ordinal, access.id)
+
+
+def java_invocation_sort_key(invocation: JavaInvocationOccurrence) -> tuple[str, int, str]:
+    return (invocation.caller.casefold(), invocation.token_ordinal, invocation.id)
 
 
 class ArtifactFile(BaseModel):
@@ -1032,6 +1289,8 @@ class ArtifactCandidate(BaseModel):
     status: FindingStatus
     identity: ArtifactIdentity | None = None
     source: SourceReference
+    # Top-level (or record-level) `node_type` from node.ndf, recorded as found.
+    node_type: str | None = None
 
 
 class PackageInventory(BaseModel):
@@ -1060,6 +1319,7 @@ class InventoryResult(BaseModel):
     tool_version: str
     scan_root: str
     packages: list[PackageInventory] = Field(default_factory=list)
+    excluded_packages: list[ExcludedPackage] = Field(default_factory=list)
     file_summary: list[FileSummary] = Field(default_factory=list)
     findings: list[AnalysisFinding] = Field(default_factory=list)
 
