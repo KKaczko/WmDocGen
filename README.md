@@ -97,6 +97,7 @@ Point the commands at the server's `packages` directory, or a copy of it.
    | --- | --- | --- |
    | `brief` | purpose, usage, data, main steps, error handling | shortest (about half) |
    | `standard` (default) | the above plus the detailed flow | baseline |
+   | `thorough` | standard, then the tool checks the detailed flow names every call that matters (services, database, HTTP, JMS, files) and asks once more to add the missing ones | 1-1.6x standard |
    | `deep` | the detailed flow, written after the model reasons about the facts | several times longer; thinking-capable models only; use `--num-ctx 32768` |
 
    The model's reasoning is never stored; only its final answer is checked and kept. Each

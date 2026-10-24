@@ -78,9 +78,10 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
   scan but still names things outside the facts after the retry is written as a draft marked
   `unverified_names` (front matter and a notice); it is never cached, is asked again on the
   next run, is not used as callee context, and approving it clears the mark.
-  Owner decision (M12): `describe --detail brief|standard|deep` sets how much is written
-  (deep lets the model think first; only the final answer is read, the reasoning is never
-  kept), and `--instructions FILE` (describe and overview, at most 4,000 characters) appends
+  Owner decision (M12): `describe --detail brief|standard|thorough|deep` sets how much is
+  written (thorough adds one request when the detailed flow leaves out calls that matter)
+  and deep lets the model think first (only the final answer is read, the reasoning is never
+  kept); `--instructions FILE` (describe and overview, at most 4,000 characters) appends
   the owner's own instructions to the fixed system prompt; they never override its rules.
   Timings are printed to the console only, never written to files.
   For adapter and other opaque services the tool, not the model, writes Main steps and Error

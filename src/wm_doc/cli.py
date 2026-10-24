@@ -617,9 +617,10 @@ DetailOption = Annotated[
         case_sensitive=False,
         help=(
             "How much each description says: brief (main steps only, fastest), standard "
-            "(adds the detailed flow) or deep (the detailed flow, written after the model "
-            "reasons about the facts; thinking-capable models only, several times slower; "
-            "use --num-ctx 32768)."
+            "(adds the detailed flow), thorough (standard, then a check that the detailed "
+            "flow names every call that matters, with one more request to add missing ones) "
+            "or deep (the detailed flow, written after the model reasons about the facts; "
+            "thinking-capable models only, several times slower; use --num-ctx 32768)."
         ),
     ),
 ]
@@ -954,7 +955,12 @@ def _echo_generation_summary(
         f"- kept with unverified names: {counts.get(DescribeOutcome.UNVERIFIED, 0)}\n"
         f"- generation failed: {counts.get(DescribeOutcome.FAILED, 0)}\n"
         f"- corrective retries: {stats.retried}\n"
-        f"- facts shortened to fit: {stats.shortened}\n"
+        + (
+            f"- completeness passes (thorough): {stats.coverage_passes}\n"
+            if stats.coverage_passes
+            else ""
+        )
+        + f"- facts shortened to fit: {stats.shortened}\n"
         f"- largest prompt: {max(tokens) if tokens else 'n/a'} tokens of {num_ctx}\n"
         f"{timing}"
         f"{next_step}"

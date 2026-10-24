@@ -12,7 +12,13 @@ from typer.testing import CliRunner
 from wm_doc.analysis import analyze_path
 from wm_doc.cli import app
 from wm_doc.config import load_config
-from wm_doc.describer import DescribeOptions, describe_services
+from wm_doc.describer import (
+    DescribeOptions,
+    DescribeOutcome,
+    DescribeResult,
+    DetailLevel,
+    describe_services,
+)
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import ExternalSystemCatalog
 from wm_doc.ir import AnalysisResult, FlowService
@@ -645,3 +651,93 @@ def test_description_gets_a_detailed_flow_checked_like_the_rest(tmp_path: Path) 
     )
     assert "## Detailed flow\n\n1. Calls `orders.links:findLinks`, which returns `links`." in text
     assert "2. Calls `orders.db:selectOrders` with `ids` copied from `links`" in text
+
+
+# --- Thorough level: completeness pass -----------------------------------------------------
+
+
+class _CoverageProvider(_InventingProvider):
+    """First answer leaves out `orders.db:selectOrders`; later answers follow `steps`."""
+
+    def __init__(self, later_steps: list[str]) -> None:
+        super().__init__()
+        self.later_steps = later_steps
+        self.messages: list[list[dict[str, str]]] = []
+
+    def generate(self, request: ProviderGenerationRequest) -> ProviderGenerationResult:
+        self.prompts.append(request.messages[1]["content"])
+        self.messages.append(request.messages)
+        first = ["Calls `orders.links:findLinks`, which returns `links`."]
+        payload = {
+            "purpose": "Returns orders for `orders.api:getContracts` callers.",
+            "usage": "Used by the callers listed in the facts.",
+            "data_effects": "Reads table `ORDERS`.",
+            "steps": ["Finds links.", "Selects orders."],
+            "detailed_steps": first if len(self.prompts) == 1 else self.later_steps,
+            "error_handling": "Not shown in the facts.",
+            "designer_comment": "Returns orders.",
+        }
+        return ProviderGenerationResult(
+            content=json.dumps(payload),
+            provider_kind="ollama",
+            model=request.model,
+            ollama_version="test",
+            model_digest="sha256:test",
+            metrics={"prompt_eval_count": 400},
+        )
+
+
+def _describe_get_contracts(
+    tmp_path: Path, provider: _CoverageProvider, detail: DetailLevel
+) -> tuple[str, list[DescribeResult]]:
+    root = _flow_server(tmp_path / "packages")
+    options = DescribeOptions(
+        model="fake-model",
+        scan_root=root,
+        config=load_config(None),
+        docs_dir=tmp_path / "service-docs",
+        cache_dir=tmp_path / "cache",
+        detail=detail,
+    )
+    results, _ = describe_services(
+        _analysis(root), ["orders.api:getContracts"], provider, options
+    )
+    text = doc_path(tmp_path / "service-docs", "Orders", "orders.api:getContracts").read_text(
+        encoding="utf-8"
+    )
+    return text, results
+
+
+def test_thorough_asks_once_more_for_calls_the_flow_left_out(tmp_path: Path) -> None:
+    provider = _CoverageProvider(
+        [
+            "Calls `orders.links:findLinks`, which returns `links`.",
+            "Calls `orders.db:selectOrders` with `ids` copied from `links`.",
+        ]
+    )
+
+    text, results = _describe_get_contracts(tmp_path, provider, DetailLevel.THOROUGH)
+
+    assert results[0].outcome is DescribeOutcome.GENERATED
+    assert len(provider.messages) == 2
+    follow_up = provider.messages[1][-1]["content"]
+    assert "do not mention these calls the service makes: `orders.db:selectOrders`" in follow_up
+    assert "2. Calls `orders.db:selectOrders` with `ids` copied from `links`." in text
+    assert "detail: thorough" in text
+
+
+def test_thorough_keeps_the_first_answer_when_the_second_is_no_better(tmp_path: Path) -> None:
+    provider = _CoverageProvider(["Calls `orders.links:findLinks` again."])
+
+    text, _ = _describe_get_contracts(tmp_path, provider, DetailLevel.THOROUGH)
+
+    assert len(provider.messages) == 2
+    assert "1. Calls `orders.links:findLinks`, which returns `links`." in text
+
+
+def test_standard_does_not_check_completeness(tmp_path: Path) -> None:
+    provider = _CoverageProvider([])
+
+    _describe_get_contracts(tmp_path, provider, DetailLevel.STANDARD)
+
+    assert len(provider.messages) == 1
