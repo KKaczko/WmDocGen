@@ -303,3 +303,24 @@ export interface DocumentRef {
   name: string;
   resolved: boolean;
 }
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "GraphData".
+ */
+export interface GraphData {
+  contract: "wm-doc-explorer.v1";
+  edges: [number, number, "invokes" | "transformer" | "java-invoke" | "call-like", number][];
+  services: string[];
+  targets: GraphTarget[];
+}
+/**
+ * A call target that is not an analysed service.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "GraphTarget".
+ */
+export interface GraphTarget {
+  name: string;
+  note: string | null;
+  status: "resolved" | "platform" | "outside" | "unresolved" | "dynamic" | "unsupported";
+}

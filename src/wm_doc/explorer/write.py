@@ -6,6 +6,7 @@ Layout under the output folder:
     THIRD-PARTY.txt            licences of the bundled libraries
     data/manifest.json         contract version, dataset, disclosure, counts, digest
     data/search.json           search index
+    data/graph.json            every call, as edges between services and other targets
     data/services/<id>.json    one file per service
 
 Only these names are ever removed or replaced. The output folder may not be inside the
@@ -70,7 +71,10 @@ def dump(model: BaseModel) -> bytes:
 
 def render_data_files(bundle: ExplorerBundle) -> dict[str, bytes]:
     """Relative path under data/ -> file bytes, with the manifest digest filled in."""
-    files: dict[str, bytes] = {"search.json": dump(bundle.search)}
+    files: dict[str, bytes] = {
+        "search.json": dump(bundle.search),
+        "graph.json": dump(bundle.graph),
+    }
     for identifier, detail in bundle.services.items():
         files[f"services/{identifier}.json"] = dump(detail)
     lines = "".join(

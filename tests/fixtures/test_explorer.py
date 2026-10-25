@@ -409,9 +409,15 @@ INERT_URLS = {
     "http://www.w3.org/1999/xlink",
     "http://www.w3.org/2000/svg",
     "http://www.w3.org/XML/1998/namespace",
+    "http://www.w3.org/1999/xhtml",
+    "http://www.w3.org/2000/xmlns/",
     "https://github.com/ungap/url-search-params.",
     "https://react.dev/errors/",
     "https://reactrouter.com/en/main/routers/picking-a-router.",
+    # React Flow: error-help links, and its attribution link, which the app hides.
+    "https://${e}flow.dev/error#001",
+    "https://reactflow.dev/",
+    "https://reactflow.dev?utm_source=attribution",
 }
 
 

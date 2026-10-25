@@ -284,6 +284,32 @@ class ServiceDetail(ContractModel):
     description: Description | None = None
 
 
+# --- graph.json -------------------------------------------------------------------------------
+# Every call the tool established, as one table, loaded once by the graph view. Node indexes:
+# 0..S-1 are `services` (IDs, in search.json order), S.. are `targets`. Python owns every edge;
+# the app only walks them within limits.
+
+
+class GraphTarget(ContractModel):
+    """A call target that is not an analysed service."""
+
+    name: str
+    status: CallStatus
+    # Platform description or external system name.
+    note: str | None = None
+
+
+# [from node, to node, relation, number of call sites]
+GraphEdge = tuple[int, int, Relation, int]
+
+
+class GraphData(ContractModel):
+    contract: ContractVersion = CONTRACT
+    services: list[str]
+    targets: list[GraphTarget]
+    edges: list[GraphEdge]
+
+
 def contract_schema() -> dict[str, Any]:
     """JSON Schema of every explorer file, generated from the models above."""
     _, schema = models_json_schema(
@@ -291,6 +317,7 @@ def contract_schema() -> dict[str, Any]:
             (Manifest, "serialization"),
             (SearchIndex, "serialization"),
             (ServiceDetail, "serialization"),
+            (GraphData, "serialization"),
         ],
         by_alias=True,
         title="WmDocGen explorer data contract wm-doc-explorer.v1",

@@ -122,6 +122,10 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
   a literal shows `(literal, not exported)`); free text passes the
   disclosure scan or is withheld and counted.
 - The output folder must not overlap the packages folder. Files are named by hashed IDs.
+- The call graph (`graph.json`, `explorer-ui/src/domain/graph.ts`) walks only emitted
+  edges and must reach exactly what focused publication reaches for the same service and
+  depth (cross-language fixture test). It is bounded: depth 1-4, node limit 50/150/300,
+  25 new neighbours per node ("+N more").
 - `explorer-ui/` (React, TypeScript, Vite; exact dependency versions, `npm ci
   --ignore-scripts`) is a developer-only toolchain. Its build output
   `src/wm_doc/explorer/app/` is committed and must be rebuilt with every app change; the

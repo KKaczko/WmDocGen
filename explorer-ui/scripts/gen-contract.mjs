@@ -18,6 +18,12 @@ function stripTitles(node, keep) {
   const out = {};
   for (const [key, value] of Object.entries(node)) {
     if (key === "title" && !keep) continue;
+    // JSON Schema 2020 tuples (prefixItems) become draft-07 tuples, which the compiler reads.
+    if (key === "prefixItems") {
+      out.items = stripTitles(value, false);
+      out.additionalItems = false;
+      continue;
+    }
     if (key === "$defs") {
       out[key] = Object.fromEntries(
         Object.entries(value).map(([name, def]) => [name, stripTitles(def, true)]),

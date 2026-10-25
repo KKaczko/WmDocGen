@@ -769,6 +769,109 @@
       "title": "Generator",
       "type": "object"
     },
+    "GraphData": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "wm-doc-explorer.v1",
+          "default": "wm-doc-explorer.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "edges": {
+          "items": {
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "enum": [
+                  "invokes",
+                  "transformer",
+                  "java-invoke",
+                  "call-like"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "services": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/GraphTarget"
+          },
+          "title": "Targets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract",
+        "services",
+        "targets",
+        "edges"
+      ],
+      "title": "GraphData",
+      "type": "object"
+    },
+    "GraphTarget": {
+      "additionalProperties": false,
+      "description": "A call target that is not an analysed service.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "platform",
+            "outside",
+            "unresolved",
+            "dynamic",
+            "unsupported"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "note"
+      ],
+      "title": "GraphTarget",
+      "type": "object"
+    },
     "Manifest": {
       "additionalProperties": false,
       "properties": {
