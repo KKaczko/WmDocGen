@@ -1,0 +1,821 @@
+{
+  "$defs": {
+    "AnalysisInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "disabledSteps": {
+          "title": "Disabledsteps",
+          "type": "integer"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "findingsTotal": {
+          "title": "Findingstotal",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "full",
+            "partial",
+            "opaque"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "disabledSteps",
+        "findings",
+        "findingsTotal"
+      ],
+      "title": "AnalysisInfo",
+      "type": "object"
+    },
+    "Call": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "firstOrder": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Firstorder"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "relation": {
+          "enum": [
+            "invokes",
+            "transformer",
+            "java-invoke",
+            "call-like"
+          ],
+          "title": "Relation",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "platform",
+            "outside",
+            "unresolved",
+            "dynamic",
+            "unsupported"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "targetAnalysis": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "partial",
+                "opaque"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetanalysis"
+        },
+        "targetId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetid"
+        },
+        "targetKind": {
+          "anyOf": [
+            {
+              "enum": [
+                "flow",
+                "java",
+                "adapter",
+                "opaque"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetkind"
+        }
+      },
+      "required": [
+        "target",
+        "targetId",
+        "status",
+        "targetKind",
+        "targetAnalysis",
+        "relation",
+        "count",
+        "firstOrder",
+        "note",
+        "evidence"
+      ],
+      "title": "Call",
+      "type": "object"
+    },
+    "Counts": {
+      "additionalProperties": false,
+      "properties": {
+        "approvedDescriptions": {
+          "title": "Approveddescriptions",
+          "type": "integer"
+        },
+        "calls": {
+          "title": "Calls",
+          "type": "integer"
+        },
+        "documentTypes": {
+          "title": "Documenttypes",
+          "type": "integer"
+        },
+        "packages": {
+          "title": "Packages",
+          "type": "integer"
+        },
+        "services": {
+          "title": "Services",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "packages",
+        "services",
+        "documentTypes",
+        "calls",
+        "approvedDescriptions"
+      ],
+      "title": "Counts",
+      "type": "object"
+    },
+    "Dataset": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "synthetic",
+            "private"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "label"
+      ],
+      "title": "Dataset",
+      "type": "object"
+    },
+    "Disclosure": {
+      "additionalProperties": false,
+      "properties": {
+        "descriptions": {
+          "enum": [
+            "approved",
+            "all",
+            "none"
+          ],
+          "title": "Descriptions",
+          "type": "string"
+        },
+        "designerComments": {
+          "const": "excluded",
+          "default": "excluded",
+          "title": "Designercomments",
+          "type": "string"
+        },
+        "literals": {
+          "const": "excluded",
+          "default": "excluded",
+          "title": "Literals",
+          "type": "string"
+        },
+        "notes": {
+          "const": "excluded",
+          "default": "excluded",
+          "title": "Notes",
+          "type": "string"
+        },
+        "withheldStrings": {
+          "title": "Withheldstrings",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "literals",
+        "designerComments",
+        "notes",
+        "descriptions",
+        "withheldStrings"
+      ],
+      "title": "Disclosure",
+      "type": "object"
+    },
+    "DocumentRef": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "resolved": {
+          "title": "Resolved",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "resolved"
+      ],
+      "title": "DocumentRef",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "count",
+        "message",
+        "source"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "Generator": {
+      "additionalProperties": false,
+      "properties": {
+        "analysisSchema": {
+          "title": "Analysisschema",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "version",
+        "analysisSchema"
+      ],
+      "title": "Generator",
+      "type": "object"
+    },
+    "Manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "wm-doc-explorer.v1",
+          "default": "wm-doc-explorer.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "counts": {
+          "$ref": "#/$defs/Counts"
+        },
+        "dataset": {
+          "$ref": "#/$defs/Dataset"
+        },
+        "digest": {
+          "default": "",
+          "title": "Digest",
+          "type": "string"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
+        },
+        "generator": {
+          "$ref": "#/$defs/Generator"
+        }
+      },
+      "required": [
+        "contract",
+        "generator",
+        "dataset",
+        "disclosure",
+        "counts",
+        "digest"
+      ],
+      "title": "Manifest",
+      "type": "object"
+    },
+    "PackageRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "PackageRef",
+      "type": "object"
+    },
+    "SearchIndex": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "wm-doc-explorer.v1",
+          "default": "wm-doc-explorer.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/SearchPackage"
+          },
+          "title": "Packages",
+          "type": "array"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/$defs/SearchService"
+          },
+          "title": "Services",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract",
+        "services",
+        "packages"
+      ],
+      "title": "SearchIndex",
+      "type": "object"
+    },
+    "SearchPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "overview": {
+          "enum": [
+            "approved",
+            "stale",
+            "draft",
+            "edited",
+            "none"
+          ],
+          "title": "Overview",
+          "type": "string"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Purpose"
+        },
+        "services": {
+          "title": "Services",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "services",
+        "overview",
+        "purpose"
+      ],
+      "title": "SearchPackage",
+      "type": "object"
+    },
+    "SearchService": {
+      "additionalProperties": false,
+      "properties": {
+        "analysis": {
+          "enum": [
+            "full",
+            "partial",
+            "opaque"
+          ],
+          "title": "Analysis",
+          "type": "string"
+        },
+        "description": {
+          "enum": [
+            "approved",
+            "stale",
+            "draft",
+            "edited",
+            "none"
+          ],
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "flow",
+            "java",
+            "adapter",
+            "opaque"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "package": {
+          "title": "Package",
+          "type": "string"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Purpose"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "package",
+        "kind",
+        "analysis",
+        "description",
+        "purpose"
+      ],
+      "title": "SearchService",
+      "type": "object"
+    },
+    "ServiceDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "analysis": {
+          "$ref": "#/$defs/AnalysisInfo"
+        },
+        "callers": {
+          "items": {
+            "$ref": "#/$defs/ServiceLink"
+          },
+          "title": "Callers",
+          "type": "array"
+        },
+        "callersTotal": {
+          "title": "Callerstotal",
+          "type": "integer"
+        },
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/Call"
+          },
+          "title": "Calls",
+          "type": "array"
+        },
+        "callsTotal": {
+          "title": "Callstotal",
+          "type": "integer"
+        },
+        "contract": {
+          "const": "wm-doc-explorer.v1",
+          "default": "wm-doc-explorer.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "flow",
+            "java",
+            "adapter",
+            "opaque"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "title": "Namespace",
+          "type": "string"
+        },
+        "package": {
+          "$ref": "#/$defs/PackageRef"
+        },
+        "shortName": {
+          "title": "Shortname",
+          "type": "string"
+        },
+        "signature": {
+          "$ref": "#/$defs/Signature"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef"
+        }
+      },
+      "required": [
+        "contract",
+        "id",
+        "name",
+        "namespace",
+        "shortName",
+        "package",
+        "kind",
+        "analysis",
+        "source",
+        "signature",
+        "calls",
+        "callsTotal",
+        "callers",
+        "callersTotal"
+      ],
+      "title": "ServiceDetail",
+      "type": "object"
+    },
+    "ServiceLink": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "ServiceLink",
+      "type": "object"
+    },
+    "Signature": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/SignatureField"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "origin": {
+          "enum": [
+            "service",
+            "specification"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/SignatureField"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "specification": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Specification"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "origin",
+        "specification",
+        "inputs",
+        "outputs",
+        "truncated"
+      ],
+      "title": "Signature",
+      "type": "object"
+    },
+    "SignatureField": {
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "items": {
+            "$ref": "#/$defs/SignatureField"
+          },
+          "title": "Children",
+          "type": "array"
+        },
+        "dimension": {
+          "title": "Dimension",
+          "type": "integer"
+        },
+        "document": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "optional": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Optional"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "dimension",
+        "optional",
+        "document",
+        "children"
+      ],
+      "title": "SignatureField",
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "xmlPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Xmlpath"
+        }
+      },
+      "required": [
+        "path",
+        "xmlPath"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WmDocGen explorer data contract wm-doc-explorer.v1"
+}

@@ -36,8 +36,8 @@ Unsupported or only partially supported in M12:
 - Multiple focused publication selectors or selector unions in one run
 - `--target-folder` filesystem-folder targeting; M8a uses namespace-prefix targeting instead
 - Focused parsing, lazy analysis, or persistent analysis caching
-- Interactive graph viewers, Mermaid output, JavaScript graph rendering, and static-site framework
-  generation
+- Mermaid output and static-site framework generation; interactive views exist only in the
+  explorer (M13 PoC, `docs/explorer.md`)
 - Runtime-only Integration Server configuration
 - Cloud provider defaults, RAG, arbitrary external documents, prompt editing UI, model fine-tuning,
   impact analysis, and snapshot comparison

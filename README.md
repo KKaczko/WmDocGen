@@ -240,6 +240,21 @@ operation, or "Not analysed") and the error handling ("not analysed").
 | `provider-probe` | Check how a model server can be reached |
 | `probe-shapes` | Key layout of triggers, descriptors and adapter services (no values) |
 | `scan` | Package and artifact inventory only |
+| `explorer build` / `demo` / `serve` | Interactive explorer: search services, open one, follow its calls (`docs/explorer.md`) |
+
+## Explorer (preview)
+
+A static web app to search the server and move from a service to what it calls and what
+calls it. Try it on generated demo data, then on your packages:
+
+```bash
+wm-doc explorer demo -o out/explorer-demo
+wm-doc explorer serve out/explorer-demo
+wm-doc explorer build C:/GIt/ESB -o out/explorer --docs-dir service-docs
+```
+
+Open `http://127.0.0.1:8765/`. An explorer built from your packages is internal data: the app
+says so on every page. Details: `docs/explorer.md`.
 
 ## Safety
 
@@ -283,3 +298,5 @@ uv run pytest
 uv run ruff check .
 uv run mypy
 ```
+
+The explorer app (`explorer-ui/`, Node.js 22+): see `docs/explorer.md`.

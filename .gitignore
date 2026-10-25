@@ -11,3 +11,9 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Explorer frontend (developer toolchain)
+explorer-ui/node_modules/
+explorer-ui/test-results/
+explorer-ui/playwright-report/
+explorer-ui/.e2e/

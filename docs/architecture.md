@@ -77,8 +77,11 @@ Subsystems:
   top-level index Markdown, entrypoint candidate Markdown, per-service Markdown, per-document
   Markdown, process Markdown, graph catalog Markdown, artifact inventory, service catalogue,
   Graphviz DOT, and optional derived SVG/PNG graph assets.
+- The explorer (`wm_doc.explorer`, M13 PoC) projects the analysis and facts into the
+  `wm-doc-explorer.v1` data contract (manifest, search index, one file per service) and copies
+  the prebuilt React app (`explorer-ui/` source) next to it; see `docs/explorer.md`.
 - The CLI exposes `wm-doc scan`, `stats`, `analyze`, `describe`, `approve`, `status`,
-  `export-comments`, `provider-probe` and `probe-shapes`.
+  `export-comments`, `provider-probe`, `probe-shapes` and `explorer build|demo|serve`.
 
 ## Analysis Schema
 
