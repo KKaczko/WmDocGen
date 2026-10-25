@@ -17,6 +17,14 @@ export const ANALYSIS_LABEL: Record<Analysis, string> = {
   opaque: "Not analysed (opaque)",
 };
 
+export const DESCRIPTION_LABEL: Record<SearchService["description"], string> = {
+  approved: "Approved description",
+  stale: "Approved, facts changed",
+  draft: "Draft description",
+  edited: "Edited draft",
+  none: "No description",
+};
+
 export const STATUS_LABEL: Record<CallStatus, string> = {
   resolved: "In these packages",
   platform: "Built-in service",

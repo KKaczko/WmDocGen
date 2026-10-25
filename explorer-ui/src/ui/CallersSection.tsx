@@ -2,6 +2,7 @@ import { Link } from "react-router";
 
 import type { ServiceLink } from "../contract";
 import { servicePath } from "./labels";
+import { SectionHeading } from "./SectionHeading";
 
 export function CallersSection({
   callers,
@@ -12,7 +13,9 @@ export function CallersSection({
 }) {
   return (
     <section className="section" aria-labelledby="callers-title">
-      <h2 id="callers-title">Called by</h2>
+      <SectionHeading id="callers-title" source="analysis">
+        Called by
+      </SectionHeading>
       {callers.length === 0 ? (
         <p className="muted">
           No analysed service calls this one. It may be started by a trigger, a REST or SOAP

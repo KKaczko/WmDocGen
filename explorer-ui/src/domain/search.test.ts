@@ -25,7 +25,9 @@ const index: SearchIndex = {
     service("common.log:logEvent", { package: "CommonUtils" }),
     service("customers.api:getCustomer", { package: "CustomerApi" }),
   ],
-  packages: [{ id: "00000000000000aa", name: "OrdersApi", services: 2, overview: "none", purpose: null }],
+  packages: [
+    { id: "00000000000000aa", name: "OrdersApi", services: 2, overview: "none", purpose: null },
+  ],
 };
 const searcher = createSearcher(index);
 const names = (text: string) => searcher.query(text).map((hit) => hit.item.name);

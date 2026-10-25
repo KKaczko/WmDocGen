@@ -95,12 +95,19 @@ export interface SearchService {
  * via the `definition` "ServiceDetail".
  */
 export interface ServiceDetail {
+  adapter: AdapterInfo | null;
   analysis: AnalysisInfo;
   callers: ServiceLink[];
   callersTotal: number;
   calls: Call[];
   callsTotal: number;
   contract: "wm-doc-explorer.v1";
+  description: Description | null;
+  documents: DocumentUse[];
+  effects: Effect[];
+  effectsHidden: number;
+  entryPoints: EntryPoint[];
+  entryPointsTotal: number;
   id: string;
   kind: "flow" | "java" | "adapter" | "opaque";
   name: string;
@@ -109,6 +116,22 @@ export interface ServiceDetail {
   shortName: string;
   signature: Signature;
   source: SourceRef;
+}
+/**
+ * Allow-listed JDBC adapter configuration (see wm_doc.adapters); never credentials.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "AdapterInfo".
+ */
+export interface AdapterInfo {
+  adapterType: string | null;
+  connection: string | null;
+  databaseName: string | null;
+  databaseProduct: string | null;
+  operation: string | null;
+  tables: string[];
+  template: string | null;
+  transactionType: string | null;
 }
 /**
  * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
@@ -162,6 +185,84 @@ export interface Call {
   targetAnalysis: ("full" | "partial" | "opaque") | null;
   targetId: string | null;
   targetKind: ("flow" | "java" | "adapter" | "opaque") | null;
+}
+/**
+ * A reviewed or drafted description file: model-written, never a fact.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "Description".
+ */
+export interface Description {
+  detail: string | null;
+  model: string;
+  sections: DescriptionSection[];
+  state: "approved" | "stale" | "draft" | "edited";
+  unverifiedNames: string[];
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "DescriptionSection".
+ */
+export interface DescriptionSection {
+  items: (TextSegment | CodeSegment)[][];
+  key: "purpose" | "usage" | "dataEffects" | "mainSteps" | "detailedFlow" | "errorHandling";
+  paragraphs: (TextSegment | CodeSegment)[][];
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "TextSegment".
+ */
+export interface TextSegment {
+  kind: "text";
+  text: string;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "CodeSegment".
+ */
+export interface CodeSegment {
+  code: string;
+  kind: "code";
+  ref: string | null;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "DocumentUse".
+ */
+export interface DocumentUse {
+  name: string;
+  resolved: boolean;
+  role: "input" | "output" | "input-output";
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "Effect".
+ */
+export interface Effect {
+  action: string;
+  knownFrom: string;
+  object: (TextSegment | CodeSegment)[];
+  via: PathStep[];
+  where: (TextSegment | CodeSegment)[];
+}
+/**
+ * A service on a call chain; `id` is set when it is an analysed service.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "PathStep".
+ */
+export interface PathStep {
+  id: string | null;
+  name: string;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "EntryPoint".
+ */
+export interface EntryPoint {
+  kind: string;
+  name: (TextSegment | CodeSegment)[];
+  path: PathStep[];
 }
 /**
  * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema

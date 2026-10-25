@@ -25,6 +25,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
+from wm_doc.config import AppConfig
+from wm_doc.describer import current_facts_hashes, render_facts_block
+from wm_doc.effects import compute_service_facts
+from wm_doc.ir import AnalysisResult
+from wm_doc.service_docs import (
+    DETAIL_KEY,
+    UNVERIFIED_KEY,
+    DocStatus,
+    Narrative,
+    ServiceDoc,
+    doc_path,
+    text_hash,
+    write_doc,
+)
+
 # Fake values a reader must never publish (see tests/fixtures/test_explorer.py).
 FAKE_SECRETS = (
     "Sup3r-S3cret-Demo",
@@ -204,11 +219,11 @@ def _fields_xml(fields: tuple[_Field, ...]) -> str:
     return out
 
 
-def _invoke(target: str, *, disabled: bool = False) -> str:
+def _invoke(target: str, *, disabled: bool = False, input_map: str = "") -> str:
     flag = ' DISABLED="true"' if disabled else ""
     return (
         f'<INVOKE TIMEOUT="" SERVICE={quoteattr(target)} VALIDATE-IN="$none" '
-        f'VALIDATE-OUT="$none"{flag}></INVOKE>'
+        f'VALIDATE-OUT="$none"{flag}>{input_map}</INVOKE>'
     )
 
 
@@ -225,8 +240,17 @@ def _try_catch(try_steps: list[str], catch_steps: list[str]) -> str:
 
 
 def _mapset(field: str, value: str) -> str:
+    return _map("STANDALONE", {field: value})
+
+
+def _map(mode: str, values: dict[str, str]) -> str:
+    """A MAP step setting literal string values on top-level fields."""
+    sets = "".join(_set(field, value) for field, value in values.items())
+    return f'<MAP MODE="{mode}">\n{sets}</MAP>'
+
+
+def _set(field: str, value: str) -> str:
     return (
-        '<MAP MODE="STANDALONE">\n'
         f"  <MAPSET FIELD={quoteattr(f'/{field};1;0')}>\n"
         '    <DATA ENCODING="XMLValues" I18N="true">\n'
         '      <Values version="2.0">\n'
@@ -238,7 +262,6 @@ def _mapset(field: str, value: str) -> str:
         "      </Values>\n"
         "    </DATA>\n"
         "  </MAPSET>\n"
-        "</MAP>"
     )
 
 
@@ -328,7 +351,10 @@ def _orders_api(writer: _Writer) -> None:
                 _invoke("orders.api:validateOrder"),
                 _invoke("orders.api.routing:routeOrder"),
                 _invoke("orders.db:insertOrder"),
-                _invoke("pub.client:http"),
+                _invoke(
+                    "pub.client:http",
+                    input_map=_map("INPUT", {"url": FAKE_SECRETS[4], "method": "POST"}),
+                ),
                 _invoke("billing.api:postInvoice"),
                 _invoke("pub.flow:debugLog", disabled=True),
                 _invoke("common.log:logEvent"),
@@ -484,3 +510,153 @@ def _filler(writer: _Writer, count: int) -> None:
             _try_catch(steps, [_invoke("common.error:handleError")]),
             inputs=(_Field("requestId"),),
         )
+
+
+# --- Description files ------------------------------------------------------------------------
+# Synthetic narratives in every review state, written through the real description-file code
+# with the real facts hashes, so the explorer shows them exactly as it would show yours. One of
+# them carries hostile and secret-like text to prove it is shown inert or withheld.
+
+_HOSTILE_PURPOSE = (
+    "Updates a customer in the CRM. Inert text test: </b> javascript:window.__pwned=1 "
+    "onerror=window.__pwned=1 &lt;b&gt; {{constructor.constructor('window.__pwned=1')()}} "
+    "and a direction override:" + chr(0x202E) + "txet."
+)
+HOSTILE_VISIBLE = ("</b> javascript:window.__pwned=1", "&lt;b&gt;")
+NOTES_MARKER = "NOTES-MARKER reviewer note that is never exported"
+
+
+@dataclass(frozen=True)
+class _Demo:
+    state: str  # approved | stale | draft | edited
+    purpose: str
+    usage: str
+    data_effects: str
+    steps: tuple[str, ...]
+    error_handling: str
+    detailed: tuple[str, ...] = ()
+    unverified: tuple[str, ...] = ()
+
+
+_DEMOS: dict[str, _Demo] = {
+    "orders.api:createOrder": _Demo(
+        "approved",
+        "Creates an order from a REST request, stores it with `orders.db:insertOrder` and sends "
+        "the invoice to the billing service.",
+        "Called by the REST v1 handler `orders.rest.order:_post` (POST /rest/orders/rest/order).",
+        "Inserts rows into `ORDERS` and `ORDER_LINES` and calls the billing service "
+        "`billing.api:postInvoice`, which is outside the analysed packages.",
+        (
+            "Validates the order with `orders.api:validateOrder`.",
+            "Routes it with `orders.api.routing:routeOrder`.",
+            "Stores it with `orders.db:insertOrder`.",
+            "Sends it over HTTP and posts the invoice with `billing.api:postInvoice`.",
+            "Logs the result with `common.log:logEvent`.",
+        ),
+        "On any failure the CATCH block reads the last error with `pub.flow:getLastError` and "
+        "calls `common.error:handleError`.",
+        detailed=(
+            "`orders.api:validateOrder` receives `order` and returns `valid`.",
+            "`orders.db:insertOrder` inserts the order into `ORDERS` and `ORDER_LINES`.",
+            "`pub.client:http` posts to the billing endpoint; its URL is a literal in the FLOW.",
+        ),
+    ),
+    "orders.db:insertOrder": _Demo(
+        "approved",
+        "Inserts an order and its lines into the orders database.",
+        "Called by `orders.api:createOrder`.",
+        "Inserts rows into `ORDERS` and `ORDER_LINES` through the JDBC connection "
+        "`orders.db:conn`.",
+        ("Runs the configured JDBC Insert operation on `ORDERS` and `ORDER_LINES`.",),
+        "Not analysed: adapter services are configured, not programmed.",
+    ),
+    "orders.api:getOrder": _Demo(
+        "stale",
+        "Reads one order by its ID.",
+        "Called by the REST v1 handler `orders.rest.order:_get` and by the demo flows.",
+        "Selects rows from `ORDERS`.",
+        ("Selects the order with `orders.db:selectOrder`.", "Logs the read."),
+        "Errors go to `common.error:handleError`.",
+    ),
+    "orders.api:validateOrder": _Demo(
+        "draft",
+        "Checks an order before it is stored.",
+        "Called by `orders.api:createOrder` and `orders.api.routing:routeOrder`.",
+        "Reads the current date and transforms the order with an XSLT service.",
+        ("Gets the current date.", "Transforms the order with `common.util:transformOrder`."),
+        "No error handling of its own.",
+    ),
+    "orders.api:cancelOrder": _Demo(
+        "edited",
+        "Cancels an order when a cancellation message arrives.",
+        "Started by the JMS trigger `orders.triggers:onOrderCancelled`.",
+        "Deletes rows from `ORDERS`.",
+        ("Deletes the order with `orders.db:deleteOrder`.", "Logs the cancellation."),
+        "Errors go to `common.error:handleError`.",
+    ),
+    "customers.api:getCustomer": _Demo(
+        "draft",
+        "Looks a customer up in the CRM.",
+        "Called by `customers.api:updateCustomer`.",
+        "Calls `crm.api:lookupCustomer`, which is outside the analysed packages.",
+        ("Calls `crm.api:lookupCustomer`.", "Falls back to `crm.legacy:findCustomer`."),
+        "Errors go to `common.error:handleError`.",
+        unverified=("crm.legacy:findCustomer",),
+    ),
+    "customers.api:updateCustomer": _Demo(
+        "approved",
+        _HOSTILE_PURPOSE,
+        "Hostile markup test: <img src=x onerror=window.__pwned=1> must be withheld.",
+        "Writes to the CRM. password=hunter2-demo must be withheld.",
+        (
+            "Reads the customer with `customers.api:getCustomer`.",
+            "Then [click here](javascript:window.__pwned=1) must be withheld.",
+            "Updates it with `crm.api:updateCustomer`.",
+        ),
+        "None.",
+    ),
+}
+
+
+def write_demo_descriptions(
+    docs_dir: Path, analysis: AnalysisResult, packages_root: Path, config: AppConfig
+) -> int:
+    """Write the synthetic description files for the services that exist; return how many."""
+    services = {service.identity.full_name: service for service in analysis.services}
+    names = [name for name in _DEMOS if name in services]
+    facts = compute_service_facts(analysis)
+    hashes = current_facts_hashes(analysis, packages_root, config, facts=facts, only=set(names))
+    for name in names:
+        demo = _DEMOS[name]
+        service = services[name]
+        narrative = Narrative(
+            purpose=demo.purpose,
+            usage=demo.usage,
+            data_effects=demo.data_effects,
+            steps=demo.steps,
+            error_handling=demo.error_handling,
+            designer_comment=f"Demo comment. password={FAKE_SECRETS[0]} is never exported.",
+            detailed_steps=demo.detailed,
+        ).markdown()
+        current = hashes[name]
+        written_text = narrative
+        if demo.state == "edited":
+            narrative = narrative.replace("Cancels an order", "Cancels an order (edited)")
+        extra: dict[str, object] = {DETAIL_KEY: "standard"}
+        if demo.unverified:
+            extra[UNVERIFIED_KEY] = list(demo.unverified)
+        doc = ServiceDoc(
+            service=name,
+            package=service.identity.package,
+            status=DocStatus.APPROVED if demo.state in ("approved", "stale") else DocStatus.DRAFT,
+            model="synthetic-demo-model",
+            facts_hash=current if demo.state != "stale" else "0" * len(current),
+            text_hash=text_hash(written_text),
+            narrative=narrative,
+            notes=NOTES_MARKER,
+            facts_markdown=render_facts_block(service, facts[name]),
+            current_facts_hash=current,
+            extra_front_matter=extra,
+        )
+        write_doc(doc_path(docs_dir, service.identity.package, name), doc)
+    return len(names)

@@ -10,7 +10,7 @@ Versioning: optional fields may be added within v1; removing or renaming anythin
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -176,6 +176,89 @@ class PackageRef(ContractModel):
     name: str
 
 
+# --- text -------------------------------------------------------------------------------------
+# Text is never HTML or Markdown: it is a list of plain segments. A code segment names
+# something exactly; `ref` is the ID of the analysed service it names, when it names one.
+
+
+class TextSegment(ContractModel):
+    kind: Literal["text"] = "text"
+    text: str
+
+
+class CodeSegment(ContractModel):
+    kind: Literal["code"] = "code"
+    code: str
+    ref: str | None = None
+
+
+Segment = Annotated[TextSegment | CodeSegment, Field(discriminator="kind")]
+
+
+class PathStep(ContractModel):
+    """A service on a call chain; `id` is set when it is an analysed service."""
+
+    name: str
+    id: str | None = None
+
+
+class EntryPoint(ContractModel):
+    kind: str
+    name: list[Segment]
+    # From the entry service down to this service, both included.
+    path: list[PathStep]
+
+
+class Effect(ContractModel):
+    action: str
+    object: list[Segment]
+    where: list[Segment]
+    known_from: str
+    # Callees through which this service reaches the data; empty when it is the service itself.
+    via: list[PathStep]
+
+
+class DocumentUse(ContractModel):
+    name: str
+    role: Literal["input", "output", "input-output"]
+    resolved: bool
+
+
+class AdapterInfo(ContractModel):
+    """Allow-listed JDBC adapter configuration (see wm_doc.adapters); never credentials."""
+
+    adapter_type: str | None = None
+    operation: str | None = None
+    template: str | None = None
+    connection: str | None = None
+    tables: list[str] = Field(default_factory=list)
+    database_product: str | None = None
+    database_name: str | None = None
+    transaction_type: str | None = None
+
+
+SectionKey = Literal[
+    "purpose", "usage", "dataEffects", "mainSteps", "detailedFlow", "errorHandling"
+]
+
+
+class DescriptionSection(ContractModel):
+    key: SectionKey
+    paragraphs: list[list[Segment]] = Field(default_factory=list)
+    items: list[list[Segment]] = Field(default_factory=list)
+
+
+class Description(ContractModel):
+    """A reviewed or drafted description file: model-written, never a fact."""
+
+    state: Literal["approved", "stale", "draft", "edited"]
+    model: str
+    detail: str | None = None
+    # Names the model used that the facts do not contain (`describe --keep-unverified`).
+    unverified_names: list[str] = Field(default_factory=list)
+    sections: list[DescriptionSection] = Field(default_factory=list)
+
+
 class ServiceDetail(ContractModel):
     contract: ContractVersion = CONTRACT
     id: str
@@ -191,6 +274,14 @@ class ServiceDetail(ContractModel):
     calls_total: int
     callers: list[ServiceLink]
     callers_total: int
+    entry_points: list[EntryPoint] = Field(default_factory=list)
+    entry_points_total: int = 0
+    effects: list[Effect] = Field(default_factory=list)
+    # Effects the facts left out beyond their own limit, plus any capped here.
+    effects_hidden: int = 0
+    documents: list[DocumentUse] = Field(default_factory=list)
+    adapter: AdapterInfo | None = None
+    description: Description | None = None
 
 
 def contract_schema() -> dict[str, Any]:

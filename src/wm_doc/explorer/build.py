@@ -6,9 +6,11 @@ the tool already established; nothing here resolves names or infers anything new
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from typing import Literal
 
 from wm_doc import __version__
 from wm_doc.adapters import SERVICE_TYPE as ADAPTER_SERVICE_TYPE
@@ -21,22 +23,29 @@ from wm_doc.call_targets import (
     classify_target,
     placeholder_target,
 )
-from wm_doc.effects import ServiceFacts
+from wm_doc.effects import DataEffect, ServiceFacts
 from wm_doc.explorer.contract import (
+    AdapterInfo,
     AnalysisInfo,
     AnalysisLevel,
     Call,
     Counts,
     Dataset,
     DatasetKind,
+    Description,
+    DescriptionSection,
     DescriptionsShown,
     DescriptionState,
     Disclosure,
     DocumentRef,
+    DocumentUse,
+    Effect,
+    EntryPoint,
     Finding,
     Generator,
     Manifest,
     PackageRef,
+    PathStep,
     Relation,
     SearchIndex,
     SearchPackage,
@@ -50,9 +59,11 @@ from wm_doc.explorer.contract import (
     SourceRef,
 )
 from wm_doc.explorer.ids import IdRegistry, package_id, service_id
-from wm_doc.explorer.text import TextGuard
+from wm_doc.explorer.text import TextGuard, narrative_blocks
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
 from wm_doc.ir import (
+    AdapterDetails,
+    AdapterRole,
     AnalysisFinding,
     AnalysisResult,
     DependencyKind,
@@ -60,18 +71,30 @@ from wm_doc.ir import (
     FindingStatus,
     FlowService,
     ServiceAnalysisStatus,
+    ServiceDocumentUsageRole,
     ServiceType,
     SignatureOrigin,
     SourceReference,
 )
 from wm_doc.ir import SignatureField as IrSignatureField
-from wm_doc.service_docs import DocState, ServiceDoc
+from wm_doc.service_docs import DETAIL_KEY, DocState, ServiceDoc
 
 MAX_LIST_ITEMS = 500
 MAX_FINDINGS = 100
 MAX_EVIDENCE = 3
 MAX_SIGNATURE_FIELDS = 300
 MAX_SIGNATURE_DEPTH = 6
+MAX_UNVERIFIED_NAMES = 50
+# In an effect known from a literal, a code span not preceded by "from " is the literal value
+# itself (see effects._input_values); mapped pipeline paths read "from `path`".
+_LITERAL_SPAN_RE = re.compile(r"(?<!from )`[^`]*`")
+LITERAL_PLACEHOLDER = "(literal, not exported)"
+_ROLE: dict[ServiceDocumentUsageRole, Literal["input", "output", "input-output"]] = {
+    ServiceDocumentUsageRole.INPUT: "input",
+    ServiceDocumentUsageRole.OUTPUT: "output",
+    ServiceDocumentUsageRole.INPUT_OUTPUT: "input-output",
+}
+ShownState = Literal["approved", "stale", "draft", "edited"]
 
 _ANALYSIS: dict[ServiceAnalysisStatus, AnalysisLevel] = {
     ServiceAnalysisStatus.FULL: "full",
@@ -155,6 +178,13 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         for document in package.document_types
     }
     shown = _SHOWN[options.descriptions]
+    # Only a name that belongs to exactly one analysed service is linked.
+    refs = {name: entries[0][0] for name, entries in ids.items() if len(entries) == 1}
+    connections = {
+        artifact.full_name: artifact.adapter
+        for artifact in analysis.namespace_artifacts
+        if artifact.adapter is not None and artifact.adapter.role is AdapterRole.CONNECTION
+    }
 
     def description_state(name: str) -> DescriptionState:
         state = _STATE[inputs.service_states.get(name, DocState.MISSING)]
@@ -170,7 +200,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         doc = inputs.service_docs.get(name)
         purpose = None
         if doc is not None and state != "none":
-            purpose = guard.free_text(doc.purpose_line(), 400)
+            purpose = guard.free_text((doc.purpose_line() or "").replace("`", ""), 400)
         search_services.append(
             SearchService(
                 id=identifier,
@@ -194,6 +224,9 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
             key=lambda link: (link.name.casefold(), link.name, link.id),
         )
         signature_budget = _Budget(MAX_SIGNATURE_FIELDS)
+        entry_points = list(facts.entry_points) if facts is not None else []
+        effects = list(facts.effects) if facts is not None else []
+        hidden_effects = facts.hidden_effects if facts is not None else 0
         details[identifier] = ServiceDetail(
             id=identifier,
             name=guard.name(name),
@@ -230,6 +263,24 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
             calls_total=len(calls),
             callers=callers[:MAX_LIST_ITEMS],
             callers_total=len(callers),
+            entry_points=[
+                EntryPoint(
+                    kind=guard.name(entry.kind),
+                    name=guard.segments(entry.name, refs, prose=False, limit=600),
+                    path=_path(entry.path, refs, guard),
+                )
+                for entry in entry_points[:MAX_LIST_ITEMS]
+            ],
+            entry_points_total=len(entry_points),
+            effects=[_effect(item, refs, guard) for item in effects[:MAX_LIST_ITEMS]],
+            effects_hidden=hidden_effects + max(0, len(effects) - MAX_LIST_ITEMS),
+            documents=_documents(service, guard),
+            adapter=_adapter(service.adapter, connections, guard),
+            description=(
+                _description(doc, state, refs, guard)
+                if doc is not None and state != "none"
+                else None
+            ),
         )
 
     search_packages = []
@@ -283,6 +334,84 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         manifest=manifest,
         search=SearchIndex(services=search_services, packages=search_packages),
         services=details,
+    )
+
+
+def _path(names: Iterable[str], refs: Mapping[str, str], guard: TextGuard) -> list[PathStep]:
+    return [PathStep(name=guard.name(name), id=refs.get(name)) for name in names]
+
+
+def _effect(effect: DataEffect, refs: Mapping[str, str], guard: TextGuard) -> Effect:
+    target, where = effect.object, effect.where
+    if "literal" in effect.known_from:
+        target = _LITERAL_SPAN_RE.sub(LITERAL_PLACEHOLDER, target)
+        where = _LITERAL_SPAN_RE.sub(LITERAL_PLACEHOLDER, where)
+    return Effect(
+        action=guard.name(effect.action.replace("`", "")),
+        object=guard.segments(target, refs, prose=False, limit=600),
+        where=guard.segments(where, refs, prose=False, limit=600),
+        known_from=guard.name(effect.known_from),
+        via=_path(effect.via, refs, guard),
+    )
+
+
+def _documents(service: FlowService, guard: TextGuard) -> list[DocumentUse]:
+    seen: dict[tuple[str, str], DocumentUse] = {}
+    for dependency in service.service_document_dependencies:
+        role = _ROLE[dependency.usage_role]
+        name = guard.name(dependency.target_document)
+        seen.setdefault(
+            (name, role), DocumentUse(name=name, role=role, resolved=dependency.resolved)
+        )
+    order = {"input": 0, "input-output": 1, "output": 2}
+    return sorted(
+        seen.values(), key=lambda item: (order[item.role], item.name.casefold(), item.name)
+    )[:MAX_LIST_ITEMS]
+
+
+def _adapter(
+    details: AdapterDetails | None,
+    connections: Mapping[str, AdapterDetails],
+    guard: TextGuard,
+) -> AdapterInfo | None:
+    if details is None:
+        return None
+    connection = connections.get(details.connection or "")
+
+    def clean(value: str | None) -> str | None:
+        return guard.name(value) if value else None
+
+    return AdapterInfo(
+        adapter_type=clean(details.adapter_type),
+        operation=clean(details.operation),
+        template=clean(details.template),
+        connection=clean(details.connection),
+        tables=[guard.name(table) for table in details.tables][:MAX_LIST_ITEMS],
+        database_product=clean(connection.database_product) if connection else None,
+        database_name=clean(connection.database_name) if connection else None,
+        transaction_type=clean(connection.transaction_type) if connection else None,
+    )
+
+
+def _description(
+    doc: ServiceDoc, state: ShownState, refs: Mapping[str, str], guard: TextGuard
+) -> Description:
+    detail = doc.extra_front_matter.get(DETAIL_KEY)
+    return Description(
+        state=state,
+        model=guard.name(doc.model)[:120],
+        detail=guard.name(detail)[:40] if isinstance(detail, str) else None,
+        unverified_names=[guard.name(name) for name in doc.unverified_names][
+            :MAX_UNVERIFIED_NAMES
+        ],
+        sections=[
+            DescriptionSection(
+                key=key,
+                paragraphs=[guard.segments(text, refs, prose=True) for text in paragraphs],
+                items=[guard.segments(text, refs, prose=True) for text in items],
+            )
+            for key, paragraphs, items in narrative_blocks(doc.narrative)
+        ],
     )
 
 

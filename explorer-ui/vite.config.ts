@@ -7,7 +7,8 @@ import { defineConfig } from "vitest/config";
 // the data. In development, `npm run dev` serves the data of an explorer folder built by
 // `wm-doc explorer demo -o ../out/explorer-dev` (or EXPLORER_DIR).
 const appDir = fileURLToPath(new URL("../src/wm_doc/explorer/app", import.meta.url));
-const devData = process.env.EXPLORER_DIR ?? fileURLToPath(new URL("../out/explorer-dev", import.meta.url));
+const devData =
+  process.env.EXPLORER_DIR ?? fileURLToPath(new URL("../out/explorer-dev", import.meta.url));
 
 export default defineConfig(({ command }) => ({
   base: "./",

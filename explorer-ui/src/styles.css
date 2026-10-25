@@ -511,3 +511,135 @@ h1:focus {
     display: none;
   }
 }
+
+/* --- PR 2: sources, descriptions, facts ---------------------------------------------------- */
+
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.section-heading h2 {
+  margin: 0;
+}
+
+.source {
+  font-size: 0.78rem;
+  padding: 0.05rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.source-analysis,
+.source-adapter {
+  border-style: solid;
+}
+
+.source-approved {
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-color: currentColor;
+}
+
+.source-stale,
+.source-edited {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px dashed currentColor;
+}
+
+.source-draft {
+  color: var(--bad);
+  background: var(--bad-soft);
+  border: 1px dashed currentColor;
+}
+
+.source-none {
+  border-style: dotted;
+}
+
+.description-approved {
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-color: currentColor;
+}
+
+.description-stale,
+.description-edited {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px dashed currentColor;
+}
+
+.description-draft {
+  color: var(--bad);
+  background: var(--bad-soft);
+  border: 1px dashed currentColor;
+}
+
+.description-none {
+  border-style: dotted;
+}
+
+.warning {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--warn-soft);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.description-part h3 {
+  margin: 0.75rem 0 0.15rem;
+}
+
+.description-part p,
+.description ol {
+  margin: 0.25rem 0;
+}
+
+details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem;
+}
+
+details ol {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.code-link code {
+  color: var(--accent);
+}
+
+.path-chain {
+  overflow-wrap: anywhere;
+}
+
+.fact-row {
+  display: contents;
+}
+
+/* Wide tables scroll inside their section; the page never scrolls sideways. */
+.table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.facts {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.content,
+.section,
+.service-header {
+  min-width: 0;
+}

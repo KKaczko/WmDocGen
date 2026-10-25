@@ -2,7 +2,8 @@ import type { AnalysisInfo } from "../contract";
 
 const TEXT: Record<AnalysisInfo["status"], string> = {
   full: "From static analysis of the package files.",
-  partial: "From static analysis; parts of this service could not be analysed (see Analysis coverage).",
+  partial:
+    "From static analysis; parts of this service could not be analysed (see Analysis coverage).",
   opaque:
     "Not analysed: this service type is opaque to the tool. Only its identity, signature and callers are known.",
 };

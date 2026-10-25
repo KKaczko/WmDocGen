@@ -118,7 +118,8 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
 - Python owns all resolution and classification; the app only displays and walks emitted
   facts. All text is rendered as text (no HTML or Markdown rendering, no
   `dangerouslySetInnerHTML`); a strict CSP; no external requests. Literal values, designer
-  comments, Notes, SQL and connection properties are never exported; free text passes the
+  comments, Notes, SQL and connection properties are never exported (a data effect known from
+  a literal shows `(literal, not exported)`); free text passes the
   disclosure scan or is withheld and counted.
 - The output folder must not overlap the packages folder. Files are named by hashed IDs.
 - `explorer-ui/` (React, TypeScript, Vite; exact dependency versions, `npm ci
