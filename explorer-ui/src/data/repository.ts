@@ -1,4 +1,4 @@
-import type { Manifest, SearchIndex, ServiceDetail } from "../contract";
+import type { GraphData, Manifest, SearchIndex, ServiceDetail } from "../contract";
 import { CONTRACT, ID_PATTERN } from "../contract";
 
 /**
@@ -9,6 +9,8 @@ export interface ExplorerRepository {
   manifest(): Promise<Manifest>;
   search(): Promise<SearchIndex>;
   service(id: string): Promise<ServiceDetail>;
+  /** Every call, for the graph view; loaded on first use. */
+  graph(): Promise<GraphData>;
 }
 
 export class NotFoundError extends Error {
@@ -47,6 +49,10 @@ export class StaticJsonRepository implements ExplorerRepository {
 
   search(): Promise<SearchIndex> {
     return this.#get<SearchIndex>("search.json");
+  }
+
+  graph(): Promise<GraphData> {
+    return this.#get<GraphData>("graph.json");
   }
 
   service(id: string): Promise<ServiceDetail> {

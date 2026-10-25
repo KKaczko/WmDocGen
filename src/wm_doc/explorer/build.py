@@ -43,6 +43,9 @@ from wm_doc.explorer.contract import (
     EntryPoint,
     Finding,
     Generator,
+    GraphData,
+    GraphEdge,
+    GraphTarget,
     Manifest,
     PackageRef,
     PathStep,
@@ -144,6 +147,7 @@ class ExplorerBundle:
     manifest: Manifest  # digest is filled in by the writer
     search: SearchIndex
     services: dict[str, ServiceDetail]
+    graph: GraphData
 
 
 def service_kind(service: FlowService) -> ServiceKind:
@@ -193,7 +197,11 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
     details: dict[str, ServiceDetail] = {}
     search_services: list[SearchService] = []
     call_count = 0
-    for service in sorted(services, key=_service_key):
+    ordered = sorted(services, key=_service_key)
+    graph = _GraphTable(
+        [service_id(item.identity.package, item.identity.full_name) for item in ordered]
+    )
+    for service in ordered:
         name = service.identity.full_name
         identifier = service_id(service.identity.package, name)
         state = description_state(name)
@@ -214,6 +222,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         )
         calls = _calls(service, ids, inputs.external_systems, guard)
         call_count += len(calls)
+        graph.add_calls(identifier, calls)
         facts = inputs.facts.get(name)
         callers = sorted(
             (
@@ -334,7 +343,44 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         manifest=manifest,
         search=SearchIndex(services=search_services, packages=search_packages),
         services=details,
+        graph=graph.data(),
     )
+
+
+class _GraphTable:
+    """Every call as an edge between node indexes (services first, then other targets).
+
+    Platform, outside and unresolved targets are shared by name. A placeholder target (a
+    dynamic or unsupported call) gets its own node per calling service, so it never looks like
+    a hub that links unrelated services.
+    """
+
+    def __init__(self, service_ids: list[str]) -> None:
+        self.service_ids = service_ids
+        self.node_of = {identifier: index for index, identifier in enumerate(service_ids)}
+        self.targets: list[GraphTarget] = []
+        self.shared: dict[tuple[str, str, int], int] = {}
+        self.edges: list[GraphEdge] = []
+
+    def add_calls(self, source_id: str, calls: Iterable[Call]) -> None:
+        source = self.node_of[source_id]
+        for call in calls:
+            self.edges.append((source, self._target(source, call), call.relation, call.count))
+
+    def _target(self, source: int, call: Call) -> int:
+        if call.status == "resolved" and call.target_id is not None:
+            return self.node_of[call.target_id]
+        owner = source if call.target.startswith("<") else -1
+        key = (call.target, call.status, owner)
+        index = self.shared.get(key)
+        if index is None:
+            index = len(self.service_ids) + len(self.targets)
+            self.targets.append(GraphTarget(name=call.target, status=call.status, note=call.note))
+            self.shared[key] = index
+        return index
+
+    def data(self) -> GraphData:
+        return GraphData(services=self.service_ids, targets=self.targets, edges=self.edges)
 
 
 def _path(names: Iterable[str], refs: Mapping[str, str], guard: TextGuard) -> list[PathStep]:

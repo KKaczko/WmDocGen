@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
@@ -20,6 +20,11 @@ import {
 import { ANALYSIS_LABEL, DESCRIPTION_LABEL, KIND_LABEL, servicePath } from "./labels";
 import { Provenance } from "./Provenance";
 import { SignatureSection } from "./SignatureSection";
+
+// The graph code (React Flow, dagre) is loaded only when a service page opens.
+const GraphPanel = lazy(() =>
+  import("./graph/GraphPanel").then((module) => ({ default: module.GraphPanel })),
+);
 
 export function ServicePage() {
   const { name = "" } = useParams();
@@ -106,6 +111,15 @@ function ServiceDetails({
         description={detail.description}
         descriptionsIncluded={manifest.disclosure.descriptions !== "none"}
       />
+      <Suspense
+        fallback={
+          <p className="section muted" role="status">
+            Loading the call graph…
+          </p>
+        }
+      >
+        <GraphPanel focalId={detail.id} focalName={detail.name} />
+      </Suspense>
       <AdapterSection adapter={detail.adapter} />
       <SignatureSection signature={detail.signature} />
       <CallsSection calls={detail.calls} total={detail.callsTotal} />

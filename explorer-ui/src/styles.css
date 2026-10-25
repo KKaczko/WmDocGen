@@ -643,3 +643,281 @@ details ol {
 .service-header {
   min-width: 0;
 }
+
+/* --- PR 3: call graph ------------------------------------------------------------------- */
+
+.graph-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.graph-controls select,
+.graph-controls button,
+.graph-list button,
+.neighbour-list button {
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+}
+
+.graph-controls button,
+.graph-list button,
+.neighbour-list button {
+  cursor: pointer;
+}
+
+.graph-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.graph-canvas {
+  height: 520px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.graph-canvas .react-flow {
+  --xy-background-color: var(--bg);
+  --xy-edge-stroke: var(--muted);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-border-color: var(--border);
+}
+
+.graph-node {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+}
+
+.graph-node-main {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.graph-node-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.graph-node-name {
+  color: var(--accent);
+}
+
+.graph-node-meta {
+  font-size: 0.68rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-node.focal {
+  border-width: 3px;
+  border-color: var(--text);
+}
+
+.graph-node.analysis-full {
+  border-color: var(--ok);
+}
+
+.graph-node.analysis-partial {
+  border: 1.5px dashed var(--warn);
+}
+
+.graph-node.analysis-opaque {
+  border: 1.5px dotted var(--muted);
+  background: var(--neutral-soft);
+}
+
+.graph-node.call-target {
+  border-radius: 999px;
+  background: var(--neutral-soft);
+}
+
+.graph-node.status-outside {
+  border: 1.5px dotted var(--warn);
+  background: var(--warn-soft);
+}
+
+.graph-node.status-dynamic,
+.graph-node.status-unresolved,
+.graph-node.status-unsupported {
+  border: 1.5px dashed var(--bad);
+  background: var(--bad-soft);
+}
+
+.graph-node.more {
+  justify-content: center;
+  border-style: dashed;
+}
+
+.graph-node-toggle,
+.graph-more-button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.graph-node-toggle {
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.graph-more-button {
+  font-size: 0.78rem;
+  padding: 0.15rem 0.4rem;
+}
+
+.graph-node .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.graph-edge.relation-transformer path {
+  stroke-dasharray: 6 3;
+}
+
+.graph-edge.relation-call-like path,
+.graph-edge.relation-java-invoke path {
+  stroke: var(--bad);
+  stroke-dasharray: 2 3;
+}
+
+.graph-edge.relation-more path {
+  stroke-dasharray: 3 3;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.graph-legend .swatch {
+  display: inline-block;
+  width: 1.1rem;
+  height: 0.8rem;
+  vertical-align: middle;
+  border: 1.5px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+}
+
+.swatch.focal {
+  border-width: 3px;
+  border-color: var(--text);
+}
+
+.swatch.analysis-full {
+  border-color: var(--ok);
+}
+
+.swatch.analysis-partial {
+  border: 1.5px dashed var(--warn);
+}
+
+.swatch.analysis-opaque {
+  border: 1.5px dotted var(--muted);
+  background: var(--neutral-soft);
+}
+
+.swatch.status-platform {
+  border-radius: 999px;
+  background: var(--neutral-soft);
+}
+
+.swatch.status-outside {
+  border: 1.5px dotted var(--warn);
+  background: var(--warn-soft);
+}
+
+.swatch.status-dynamic {
+  border: 1.5px dashed var(--bad);
+  background: var(--bad-soft);
+}
+
+.swatch.more {
+  border-style: dashed;
+}
+
+.graph-list ul {
+  margin: 0.25rem 0;
+}
+
+.neighbour-list {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.neighbour-list h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 40rem) {
+  .graph-canvas {
+    height: 420px;
+  }
+}
+
+/* React Flow turns pointer events off on nodes that are not draggable or selectable; the links
+   and buttons inside our nodes must stay clickable. */
+.graph-node a,
+.graph-node button {
+  pointer-events: all;
+}
+
+.graph-more-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.graph-more-list button {
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
