@@ -1,0 +1,914 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<FLOW VERSION="3.0" CLEANUP="true">
+  <SEQUENCE NAME="Validate order batch" TIMEOUT="" EXIT-ON="FAILURE">
+    <COMMENT>Synthetic fixture: validates a batch of orders and publishes the result.</COMMENT>
+    <MAP NAME="Prepare batch" TIMEOUT="" MODE="STANDALONE">
+      <COMMENT>Count the orders and name the transaction.</COMMENT>
+      <MAPTARGET>
+    <Values version="2.0">
+      <record name="xml" javaclass="com.wm.util.Values">
+        <value name="node_type">record</value>
+        <value name="node_subtype">unknown</value>
+        <value name="is_public">false</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <value name="nillable">true</value>
+        <array name="rec_fields" type="record" depth="1">
+          <record javaclass="com.wm.util.Values">
+            <value name="node_type">record</value>
+            <value name="node_subtype">unknown</value>
+            <value name="is_public">false</value>
+            <value name="field_name">input</value>
+            <value name="field_type">recref</value>
+            <value name="field_dim">0</value>
+            <value name="nillable">true</value>
+            <value name="form_qualified">false</value>
+            <value name="is_global">false</value>
+            <value name="rec_closed">true</value>
+            <value name="rec_ref">sample.orders.doc.intake:docValidateOrderBatchInput</value>
+          </record>
+          <record javaclass="com.wm.util.Values">
+            <value name="node_type">unknown</value>
+            <value name="node_subtype">unknown</value>
+            <value name="is_public">false</value>
+            <value name="field_name">batchStatus</value>
+            <value name="field_type">string</value>
+            <value name="field_dim">0</value>
+            <value name="nillable">true</value>
+            <value name="form_qualified">false</value>
+            <value name="is_global">false</value>
+          </record>
+          <record javaclass="com.wm.util.Values">
+            <value name="node_type">unknown</value>
+            <value name="node_subtype">unknown</value>
+            <value name="is_public">false</value>
+            <value name="field_name">orderCount</value>
+            <value name="field_type">string</value>
+            <value name="field_dim">0</value>
+            <value name="nillable">true</value>
+            <value name="form_qualified">false</value>
+            <value name="is_global">false</value>
+          </record>
+          <record javaclass="com.wm.util.Values">
+            <value name="node_type">unknown</value>
+            <value name="node_subtype">unknown</value>
+            <value name="is_public">false</value>
+            <value name="field_name">batchId</value>
+            <value name="field_type">string</value>
+            <value name="field_dim">0</value>
+            <value name="nillable">true</value>
+            <value name="form_qualified">false</value>
+            <value name="is_global">false</value>
+          </record>
+          <record javaclass="com.wm.util.Values">
+            <value name="node_type">unknown</value>
+            <value name="node_subtype">unknown</value>
+            <value name="is_public">false</value>
+            <value name="field_name">transactionName</value>
+            <value name="field_type">string</value>
+            <value name="field_dim">0</value>
+            <value name="nillable">true</value>
+            <value name="form_qualified">false</value>
+            <value name="is_global">false</value>
+          </record>
+          <record javaclass="com.wm.util.Values">
+            <value name="node_type">unknown</value>
+            <value name="node_subtype">unknown</value>
+            <value name="is_public">false</value>
+            <value name="field_name">receivedDate</value>
+            <value name="field_type">string</value>
+            <value name="field_dim">0</value>
+            <value name="nillable">true</value>
+            <value name="form_qualified">false</value>
+            <value name="is_global">false</value>
+          </record>
+        </array>
+        <value name="modifiable">true</value>
+      </record>
+    </Values>
+      </MAPTARGET>
+      <MAPSOURCE>
+    <Values version="2.0">
+      <record name="xml" javaclass="com.wm.util.Values">
+        <value name="node_type">record</value>
+        <value name="node_subtype">unknown</value>
+        <value name="is_public">false</value>
+        <value name="field_type">record</value>
+        <value name="field_dim">0</value>
+        <value name="nillable">true</value>
+        <array name="rec_fields" type="record" depth="1">
+          <record javaclass="com.wm.util.Values">
+            <value name="node_type">record</value>
+            <value name="node_subtype">unknown</value>
+            <value name="is_public">false</value>
+            <value name="field_name">input</value>
+            <value name="field_type">recref</value>
+            <value name="field_dim">0</value>
+            <value name="nillable">true</value>
+            <value name="form_qualified">false</value>
+            <value name="is_global">false</value>
+            <value name="rec_closed">true</value>
+            <value name="rec_ref">sample.orders.doc.intake:docValidateOrderBatchInput</value>
+          </record>
+        </array>
+        <value name="modifiable">true</value>
+      </record>
+    </Values>
+      </MAPSOURCE>
+      <MAPSET NAME="Setter" OVERWRITE="true" VARIABLES="false" GLOBALVARIABLES="false" FIELD="/batchStatus;1;0">
+        <DATA ENCODING="XMLValues" I18N="true">
+      <Values version="2.0">
+        <value name="xml">0</value>
+        <record name="type" javaclass="com.wm.util.Values">
+          <value name="node_type">unknown</value>
+          <value name="node_subtype">unknown</value>
+          <value name="field_name">batchStatus</value>
+          <value name="field_type">string</value>
+          <value name="field_dim">0</value>
+        </record>
+      </Values>
+        </DATA>
+      </MAPSET>
+      <MAPINVOKE SERVICE="pub.list:sizeOfList" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="0">
+        <MAP MODE="INVOKEINPUT">
+          <MAPCOPY FROM="/input;4;0;sample.orders.doc.intake:docValidateOrderBatchInput/orders;2;1" TO="/fromList;2;1">
+          </MAPCOPY>
+        </MAP>
+        <MAP MODE="INVOKEOUTPUT">
+          <MAPCOPY FROM="/size;1;0" TO="/orderCount;1;0">
+          </MAPCOPY>
+        </MAP>
+      </MAPINVOKE>
+      <MAPCOPY FROM="/input;4;0;sample.orders.doc.intake:docValidateOrderBatchInput/batchId;1;0" TO="/batchId;1;0">
+      </MAPCOPY>
+      <MAPINVOKE SERVICE="sample.utils:generateTransactionName" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="1">
+        <MAP MODE="INVOKEINPUT">
+          <MAPCOPY FROM="/batchId;1;0" TO="/prefix;1;0">
+          </MAPCOPY>
+        </MAP>
+        <MAP MODE="INVOKEOUTPUT">
+          <MAPCOPY FROM="/transactionName;1;0" TO="/transactionName;1;0">
+          </MAPCOPY>
+        </MAP>
+      </MAPINVOKE>
+      <MAPINVOKE SERVICE="pub.date:getCurrentDateString" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="2">
+        <MAP MODE="INVOKEINPUT">
+          <MAPSET NAME="Setter" OVERWRITE="true" VARIABLES="false" GLOBALVARIABLES="false" FIELD="/pattern;1;0">
+            <DATA ENCODING="XMLValues" I18N="true">
+          <Values version="2.0">
+            <value name="xml">yyyy-MM-dd</value>
+            <record name="type" javaclass="com.wm.util.Values">
+              <value name="node_type">unknown</value>
+              <value name="node_subtype">unknown</value>
+              <value name="field_name">pattern</value>
+              <value name="field_type">string</value>
+              <value name="field_dim">0</value>
+            </record>
+          </Values>
+            </DATA>
+          </MAPSET>
+        </MAP>
+        <MAP MODE="INVOKEOUTPUT">
+          <MAPCOPY FROM="/value;1;0" TO="/receivedDate;1;0">
+          </MAPCOPY>
+        </MAP>
+      </MAPINVOKE>
+    </MAP>
+    <INVOKE TIMEOUT="" SERVICE="pub.art.transaction:startTransaction" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+      <COMMENT></COMMENT>
+      <MAP MODE="INPUT">
+        <MAPTARGET>
+      <Values version="2.0">
+        <record name="xml" javaclass="com.wm.util.Values">
+          <value name="node_type">record</value>
+          <value name="node_subtype">unknown</value>
+          <value name="is_public">false</value>
+          <value name="field_type">record</value>
+          <value name="field_dim">0</value>
+          <value name="nillable">true</value>
+          <array name="rec_fields" type="record" depth="1">
+            <record javaclass="com.wm.util.Values">
+              <value name="node_type">unknown</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_name">transactionName</value>
+              <value name="field_type">string</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <value name="form_qualified">false</value>
+              <value name="is_global">false</value>
+            </record>
+          </array>
+          <value name="modifiable">true</value>
+        </record>
+      </Values>
+        </MAPTARGET>
+        <MAPSOURCE>
+      <Values version="2.0">
+        <record name="xml" javaclass="com.wm.util.Values">
+          <value name="node_type">record</value>
+          <value name="node_subtype">unknown</value>
+          <value name="is_public">false</value>
+          <value name="field_type">record</value>
+          <value name="field_dim">0</value>
+          <value name="nillable">true</value>
+          <array name="rec_fields" type="record" depth="1">
+            <record javaclass="com.wm.util.Values">
+              <value name="node_type">unknown</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_name">transactionName</value>
+              <value name="field_type">string</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <value name="form_qualified">false</value>
+              <value name="is_global">false</value>
+            </record>
+            <record javaclass="com.wm.util.Values">
+              <value name="node_type">unknown</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_name">batchId</value>
+              <value name="field_type">string</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <value name="form_qualified">false</value>
+              <value name="is_global">false</value>
+            </record>
+          </array>
+          <value name="modifiable">true</value>
+        </record>
+      </Values>
+        </MAPSOURCE>
+        <MAPCOPY FROM="/transactionName;1;0" TO="/transactionName;1;0">
+        </MAPCOPY>
+      </MAP>
+      <MAP MODE="OUTPUT">
+        <MAPTARGET>
+      <Values version="2.0">
+        <record name="xml" javaclass="com.wm.util.Values">
+          <value name="node_type">record</value>
+          <value name="node_subtype">unknown</value>
+          <value name="is_public">false</value>
+          <value name="field_type">record</value>
+          <value name="field_dim">0</value>
+          <value name="nillable">true</value>
+          <array name="rec_fields" type="record" depth="1">
+            <record javaclass="com.wm.util.Values">
+              <value name="node_type">unknown</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_name">transactionName</value>
+              <value name="field_type">string</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <value name="form_qualified">false</value>
+              <value name="is_global">false</value>
+            </record>
+            <record javaclass="com.wm.util.Values">
+              <value name="node_type">unknown</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_name">batchId</value>
+              <value name="field_type">string</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <value name="form_qualified">false</value>
+              <value name="is_global">false</value>
+            </record>
+          </array>
+          <value name="modifiable">true</value>
+        </record>
+      </Values>
+        </MAPTARGET>
+        <MAPSOURCE>
+      <Values version="2.0">
+        <record name="xml" javaclass="com.wm.util.Values">
+          <value name="node_type">record</value>
+          <value name="node_subtype">unknown</value>
+          <value name="is_public">false</value>
+          <value name="field_type">record</value>
+          <value name="field_dim">0</value>
+          <value name="nillable">true</value>
+          <array name="rec_fields" type="record" depth="1">
+            <record javaclass="com.wm.util.Values">
+              <value name="node_type">unknown</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_name">transactionName</value>
+              <value name="field_type">string</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <value name="form_qualified">false</value>
+              <value name="is_global">false</value>
+            </record>
+          </array>
+          <value name="modifiable">true</value>
+        </record>
+      </Values>
+        </MAPSOURCE>
+      </MAP>
+    </INVOKE>
+    <SEQUENCE TIMEOUT="" EXIT-ON="SUCCESS">
+      <SEQUENCE NAME="Try" TIMEOUT="" EXIT-ON="FAILURE" FORM="TRY">
+        <INVOKE TIMEOUT="" SERVICE="sample.orders.services.common:getConnection" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT>Open the order store connection.</COMMENT>
+          <MAP MODE="INPUT">
+            <MAPTARGET>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">connectionAlias</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPTARGET>
+            <MAPSOURCE>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">record</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">connection</value>
+                  <value name="field_type">record</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                  <array name="rec_fields" type="record" depth="1">
+                  </array>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPSOURCE>
+            <MAPSET NAME="Setter" OVERWRITE="true" VARIABLES="false" GLOBALVARIABLES="false" FIELD="/connectionAlias;1;0">
+              <DATA ENCODING="XMLValues" I18N="true">
+            <Values version="2.0">
+              <value name="xml">orders</value>
+              <record name="type" javaclass="com.wm.util.Values">
+                <value name="node_type">unknown</value>
+                <value name="node_subtype">unknown</value>
+                <value name="field_name">connectionAlias</value>
+                <value name="field_type">string</value>
+                <value name="field_dim">0</value>
+              </record>
+            </Values>
+              </DATA>
+            </MAPSET>
+          </MAP>
+          <MAP MODE="OUTPUT">
+            <MAPTARGET>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">record</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">connection</value>
+                  <value name="field_type">record</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                  <array name="rec_fields" type="record" depth="1">
+                  </array>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPTARGET>
+            <MAPSOURCE>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">connectionAlias</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPSOURCE>
+            <MAPCOPY FROM="/connection;2;0" TO="/connection;2;0">
+            </MAPCOPY>
+            <MAPDELETE FIELD="/connectionAlias;1;0">
+            </MAPDELETE>
+          </MAP>
+        </INVOKE>
+        <BRANCH TIMEOUT="" SWITCH="/connection;2;0/status;1;0">
+          <COMMENT>Stop when the connection is not usable.</COMMENT>
+          <SEQUENCE NAME="CONNECTED" TIMEOUT="" EXIT-ON="FAILURE">
+            <MAP TIMEOUT="" MODE="STANDALONE">
+              <MAPINVOKE SERVICE="sample.utils.bool:strBoolToNumber" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="0">
+                <MAP MODE="INVOKEINPUT">
+                  <MAPCOPY FROM="/connection;2;0/readOnly;1;0" TO="/value;1;0">
+                  </MAPCOPY>
+                </MAP>
+                <MAP MODE="INVOKEOUTPUT">
+                  <MAPCOPY FROM="/number;1;0" TO="/readOnlyFlag;1;0">
+                  </MAPCOPY>
+                </MAP>
+              </MAPINVOKE>
+            </MAP>
+          </SEQUENCE>
+          <SEQUENCE NAME="$default" TIMEOUT="" EXIT-ON="FAILURE">
+            <INVOKE TIMEOUT="" SERVICE="sample.orders.services.common:checkErrorResult" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+              <COMMENT></COMMENT>
+              <MAP MODE="INPUT">
+                <MAPCOPY FROM="/connection;2;0/error;2;0" TO="/errorResult;2;0">
+                </MAPCOPY>
+              </MAP>
+            </INVOKE>
+            <EXIT FROM="Try" SIGNAL="SUCCESS" FAILURE-MESSAGE="">
+            </EXIT>
+          </SEQUENCE>
+        </BRANCH>
+        <INVOKE TIMEOUT="" SERVICE="sample.orders.services.order:findOrdersForValidation" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT>Load the orders of the batch.</COMMENT>
+          <MAP MODE="INPUT">
+            <MAPTARGET>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">batchId</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPTARGET>
+            <MAPSOURCE>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">record</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">orders</value>
+                  <value name="field_type">record</value>
+                  <value name="field_dim">1</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                  <array name="rec_fields" type="record" depth="1">
+                  </array>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPSOURCE>
+            <MAPCOPY FROM="/batchId;1;0" TO="/batchId;1;0">
+            </MAPCOPY>
+          </MAP>
+          <MAP MODE="OUTPUT">
+            <MAPTARGET>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">record</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">orders</value>
+                  <value name="field_type">record</value>
+                  <value name="field_dim">1</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                  <array name="rec_fields" type="record" depth="1">
+                  </array>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPTARGET>
+            <MAPSOURCE>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">batchId</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPSOURCE>
+            <MAPCOPY FROM="/orders;2;1" TO="/orders;2;1">
+            </MAPCOPY>
+          </MAP>
+        </INVOKE>
+        <LOOP NAME="Each order" TIMEOUT="" IN-ARRAY="/orders">
+          <COMMENT>Check every order of the batch.</COMMENT>
+          <BRANCH TIMEOUT="" LABELEXPRESSIONS="true">
+            <COMMENT>Normalise the order status.</COMMENT>
+            <SEQUENCE NAME="%orders/status% == $null" TIMEOUT="" EXIT-ON="FAILURE">
+              <MAP TIMEOUT="" MODE="STANDALONE">
+                <MAPSET NAME="Setter" OVERWRITE="true" VARIABLES="false" GLOBALVARIABLES="false" FIELD="/orders;2;0/status;1;0">
+                  <DATA ENCODING="XMLValues" I18N="true">
+                <Values version="2.0">
+                  <value name="xml">NEW</value>
+                  <record name="type" javaclass="com.wm.util.Values">
+                    <value name="node_type">unknown</value>
+                    <value name="node_subtype">unknown</value>
+                    <value name="field_name">status</value>
+                    <value name="field_type">string</value>
+                    <value name="field_dim">0</value>
+                  </record>
+                </Values>
+                  </DATA>
+                </MAPSET>
+              </MAP>
+            </SEQUENCE>
+            <SEQUENCE NAME='%orders/status% == "CANCELLED"' TIMEOUT="" EXIT-ON="FAILURE">
+              <EXIT FROM="Each order" SIGNAL="SUCCESS" FAILURE-MESSAGE="">
+              </EXIT>
+            </SEQUENCE>
+            <SEQUENCE NAME="$default" TIMEOUT="" EXIT-ON="FAILURE">
+              <MAP TIMEOUT="" MODE="STANDALONE">
+                <MAPINVOKE SERVICE="pub.string:toUpper" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="0">
+                  <MAP MODE="INVOKEINPUT">
+                    <MAPCOPY FROM="/orders;2;0/status;1;0" TO="/inString;1;0">
+                    </MAPCOPY>
+                  </MAP>
+                  <MAP MODE="INVOKEOUTPUT">
+                    <MAPCOPY FROM="/value;1;0" TO="/orders;2;0/status;1;0">
+                    </MAPCOPY>
+                  </MAP>
+                </MAPINVOKE>
+              </MAP>
+            </SEQUENCE>
+          </BRANCH>
+          <INVOKE TIMEOUT="" SERVICE="sample.orders.services.order:getOrder" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+            <COMMENT></COMMENT>
+            <MAP MODE="INPUT">
+              <MAPCOPY FROM="/orders;2;0/orderId;1;0" TO="/orderId;1;0">
+              </MAPCOPY>
+            </MAP>
+            <MAP MODE="OUTPUT">
+              <MAPCOPY FROM="/order;2;0" TO="/orderDetails;2;0">
+              </MAPCOPY>
+              <MAPDELETE FIELD="/order;2;0">
+              </MAPDELETE>
+            </MAP>
+          </INVOKE>
+        </LOOP>
+        <MAP NAME="Remember first order" TIMEOUT="" MODE="STANDALONE">
+          <MAPCOPY FROM="/orders[0];2;0/orderId;1;0" TO="/firstOrderId;1;0">
+          </MAPCOPY>
+          <MAPDELETE FIELD="/fromList;2;1">
+          </MAPDELETE>
+        </MAP>
+        <INVOKE TIMEOUT="" SERVICE="sample.orders.db._create:createValidationResult" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT>Store the validation result.</COMMENT>
+          <MAP MODE="INPUT">
+            <MAPCOPY FROM="/batchId;1;0" TO="/batchId;1;0">
+            </MAPCOPY>
+            <MAPCOPY FROM="/orderCount;1;0" TO="/orderCount;1;0">
+            </MAPCOPY>
+          </MAP>
+          <MAP MODE="OUTPUT">
+            <MAPCOPY FROM="/resultId;1;0" TO="/resultId;1;0">
+            </MAPCOPY>
+          </MAP>
+        </INVOKE>
+        <INVOKE TIMEOUT="" SERVICE="pub.publish:publish" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT>Tell subscribers that the batch was validated.</COMMENT>
+          <MAP MODE="INPUT">
+            <MAPSET NAME="Setter" OVERWRITE="true" VARIABLES="false" GLOBALVARIABLES="false" FIELD="/documentTypeName;1;0">
+              <DATA ENCODING="XMLValues" I18N="true">
+            <Values version="2.0">
+              <value name="xml">sample.events.orders:docOrderBatchValidated</value>
+              <record name="type" javaclass="com.wm.util.Values">
+                <value name="node_type">unknown</value>
+                <value name="node_subtype">unknown</value>
+                <value name="field_name">documentTypeName</value>
+                <value name="field_type">string</value>
+                <value name="field_dim">0</value>
+              </record>
+            </Values>
+              </DATA>
+            </MAPSET>
+            <MAPCOPY FROM="/batchId;1;0" TO="/document;2;0/batchId;1;0">
+            </MAPCOPY>
+          </MAP>
+          <MAP MODE="OUTPUT">
+          </MAP>
+        </INVOKE>
+        <INVOKE TIMEOUT="" SERVICE="pub.art.transaction:commitTransaction" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT></COMMENT>
+          <MAP MODE="INPUT">
+            <MAPTARGET>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">transactionName</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPTARGET>
+            <MAPSOURCE>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">transactionName</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">batchId</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPSOURCE>
+            <MAPCOPY FROM="/transactionName;1;0" TO="/transactionName;1;0">
+            </MAPCOPY>
+          </MAP>
+        </INVOKE>
+      </SEQUENCE>
+      <SEQUENCE NAME="Catch" TIMEOUT="" EXIT-ON="FAILURE" FORM="CATCH">
+        <INVOKE TIMEOUT="" SERVICE="pub.flow:getLastError" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT>Read the error that stopped the batch.</COMMENT>
+          <MAP MODE="OUTPUT">
+            <MAPCOPY FROM="/lastError;2;0/error;1;0" TO="/errorMessage;1;0">
+            </MAPCOPY>
+          </MAP>
+        </INVOKE>
+        <INVOKE TIMEOUT="" SERVICE="pub.art.transaction:rollbackTransaction" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT></COMMENT>
+          <MAP MODE="INPUT">
+            <MAPTARGET>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">transactionName</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPTARGET>
+            <MAPSOURCE>
+          <Values version="2.0">
+            <record name="xml" javaclass="com.wm.util.Values">
+              <value name="node_type">record</value>
+              <value name="node_subtype">unknown</value>
+              <value name="is_public">false</value>
+              <value name="field_type">record</value>
+              <value name="field_dim">0</value>
+              <value name="nillable">true</value>
+              <array name="rec_fields" type="record" depth="1">
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">transactionName</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+                <record javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="is_public">false</value>
+                  <value name="field_name">batchId</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                  <value name="nillable">true</value>
+                  <value name="form_qualified">false</value>
+                  <value name="is_global">false</value>
+                </record>
+              </array>
+              <value name="modifiable">true</value>
+            </record>
+          </Values>
+            </MAPSOURCE>
+            <MAPCOPY FROM="/transactionName;1;0" TO="/transactionName;1;0">
+            </MAPCOPY>
+          </MAP>
+        </INVOKE>
+        <MAP NAME="Log failure" TIMEOUT="" MODE="STANDALONE">
+          <MAPINVOKE SERVICE="sample.orders.db._get:getNewEventId" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="0">
+            <MAP MODE="INVOKEINPUT">
+            </MAP>
+            <MAP MODE="INVOKEOUTPUT">
+              <MAPCOPY FROM="/eventId;1;0" TO="/eventId;1;0">
+              </MAPCOPY>
+            </MAP>
+          </MAPINVOKE>
+          <MAPINVOKE SERVICE="sample.orders.services.common:saveEvent" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="1">
+            <MAP MODE="INVOKEINPUT">
+              <MAPCOPY FROM="/eventId;1;0" TO="/eventId;1;0">
+              </MAPCOPY>
+              <MAPCOPY FROM="/errorMessage;1;0" TO="/message;1;0">
+              </MAPCOPY>
+            </MAP>
+            <MAP MODE="INVOKEOUTPUT">
+              <MAPCOPY FROM="/status;1;0" TO="/saveStatus;1;0">
+              </MAPCOPY>
+            </MAP>
+          </MAPINVOKE>
+          <MAPINVOKE SERVICE="pub.date:formatDate" VALIDATE-IN="$none" VALIDATE-OUT="$none" INVOKE-ORDER="2">
+            <MAP MODE="INVOKEINPUT">
+              <MAPCOPY FROM="/receivedDate;1;0" TO="/date;1;0">
+              </MAPCOPY>
+              <MAPSET NAME="Setter" OVERWRITE="true" VARIABLES="false" GLOBALVARIABLES="false" FIELD="/outPattern;1;0">
+                <DATA ENCODING="XMLValues" I18N="true">
+              <Values version="2.0">
+                <value name="xml">dd.MM.yyyy</value>
+                <record name="type" javaclass="com.wm.util.Values">
+                  <value name="node_type">unknown</value>
+                  <value name="node_subtype">unknown</value>
+                  <value name="field_name">outPattern</value>
+                  <value name="field_type">string</value>
+                  <value name="field_dim">0</value>
+                </record>
+              </Values>
+                </DATA>
+              </MAPSET>
+            </MAP>
+            <MAP MODE="INVOKEOUTPUT">
+              <MAPCOPY FROM="/value;1;0" TO="/failedOn;1;0">
+              </MAPCOPY>
+            </MAP>
+          </MAPINVOKE>
+        </MAP>
+        <INVOKE TIMEOUT="" SERVICE="sample.orders.services.common:checkErrorResult" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+          <COMMENT></COMMENT>
+          <MAP MODE="INPUT">
+            <MAPCOPY FROM="/errorMessage;1;0" TO="/errorResult;2;0/message;1;0">
+            </MAPCOPY>
+          </MAP>
+        </INVOKE>
+        <EXIT FROM="Validate order batch" SIGNAL="SUCCESS" FAILURE-MESSAGE="">
+        </EXIT>
+      </SEQUENCE>
+    </SEQUENCE>
+    <MAP NAME="Build output" TIMEOUT="" MODE="STANDALONE">
+      <MAPCOPY FROM="/batchStatus;1;0" TO="/output;4;0;sample.orders.doc.intake:docValidateOrderBatchOutput/status;1;0">
+      </MAPCOPY>
+      <MAPCOPY FROM="/firstOrderId;1;0" TO="/output;4;0;sample.orders.doc.intake:docValidateOrderBatchOutput/firstOrderId;1;0">
+      </MAPCOPY>
+      <MAPCOPY FROM="/orderCount;1;0" TO="/output;4;0;sample.orders.doc.intake:docValidateOrderBatchOutput/orderCount;1;0">
+      </MAPCOPY>
+    </MAP>
+    <INVOKE TIMEOUT="" SERVICE="pub.flow:clearPipeline" VALIDATE-IN="$none" VALIDATE-OUT="$none">
+      <COMMENT>Keep only the output.</COMMENT>
+      <MAP MODE="INPUT">
+      </MAP>
+      <MAP MODE="OUTPUT">
+      </MAP>
+    </INVOKE>
+  </SEQUENCE>
+</FLOW>

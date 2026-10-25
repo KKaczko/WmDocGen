@@ -13,8 +13,8 @@ classification:
     important:
       # Full-name globs (`namespace:service`), matched case-insensitively.
       fullName:
-        - "oa.*.channel:*"
-        - "di.*.adapter:*"
+        - "acme.*.channel:*"
+        - "acme.*.adapter:*"
       serviceName:
         - "*Service"
         - "process*"

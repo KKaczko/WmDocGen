@@ -197,5 +197,5 @@ metadata, and config files. Inventory records their paths and sizes only; it doe
 contents. PGP generated Java source is read only as the M4a Java Service parsing surface.
 
 Observed but not interpreted uppercase FLOW elements currently produce `UNSUPPORTED_FLOW_ELEMENT`
-findings. In the current OAAdapter fixture, generic unsupported findings are no longer emitted for
+findings. In the current SampleOrders fixture, generic unsupported findings are no longer emitted for
 structural `MAP` or the supported observed `EXIT` shape.

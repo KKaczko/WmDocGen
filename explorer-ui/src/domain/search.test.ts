@@ -41,7 +41,7 @@ describe("nameWords", () => {
       "create",
       "order",
     ]);
-    expect(nameWords("cdm.HTTPClient:send")).toContain("client");
+    expect(nameWords("ext.HTTPClient:send")).toContain("client");
   });
 });
 

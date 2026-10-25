@@ -107,8 +107,8 @@ Observed from current fixtures:
   document type or namespace node is recorded with its key path. No other value is kept.
 - Document types can appear as `node.ndf` with a top-level `record` containing
   `node_type=record`.
-- Observed active Document Types in current fixtures all come from PGP. OAAdapter contains service
-  signature `rec_ref` values but no local Document Type artifacts in the included snapshot.
+- Observed active Document Types in current fixtures all come from PGP. SampleOrders contains
+  service signature `rec_ref` values but no local Document Type artifacts.
 - Observed Document Type identities use `record/node_nsName` in exact `namespace:name` form. The
   analyzer keeps the directory-derived identity as fallback evidence and reports mismatches instead
   of aliasing names.
@@ -167,9 +167,9 @@ Observed from current fixtures:
   observed.
 - `LOOP` elements can carry `NAME`, `IN-ARRAY`, optional `OUT-ARRAY`, and `TIMEOUT`. M2a does not
   simulate iterations or infer collection schemas.
-- OAAdapter 10.15 has 9 observed `EXIT` elements. All observed active fixture exits carry `FROM`,
-  `SIGNAL="SUCCESS"`, and an empty `FAILURE-MESSAGE`.
-- OAAdapter 10.15 uses `LOOP` and `EXIT`; PGP active FLOW fixtures do not currently show either tag.
+- `EXIT` elements observed in real 10.15 services carry `FROM`, `SIGNAL="SUCCESS"`, and an
+  empty `FAILURE-MESSAGE`; the synthetic SampleOrders fixture has three in that shape.
+- SampleOrders uses `LOOP` and `EXIT`; PGP active FLOW fixtures do not currently show either tag.
 - Observed `MAP`-family elements can contain nested operations and invocations. M2b positions
   structural `MAP` nodes in the FLOW tree and also extracts canonical mapping records for observed
   `MAPCOPY`, `MAPSET`, `MAPDELETE`, `MAPSOURCE`, `MAPTARGET`, and `DATA`.

@@ -150,13 +150,13 @@ def test_parse_xml_file_accepts_normal_webmethods_xml() -> None:
     path = (
         Path(__file__).resolve().parents[2]
         / "samples"
-        / "OriginalSmall"
-        / "OAAdapter"
+        / "Synthetic"
+        / "SampleOrders"
         / "ns"
-        / "oa"
-        / "adapter"
-        / "geographicAddressManagement"
-        / "createGeographicAddressValidation"
+        / "sample"
+        / "orders"
+        / "intake"
+        / "validateOrderBatch"
         / "node.ndf"
     )
 

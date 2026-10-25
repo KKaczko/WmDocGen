@@ -18,7 +18,7 @@ from wm_doc.summarizer import DEFAULT_NUM_PREDICT, fit_facts, unknown_names
 SAMPLES = Path("samples")
 READ_CONFIG = "pgp.services.common:readConfig"
 SELECT_FROM_CONFIG = "pgp.services.common:selectFromConfig"
-OA_SERVICE = "oa.adapter.geographicAddressManagement:createGeographicAddressValidation"
+ORDER_BATCH = "sample.orders.intake:validateOrderBatch"
 
 
 @pytest.fixture(scope="module")
@@ -85,9 +85,9 @@ def test_pseudocode_shows_try_catch_conditions_and_comments(
     services: dict[str, FlowService],
 ) -> None:
     config = load_config(None)
-    oa = services[OA_SERVICE]
-    oa_comments = load_flow_comments(SAMPLES, oa, config)
-    oa_text = render_pseudocode(oa, lambda _: None, comments=oa_comments)
+    batch = services[ORDER_BATCH]
+    batch_comments = load_flow_comments(SAMPLES, batch, config)
+    batch_text = render_pseudocode(batch, lambda _: None, comments=batch_comments)
     test_service = services["pgp.test.encrypt:testEncryptAndSignString"]
     test_text = render_pseudocode(
         test_service,
@@ -95,20 +95,21 @@ def test_pseudocode_shows_try_catch_conditions_and_comments(
         comments=load_flow_comments(SAMPLES, test_service, config),
     )
 
-    assert "TRY:" in oa_text and "CATCH:" in oa_text
-    assert "when %input/geographicAddressValidation/status% == $null:" in oa_text
-    assert "# outside the analysed packages" in oa_text
+    assert "TRY:" in batch_text and "CATCH:" in batch_text
+    assert "when %orders/status% == $null:" in batch_text
+    assert "# outside the analysed packages" in batch_text
+    assert "// Load the orders of the batch." in batch_text
     assert "(stops at the first child that succeeds)  // Try / Catch" in test_text
     assert "// Sending a message from Alice to Bob" in test_text
 
 
 def test_pseudocode_names_declared_external_systems(services: dict[str, FlowService]) -> None:
     def external(target: str) -> str | None:
-        return "OA core" if target.startswith("oa.adapter.services.") else None
+        return "Order store" if target.startswith("sample.orders.services.") else None
 
-    text = render_pseudocode(services[OA_SERVICE], lambda _: None, external_note=external)
+    text = render_pseudocode(services[ORDER_BATCH], lambda _: None, external_note=external)
 
-    assert "declared external system OA core" in text
+    assert "declared external system Order store" in text
 
 
 def test_pseudocode_for_java_service_states_what_is_not_analysed(
@@ -124,15 +125,17 @@ def test_pseudocode_for_java_service_states_what_is_not_analysed(
 def test_fit_facts_shrinks_large_services_to_the_window(
     services: dict[str, FlowService],
 ) -> None:
-    oa = services[OA_SERVICE]
+    batch = services[ORDER_BATCH]
+    # The synthetic service fits a 4096-token window, so a smaller window forces shortening.
+    small_window = 2048
 
-    roomy, roomy_shortened = fit_facts(oa, lambda _: None, {}, 32768)
-    tight, tight_shortened = fit_facts(oa, lambda _: None, {}, 4096)
+    roomy, roomy_shortened = fit_facts(batch, lambda _: None, {}, 32768)
+    tight, tight_shortened = fit_facts(batch, lambda _: None, {}, small_window)
 
     assert not roomy_shortened
     assert tight_shortened
     assert len(tight) < len(roomy)
-    assert len(tight) <= (4096 - DEFAULT_NUM_PREDICT) * 3
+    assert len(tight) <= (small_window - DEFAULT_NUM_PREDICT) * 3
     assert tight.endswith("to fit the model's context window)")
 
 

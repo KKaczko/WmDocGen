@@ -123,7 +123,7 @@ def test_package_summary_lists_services_entries_and_own_effects(
     summaries = summarize_packages(samples, compute_service_facts(samples))
 
     pgp = summaries["PGP"]
-    assert set(summaries) == {"OAAdapter", "PGP"}
+    assert set(summaries) == {"PGP", "SampleOrders"}
     assert len(pgp.services) == 34
     assert pgp.type_counts() == {"FLOW": 23, "Java": 11}
     assert list(pgp.services) == sorted(pgp.services, key=str.casefold)
@@ -134,8 +134,8 @@ def test_package_summary_lists_services_entries_and_own_effects(
     assert [(row.action, row.services) for row in pgp.effects] == [
         ("reads a file", (READ_CONFIG,))
     ]
-    adapter = summaries["OAAdapter"]
-    assert any(row.where == "Broker/UM" for row in adapter.effects)
+    orders = summaries["SampleOrders"]
+    assert any(row.where == "Broker/UM" for row in orders.effects)
     assert pgp.calls_into == () and pgp.called_from == ()
 
 
@@ -189,10 +189,14 @@ def test_describe_overviews_writes_package_then_server_files(
 ) -> None:
     provider = OverviewProvider()
     results, stats = describe_overviews(
-        samples, ["PGP", "OAAdapter"], provider, _options(tmp_path), server=True
+        samples, ["PGP", "SampleOrders"], provider, _options(tmp_path), server=True
     )
 
-    assert [result.service for result in results] == ["package:OAAdapter", "package:PGP", "server"]
+    assert [result.service for result in results] == [
+        "package:PGP",
+        "package:SampleOrders",
+        "server",
+    ]
     assert {result.outcome for result in results} == {DescribeOutcome.GENERATED}
     assert stats.counts[DescribeOutcome.GENERATED] == 3
     package_file = overview_doc_path(tmp_path / "service-docs", "PGP")
@@ -283,8 +287,8 @@ def test_overview_states_report_missing_draft_and_changed_facts(
     after = overview_states(samples, options.docs_dir, facts)
 
     assert before == {
-        "package:OAAdapter": DocState.MISSING,
         "package:PGP": DocState.MISSING,
+        "package:SampleOrders": DocState.MISSING,
         "server": DocState.MISSING,
     }
     assert after["package:PGP"] is DocState.STALE

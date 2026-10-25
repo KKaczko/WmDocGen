@@ -5,8 +5,8 @@ from hashlib import sha256
 from pathlib import Path
 
 MANIFEST = Path(__file__).with_name("checksums.sha256")
-FIXTURE_ROOTS = ("samples/OriginalSmall", "samples/PGP")
-CHECKSUM_LINE = re.compile(r"^[0-9a-f]{64}  samples/(?:OriginalSmall|PGP)/.+$")
+FIXTURE_ROOTS = ("samples/PGP", "samples/Synthetic")
+CHECKSUM_LINE = re.compile(r"^[0-9a-f]{64}  samples/(?:PGP|Synthetic)/.+$")
 
 
 def test_fixture_checksum_manifest_matches_samples() -> None:

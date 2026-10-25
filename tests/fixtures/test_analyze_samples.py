@@ -31,15 +31,20 @@ from wm_doc.render.process_markdown import (
 )
 from wm_doc.render.service_markdown import render_service_markdown, write_service_markdown
 
-OA_FULL_NAME = "oa.adapter.geographicAddressManagement:createGeographicAddressValidation"
+# Synthetic fixture (samples/Synthetic, see docs/fixture-provenance.md): one FLOW service that
+# uses TRY/CATCH, SWITCH and label-expression branches, a LOOP, EXIT, transformers, literals,
+# an indexed copy, deletes, transactions, a publish and calls outside the analysed packages.
+ORDER_BATCH = "sample.orders.intake:validateOrderBatch"
+ORDER_BATCH_INPUT = "sample.orders.doc.intake:docValidateOrderBatchInput"
+ORDER_BATCH_OUTPUT = "sample.orders.doc.intake:docValidateOrderBatchOutput"
 
 
-def test_primary_oaadapter_identity_signature_and_call_model() -> None:
-    service = _service(OA_FULL_NAME)
+def test_synthetic_order_batch_identity_signature_and_call_model() -> None:
+    service = _service(ORDER_BATCH)
 
-    assert service.identity.package == "OAAdapter"
-    assert service.identity.namespace == "oa.adapter.geographicAddressManagement"
-    assert service.identity.name == "createGeographicAddressValidation"
+    assert service.identity.package == "SampleOrders"
+    assert service.identity.namespace == "sample.orders.intake"
+    assert service.identity.name == "validateOrderBatch"
     assert service.identity.basis == "RECONSTRUCTED"
     assert service.service_type == "FLOW"
 
@@ -48,25 +53,19 @@ def test_primary_oaadapter_identity_signature_and_call_model() -> None:
     assert input_field.name == "input"
     assert input_field.data_type == "recref"
     assert input_field.dimensions == 0
-    assert input_field.document_reference == (
-        "oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
-        "docCreateGeographicAddressValidationInput"
-    )
+    assert input_field.document_reference == ORDER_BATCH_INPUT
     assert input_field.source.line is not None
 
     assert len(service.signature.outputs) == 1
     output_field = service.signature.outputs[0]
     assert output_field.name == "output"
     assert output_field.data_type == "recref"
-    assert output_field.document_reference == (
-        "oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
-        "docCreateGeographicAddressValidationOutput"
-    )
+    assert output_field.document_reference == ORDER_BATCH_OUTPUT
 
-    assert len(service.call_occurrences) == 43
+    assert len(service.call_occurrences) == 20
     assert Counter(call.call_type.value for call in service.call_occurrences) == {
-        "INVOKE": 13,
-        "MAPINVOKE": 30,
+        "INVOKE": 12,
+        "MAPINVOKE": 8,
     }
     first_call = service.call_occurrences[0]
     assert first_call.id.startswith("call_")
@@ -74,34 +73,34 @@ def test_primary_oaadapter_identity_signature_and_call_model() -> None:
     assert first_call.call_type == "MAPINVOKE"
     assert first_call.dependency_kind == "USES_TRANSFORMER"
     assert first_call.parent_flow_path[:2] == ["fn0001", "fn0002"]
-    assert first_call.source.line == 450
+    assert first_call.source.line == 133
 
-    assert len(service.unique_dependencies) == 25
+    assert len(service.unique_dependencies) == 19
     unique_kind_counts = Counter(
         dependency.dependency_kind.value for dependency in service.unique_dependencies
     )
     assert unique_kind_counts == {
-        "INVOKES": 6,
-        "USES_TRANSFORMER": 19,
+        "INVOKES": 11,
+        "USES_TRANSFORMER": 8,
     }
-    assert service.metrics.call_occurrence_count == 43
-    assert service.metrics.unique_dependency_count == 25
+    assert service.metrics.call_occurrence_count == 20
+    assert service.metrics.unique_dependency_count == 19
 
 
-def test_oaadapter_flow_tree_counts_and_observed_attributes() -> None:
-    service = _service(OA_FULL_NAME)
+def test_synthetic_flow_tree_counts_and_observed_attributes() -> None:
+    service = _service(ORDER_BATCH)
     assert service.flow_tree is not None
 
     assert service.metrics.flow_node_counts == {
-        "BRANCH": 27,
-        "BRANCH_CASE": 45,
-        "EXIT": 9,
+        "BRANCH": 2,
+        "BRANCH_CASE": 5,
+        "EXIT": 3,
         "FLOW": 1,
-        "INVOKE": 13,
-        "LOOP": 2,
-        "MAP": 135,
-        "MAPINVOKE": 30,
-        "SEQUENCE": 32,
+        "INVOKE": 12,
+        "LOOP": 1,
+        "MAP": 42,
+        "MAPINVOKE": 8,
+        "SEQUENCE": 9,
     }
 
     sequences = _nodes(service.flow_tree, "SEQUENCE")
@@ -110,29 +109,24 @@ def test_oaadapter_flow_tree_counts_and_observed_attributes() -> None:
     exits = _nodes(service.flow_tree, "EXIT")
     branch_cases = _nodes(service.flow_tree, "BRANCH_CASE")
 
-    assert len(sequences) == 32
+    assert len(sequences) == 9
     assert any(sequence.exit_on == "FAILURE" for sequence in sequences)
-    assert any(sequence.form == "TRY" for sequence in sequences)
-    assert len(branches) == 27
+    assert any(sequence.exit_on == "SUCCESS" for sequence in sequences)
+    assert {sequence.form for sequence in sequences} >= {"TRY", "CATCH"}
+    assert len(branches) == 2
     assert any(branch.switch for branch in branches)
     assert any(branch.evaluate_labels is True for branch in branches)
-    assert any(case.is_default_case for case in branch_cases)
-    assert len(loops) == 2
-    assert any(loop.in_array == "/geographicAddresses" for loop in loops)
-    assert len(exits) == 9
+    assert sum(1 for case in branch_cases if case.is_default_case) == 2
+    assert len(loops) == 1
+    assert loops[0].in_array == "/orders"
+    assert len(exits) == 3
     assert all(exit_node.signal == "SUCCESS" for exit_node in exits)
-    assert all(exit_node.exit_from for exit_node in exits)
-    assert [exit_node.source.line for exit_node in exits] == [
-        1400,
-        2346,
-        4926,
-        7793,
-        10280,
-        11461,
-        12467,
-        13830,
-        19833,
+    assert [exit_node.exit_from for exit_node in exits] == [
+        "Try",
+        "Each order",
+        "Validate order batch",
     ]
+    assert [exit_node.source.line for exit_node in exits] == [472, 618, 894]
 
 
 def test_pgp_flow_services_are_processed_by_same_parser() -> None:
@@ -153,21 +147,21 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     analysis = _analysis()
 
     assert analysis.schema_version == "analysis.v11"
-    assert analysis.metrics.call_occurrence_count == 108
-    assert analysis.metrics.flow_call_occurrence_count == 108
+    assert analysis.metrics.call_occurrence_count == 85
+    assert analysis.metrics.flow_call_occurrence_count == 85
     assert analysis.metrics.java_static_call_occurrence_count == 0
     assert analysis.metrics.java_dynamic_call_occurrence_count == 0
-    assert analysis.metrics.total_call_occurrence_count == 108
-    assert analysis.metrics.call_type_counts == {"INVOKE": 68, "MAPINVOKE": 40}
+    assert analysis.metrics.total_call_occurrence_count == 85
+    assert analysis.metrics.call_type_counts == {"INVOKE": 67, "MAPINVOKE": 18}
     assert analysis.metrics.resolved_call_occurrence_count == 49
-    assert analysis.metrics.unresolved_call_occurrence_count == 59
-    assert analysis.metrics.unique_dependency_count == 86
-    assert analysis.metrics.flow_unique_dependency_count == 86
+    assert analysis.metrics.unresolved_call_occurrence_count == 36
+    assert analysis.metrics.unique_dependency_count == 80
+    assert analysis.metrics.flow_unique_dependency_count == 80
     assert analysis.metrics.java_unique_dependency_count == 0
-    assert analysis.metrics.total_unique_dependency_count == 86
+    assert analysis.metrics.total_unique_dependency_count == 80
     assert analysis.metrics.unique_dependency_kind_counts == {
-        "INVOKES": 61,
-        "USES_TRANSFORMER": 25,
+        "INVOKES": 66,
+        "USES_TRANSFORMER": 14,
     }
     assert analysis.metrics.service_type_counts == {"FLOW": 24, "JAVA": 11}
     assert analysis.metrics.opaque_service_count == 0
@@ -180,7 +174,7 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
         "JAVA": 20,
     }
     assert analysis.metrics.resolved_unique_dependency_count == 45
-    assert analysis.metrics.unresolved_unique_dependency_count == 41
+    assert analysis.metrics.unresolved_unique_dependency_count == 35
     assert analysis.metrics.process_definition_count == 0
     assert analysis.metrics.process_service_membership_count == 0
     assert analysis.metrics.process_dependency_edge_count == 0
@@ -191,7 +185,7 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert {
         candidate.service for candidate in analysis.technical_entrypoint_candidates
     } >= {
-        "oa.adapter.geographicAddressManagement:createGeographicAddressValidation",
+        ORDER_BATCH,
         "pgp.test.encrypt:testEncryptFile",
         "pgp.test.keys:testReadPublicKeys",
     }
@@ -199,8 +193,8 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
     assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v1"
-    assert len(analysis.call_occurrences) == 108
-    assert len(analysis.unique_dependencies) == 86
+    assert len(analysis.call_occurrences) == 85
+    assert len(analysis.unique_dependencies) == 80
     assert all(call.id.startswith("call_") for call in analysis.call_occurrences)
     assert any(
         call.target == "pgp.services.registry:getPubKey"
@@ -217,11 +211,11 @@ def test_real_fixture_process_catalog_generates_process_ir_and_docs(tmp_path) ->
     processes_file.write_text(
         f"""version: 1
 processes:
-  - id: geographic-address-validation
-    name: Geographic address validation
-    description: Validates and prepares geographic address information.
+  - id: order-batch-validation
+    name: Order batch validation
+    description: Validates a batch of incoming orders.
     entrypoints:
-      - {OA_FULL_NAME}
+      - {ORDER_BATCH}
   - id: pgp-key-lookup
     name: PGP key lookup
     entrypoints:
@@ -235,23 +229,23 @@ processes:
     processes = {process.process_id: process for process in analysis.processes}
 
     assert analysis.schema_version == "analysis.v11"
-    assert set(processes) == {"geographic-address-validation", "pgp-key-lookup"}
+    assert set(processes) == {"order-batch-validation", "pgp-key-lookup"}
     assert analysis.metrics.process_definition_count == 2
     assert analysis.metrics.declared_entrypoint_count == 3
     assert analysis.metrics.resolved_entrypoint_count == 3
     assert analysis.metrics.unresolved_entrypoint_count == 0
     assert analysis.metrics.process_service_membership_count == 8
     assert analysis.metrics.process_dependency_edge_count == 7
-    assert analysis.metrics.process_unresolved_call_count == 29
+    assert analysis.metrics.process_unresolved_call_count == 23
     assert analysis.metrics.process_document_relationship_count == 14  # + spec signatures
     assert analysis.metrics.services_in_multiple_processes_count == 0
 
-    oa_memberships = [
+    batch_memberships = [
         membership
         for membership in analysis.process_service_memberships
-        if membership.process_id == "geographic-address-validation"
+        if membership.process_id == "order-batch-validation"
     ]
-    assert [membership.service for membership in oa_memberships] == [OA_FULL_NAME]
+    assert [membership.service for membership in batch_memberships] == [ORDER_BATCH]
     pgp_members = {
         membership.service
         for membership in analysis.process_service_memberships
@@ -262,8 +256,8 @@ processes:
     assert "pgp.services.keys:readPrivateKeys" in pgp_members
 
     process_markdown = render_process_markdown(analysis, processes["pgp-key-lookup"])
-    oa_process_markdown = render_process_markdown(
-        analysis, processes["geographic-address-validation"]
+    batch_process_markdown = render_process_markdown(
+        analysis, processes["order-batch-validation"]
     )
     catalog_markdown = render_process_catalog_markdown(analysis)
     index_markdown = render_documentation_index(analysis)
@@ -277,15 +271,11 @@ processes:
         f"[`pgp.documents:PublicKeyData`](../documents/"
         f"{document_markdown_filename('pgp.documents:PublicKeyData')})"
     ) in process_markdown
-    assert "## Entrypoint Validation" in oa_process_markdown
+    assert "## Entrypoint Validation" in batch_process_markdown
+    assert f"`{ORDER_BATCH_INPUT}` | `UNRESOLVED`" in batch_process_markdown
     assert (
-        "`oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
-        "docCreateGeographicAddressValidationInput` | `UNRESOLVED`"
-    ) in oa_process_markdown
-    assert (
-        "../documents/oa.adapter.doc.geographicAddressManagement."
-        "geographicAddressValidation_docCreateGeographicAddressValidationInput.md"
-        not in oa_process_markdown
+        f"../documents/{document_markdown_filename(ORDER_BATCH_INPUT)}"
+        not in batch_process_markdown
     )
     assert "Process Catalog" in catalog_markdown
     assert "Process catalog](processes/index.md)" in index_markdown
@@ -511,20 +501,8 @@ def test_document_reference_dependencies_are_resolved_exactly() -> None:
         )
         for dependency in analysis.service_document_dependencies
     }
-    assert (
-        "oa.adapter.geographicAddressManagement:createGeographicAddressValidation",
-        "oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
-        "docCreateGeographicAddressValidationInput",
-        "INPUT",
-        False,
-    ) in service_dependencies
-    assert (
-        "oa.adapter.geographicAddressManagement:createGeographicAddressValidation",
-        "oa.adapter.doc.geographicAddressManagement.geographicAddressValidation:"
-        "docCreateGeographicAddressValidationOutput",
-        "OUTPUT",
-        False,
-    ) in service_dependencies
+    assert (ORDER_BATCH, ORDER_BATCH_INPUT, "INPUT", False) in service_dependencies
+    assert (ORDER_BATCH, ORDER_BATCH_OUTPUT, "OUTPUT", False) in service_dependencies
     assert (
         "pgp.services.common:selectFromConfig",
         "pgp.documents.config:PGPconfig",
@@ -565,45 +543,46 @@ def test_raw_document_and_spec_counts_are_independently_verified() -> None:
 
 def test_mapping_operations_and_transformer_bindings_are_extracted() -> None:
     analysis = _analysis()
-    service = _service(OA_FULL_NAME)
+    service = _service(ORDER_BATCH)
 
-    assert analysis.metrics.flow_map_count == 265
-    assert analysis.metrics.mapping_operation_count == 568
+    assert analysis.metrics.flow_map_count == 172
+    assert analysis.metrics.mapping_operation_count == 393
     assert analysis.metrics.mapping_operation_type_counts == {
-        "COPY": 297,
-        "DELETE": 178,
-        "SET": 93,
+        "COPY": 142,
+        "DELETE": 173,
+        "SET": 78,
     }
-    assert analysis.metrics.transformer_binding_count == 198
+    assert analysis.metrics.transformer_binding_count == 47
     assert analysis.metrics.transformer_binding_direction_counts == {
-        "FROM_TRANSFORMER": 66,
-        "INTO_TRANSFORMER": 132,
+        "FROM_TRANSFORMER": 18,
+        "INTO_TRANSFORMER": 29,
     }
 
-    assert service.metrics.flow_map_count == 135
-    assert service.metrics.mapping_operation_count == 219
+    assert service.metrics.flow_map_count == 42
+    assert service.metrics.mapping_operation_count == 44
     assert service.metrics.mapping_operation_type_counts == {
-        "COPY": 190,
-        "DELETE": 8,
-        "SET": 21,
+        "COPY": 35,
+        "DELETE": 3,
+        "SET": 6,
     }
-    assert service.metrics.transformer_binding_count == 168
+    assert service.metrics.transformer_binding_count == 17
     assert service.metrics.transformer_binding_direction_counts == {
-        "FROM_TRANSFORMER": 56,
-        "INTO_TRANSFORMER": 112,
+        "FROM_TRANSFORMER": 8,
+        "INTO_TRANSFORMER": 9,
     }
 
-    assert sum(1 for flow_map in service.flow_maps if flow_map.source_schema) == 60
-    assert sum(1 for flow_map in service.flow_maps if flow_map.target_schema) == 60
+    assert sum(1 for flow_map in service.flow_maps if flow_map.source_schema) == 9
+    assert sum(1 for flow_map in service.flow_maps if flow_map.target_schema) == 9
     assert all(operation.id.startswith("mapop_") for operation in service.mapping_operations)
     assert all(flow_map.id.startswith("map_") for flow_map in service.flow_maps)
     assert all(binding.id.startswith("bind_") for binding in service.transformer_bindings)
 
     set_operation = next(
-        operation for operation in service.mapping_operations if operation.source.line == 118
+        operation for operation in service.mapping_operations if operation.source.line == 119
     )
     assert set_operation.operation_type == "SET"
     assert set_operation.target_endpoint is not None
+    assert set_operation.target_endpoint.raw_path == "/batchStatus;1;0"
     assert set_operation.literal is not None
     assert set_operation.literal.declared_type == "string"
     assert set_operation.literal.length == 1
@@ -617,9 +596,9 @@ def test_mapping_operations_and_transformer_bindings_are_extracted() -> None:
         for operation in service.mapping_operations
         if operation.source_endpoint and operation.source_endpoint.path.contains_index
     )
-    assert indexed_copy.source.line == 3752
+    assert indexed_copy.source.line == 651
     assert indexed_copy.source_endpoint is not None
-    assert indexed_copy.source_endpoint.raw_path.startswith("/geographicAddresses[0]")
+    assert indexed_copy.source_endpoint.raw_path.startswith("/orders[0]")
 
     assert any(operation.operation_type == "DELETE" for operation in service.mapping_operations)
 
@@ -650,19 +629,19 @@ def test_raw_xml_mapping_counts_are_independently_verified() -> None:
                 counts[element.tag] += 1
 
     assert counts == {
-        "DATA": 93,
-        "MAP": 265,
-        "MAPCOPY": 297,
-        "MAPDELETE": 178,
-        "MAPINVOKE": 40,
-        "MAPSET": 93,
-        "MAPSOURCE": 150,
-        "MAPTARGET": 150,
+        "DATA": 78,
+        "MAP": 172,
+        "MAPCOPY": 142,
+        "MAPDELETE": 173,
+        "MAPINVOKE": 18,
+        "MAPSET": 78,
+        "MAPSOURCE": 99,
+        "MAPTARGET": 99,
     }
 
 
 def test_mapping_operation_ordering_fields_are_unambiguous() -> None:
-    service = _service(OA_FULL_NAME)
+    service = _service(ORDER_BATCH)
     operations_by_id = {operation.id: operation for operation in service.mapping_operations}
     traversal_orders = [
         operation.document_traversal_order for operation in service.mapping_operations
@@ -677,12 +656,21 @@ def test_mapping_operation_ordering_fields_are_unambiguous() -> None:
         ]
         assert direct_orders == list(range(1, len(direct_orders) + 1))
 
+    # In the "Prepare batch" map, the copy into the sizeOfList transformer comes first in the
+    # file, and the map's own copy of batchId comes after it.
     earlier_nested = next(
-        operation for operation in service.mapping_operations if operation.source.line == 5343
+        operation
+        for operation in service.mapping_operations
+        if operation.target_endpoint and operation.target_endpoint.raw_path == "/fromList;2;1"
     )
     later_parent_direct = next(
-        operation for operation in service.mapping_operations if operation.source.line == 5356
+        operation
+        for operation in service.mapping_operations
+        if operation.source_endpoint
+        and operation.source_endpoint.raw_path == f"/input;4;0;{ORDER_BATCH_INPUT}/batchId;1;0"
     )
+    assert earlier_nested.source.line is not None and later_parent_direct.source.line is not None
+    assert earlier_nested.source.line < later_parent_direct.source.line
     assert earlier_nested.order > later_parent_direct.order
     assert earlier_nested.document_traversal_order < later_parent_direct.document_traversal_order
 
@@ -703,7 +691,7 @@ def test_low_dependency_target_is_retained_in_graph() -> None:
 
 
 def test_parsed_map_and_exit_constructs_do_not_emit_deferred_findings() -> None:
-    service = _service(OA_FULL_NAME)
+    service = _service(ORDER_BATCH)
     finding_codes = {finding.code for finding in service.findings}
     messages = {finding.message for finding in service.findings}
 
@@ -719,20 +707,20 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
     These sections moved behind --verbose in M9; the default page now leads with a
     deterministic summary instead of the full mapping and FLOW dumps.
     """
-    markdown = render_service_markdown(_service(OA_FULL_NAME), verbose=True)
+    markdown = render_service_markdown(_service(ORDER_BATCH), verbose=True)
 
     assert "## Document Type Usage" in markdown
     assert "## FLOW Overview" in markdown
-    assert "docCreateGeographicAddressValidationInput" in markdown
-    assert "docCreateGeographicAddressValidationOutput" in markdown
+    assert "docValidateOrderBatchInput" in markdown
+    assert "docValidateOrderBatchOutput" in markdown
     assert "## FLOW Overview" in markdown
     assert "## Mapping Overview" in markdown
     assert "## Mapping Copies" in markdown
     assert "## Mapping Sets" in markdown
     assert "## Mapping Deletes" not in markdown
     assert "## Transformer Bindings" in markdown
-    assert "Transformer input bindings | 112" in markdown
-    assert "Transformer output bindings | 56" in markdown
+    assert "Transformer input bindings | 9" in markdown
+    assert "Transformer output bindings | 8" in markdown
     assert "## Calls" in markdown
     assert "| transformer |" in markdown
     assert "## Call Occurrences" in markdown
@@ -743,11 +731,11 @@ def test_markdown_separates_calls_and_summarizes_mappings() -> None:
 
 def test_deterministic_analysis_json_markdown_and_dot() -> None:
     analysis = _analysis()
-    service = _service(OA_FULL_NAME)
+    service = _service(ORDER_BATCH)
     document = analysis.document_types[0]
 
     assert render_analysis_json(analysis) == render_analysis_json(_analysis())
-    assert render_service_markdown(service) == render_service_markdown(_service(OA_FULL_NAME))
+    assert render_service_markdown(service) == render_service_markdown(_service(ORDER_BATCH))
     assert render_dependency_dot(analysis) == render_dependency_dot(_analysis())
     assert render_document_dot(analysis) == render_document_dot(_analysis())
     assert render_document_markdown(
@@ -768,7 +756,7 @@ def test_deterministic_analysis_json_markdown_and_dot() -> None:
 def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     analysis = _analysis()
     payload = render_analysis_json(analysis)
-    markdown = render_service_markdown(_service(OA_FULL_NAME))
+    markdown = render_service_markdown(_service(ORDER_BATCH))
     dot = render_dependency_dot(analysis)
     document_dot = render_document_dot(analysis)
     document_markdown = render_document_markdown(
@@ -818,14 +806,14 @@ def test_analyze_cli_writes_expected_outputs(tmp_path) -> None:
     assert "- Java: 11" in result.output
     assert "- total: 35" in result.output
     assert "Service call occurrences:" in result.output
-    assert "- FLOW: 108" in result.output
+    assert "- FLOW: 85" in result.output
     assert "- Java static: 0" in result.output
     assert "- Java dynamic/partial: 0" in result.output
-    assert "- total promoted calls: 108" in result.output
+    assert "- total promoted calls: 85" in result.output
     assert "Unique service dependencies:" in result.output
-    assert "- FLOW-derived: 86" in result.output
+    assert "- FLOW-derived: 80" in result.output
     assert "- Java-derived: 0" in result.output
-    assert "- total: 86" in result.output
+    assert "- total: 80" in result.output
     assert "- Processes with findings: 0" in result.output
     assert "- DOT graphs generated: 2" in result.output
     assert "- SVG graphs rendered: 0" in result.output
@@ -843,13 +831,13 @@ def test_analyze_cli_writes_expected_outputs(tmp_path) -> None:
     assert sum(1 for path in output.rglob("*") if path.is_file()) == 53  # + site pages
 
 
-def test_pgp_and_oaadapter_fixture_formats_differ() -> None:
-    oa = _service(OA_FULL_NAME)
+def test_pgp_and_synthetic_fixture_formats_differ() -> None:
+    batch = _service(ORDER_BATCH)
     pgp = _service("pgp.services.encrypt:encryptString")
 
-    assert oa.metrics.flow_node_counts["LOOP"] == 2
+    assert batch.metrics.flow_node_counts["LOOP"] == 1
     assert pgp.metrics.flow_node_counts.get("LOOP", 0) == 0
-    assert len(oa.call_occurrences) > len(pgp.call_occurrences)
+    assert len(batch.call_occurrences) > len(pgp.call_occurrences)
 
 
 def test_service_markdown_filename_collisions_are_disambiguated(tmp_path) -> None:

@@ -9,13 +9,13 @@ EXAMPLE_CONFIG = load_config(Path(__file__).resolve().parents[2] / "examples" / 
 
 
 def test_default_config_has_no_project_specific_namespace_rules() -> None:
-    result = classify_service("di.sales.adapter:createOrder", "createOrder", DEFAULT_CONFIG)
+    result = classify_service("acme.sales.adapter:createOrder", "createOrder", DEFAULT_CONFIG)
 
     assert result.importance == Importance.NORMAL
 
 
 def test_classification_important_full_name_match() -> None:
-    result = classify_service("di.sales.adapter:createOrder", "createOrder", EXAMPLE_CONFIG)
+    result = classify_service("acme.sales.adapter:createOrder", "createOrder", EXAMPLE_CONFIG)
 
     assert result.importance == Importance.IMPORTANT
     assert result.importance_match is not None
@@ -39,7 +39,7 @@ def test_classification_never_important_precedence() -> None:
 
 
 def test_classification_case_insensitive_matching() -> None:
-    result = classify_service("DI.SALES.ADAPTER:createOrder", "createOrder", EXAMPLE_CONFIG)
+    result = classify_service("ACME.SALES.ADAPTER:createOrder", "createOrder", EXAMPLE_CONFIG)
 
     assert result.importance == Importance.IMPORTANT
 
