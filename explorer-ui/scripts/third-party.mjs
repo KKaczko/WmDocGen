@@ -11,10 +11,7 @@ const runtime = Object.entries(lock.packages)
   .map(([path, info]) => ({ path, name: path.slice(path.lastIndexOf("node_modules/") + 13), info }))
   .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
-const sections = [
-  "Third-party software bundled in the WmDocGen Explorer app.",
-  "",
-];
+const sections = ["Third-party software bundled in the WmDocGen Explorer app.", ""];
 for (const { path, name, info } of runtime) {
   const dir = new URL(`${path}/`, root);
   const files = await readdir(dir).catch(() => []);
@@ -22,7 +19,13 @@ for (const { path, name, info } of runtime) {
   const text = licenceFile
     ? (await readFile(new URL(licenceFile, dir), "utf8")).replace(/\r\n/g, "\n").trim()
     : "(no licence file in the package)";
-  sections.push("=".repeat(78), `${name} ${info.version} (${info.license ?? "unknown"})`, "", text, "");
+  sections.push(
+    "=".repeat(78),
+    `${name} ${info.version} (${info.license ?? "unknown"})`,
+    "",
+    text,
+    "",
+  );
 }
 await writeFile(outFile, sections.join("\n"), "utf8");
 console.log(`THIRD-PARTY.txt: ${runtime.length} package(s)`);

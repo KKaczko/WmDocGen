@@ -52,24 +52,26 @@ export function HomePage() {
         </li>
       </ul>
       <h2>Packages</h2>
-      <table className="table">
-        <thead>
-          <tr>
-            <th scope="col">Package</th>
-            <th scope="col" className="number">
-              Services
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {search.packages.map((item) => (
-            <tr key={item.id}>
-              <td>{item.name}</td>
-              <td className="number">{item.services}</td>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th scope="col">Package</th>
+              <th scope="col" className="number">
+                Services
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {search.packages.map((item) => (
+              <tr key={item.id}>
+                <td>{item.name}</td>
+                <td className="number">{item.services}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p className="muted small">
         Data contract {manifest.contract} · made by {manifest.generator.tool}{" "}
         {manifest.generator.version} from {manifest.generator.analysisSchema}

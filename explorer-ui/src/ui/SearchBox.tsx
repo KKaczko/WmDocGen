@@ -132,9 +132,7 @@ export function SearchBox() {
             ) : (
               <>
                 <span className="search-name">{hit.item.name}</span>
-                <span className="search-meta">
-                  Package · {hit.item.services} services
-                </span>
+                <span className="search-meta">Package · {hit.item.services} services</span>
               </>
             )}
           </div>

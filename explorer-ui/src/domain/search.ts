@@ -44,7 +44,14 @@ export function nameWords(name: string): string[] {
 
 function purposeWords(purpose: string | null): string[] {
   if (purpose === null) return [];
-  return [...new Set(purpose.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))];
+  return [
+    ...new Set(
+      purpose
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}]+/u)
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function scoreWord(entry: Entry, word: string): number {

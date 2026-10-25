@@ -28,10 +28,12 @@ from wm_doc.describer import (
 )
 from wm_doc.discovery import scan_path
 from wm_doc.effects import compute_service_facts
-from wm_doc.explorer.build import ExplorerInputs, ExplorerOptions, build_bundle
+from wm_doc.explorer.build import ExplorerOptions, build_bundle
+from wm_doc.explorer.contract import DescriptionsShown
 from wm_doc.explorer.ids import IdCollisionError
+from wm_doc.explorer.inputs import explorer_inputs
 from wm_doc.explorer.serve import is_loopback, make_server
-from wm_doc.explorer.synthetic import write_demo_packages
+from wm_doc.explorer.synthetic import write_demo_descriptions, write_demo_packages
 from wm_doc.explorer.write import ExplorerOutputError, check_output_location, write_explorer
 from wm_doc.external_systems import (
     EMPTY_CATALOG,
@@ -1268,6 +1270,27 @@ ExplorerOutputOption = Annotated[
 ]
 
 
+DescriptionsOption = Annotated[
+    str,
+    typer.Option(
+        "--descriptions",
+        help="Which descriptions to show: approved (reviewed ones, also when the facts "
+        "changed since), all (also unreviewed drafts) or none.",
+    ),
+]
+
+
+def _descriptions_or_exit(value: str) -> DescriptionsShown:
+    if value == "approved":
+        return "approved"
+    if value == "all":
+        return "all"
+    if value == "none":
+        return "none"
+    typer.echo("EXPLORER_INPUT_INVALID: --descriptions must be approved, all or none.", err=True)
+    raise typer.Exit(code=2)
+
+
 @explorer_app.command("build")
 def explorer_build(
     packages_path: Annotated[
@@ -1278,14 +1301,7 @@ def explorer_build(
         Path | None,
         typer.Option("--docs-dir", help="Description files to show (see --descriptions)."),
     ] = None,
-    descriptions: Annotated[
-        str,
-        typer.Option(
-            "--descriptions",
-            help="Which descriptions to show: approved (reviewed ones, also when the facts "
-            "changed since; default), all (also unreviewed drafts) or none.",
-        ),
-    ] = "approved",
+    descriptions: DescriptionsOption = "approved",
     dataset_kind: Annotated[
         str,
         typer.Option(
@@ -1306,11 +1322,7 @@ def explorer_build(
     platform_services_file: PlatformServicesOption = None,
 ) -> None:
     """Write the explorer for a packages folder: the prebuilt app plus its data files."""
-    if descriptions not in ("approved", "all", "none"):
-        typer.echo(
-            "EXPLORER_INPUT_INVALID: --descriptions must be approved, all or none.", err=True
-        )
-        raise typer.Exit(code=2)
+    shown = _descriptions_or_exit(descriptions)
     if dataset_kind not in ("private", "synthetic"):
         typer.echo("EXPLORER_INPUT_INVALID: --dataset-kind must be private or synthetic.", err=True)
         raise typer.Exit(code=2)
@@ -1324,9 +1336,7 @@ def explorer_build(
     options = ExplorerOptions(
         dataset_kind="synthetic" if dataset_kind == "synthetic" else "private",
         dataset_label=dataset_label,
-        descriptions=(
-            "all" if descriptions == "all" else "none" if descriptions == "none" else "approved"
-        ),
+        descriptions=shown,
     )
     _write_explorer_or_exit(
         output, packages_path, analysis, app_config, external_catalog, docs_dir, options
@@ -1352,6 +1362,7 @@ def explorer_demo(
             help="Keep the generated synthetic packages in this (new) folder.",
         ),
     ] = None,
+    descriptions: DescriptionsOption = "all",
 ) -> None:
     """Build the explorer from generated synthetic packages: safe to show and share."""
     if packages_dir is not None and packages_dir.exists() and any(packages_dir.iterdir()):
@@ -1359,6 +1370,7 @@ def explorer_demo(
             "EXPLORER_INPUT_INVALID: --packages-dir must be a new or empty folder.", err=True
         )
         raise typer.Exit(code=2)
+    shown = _descriptions_or_exit(descriptions)
     with tempfile.TemporaryDirectory(prefix="wm-doc-demo-") as temporary:
         root = packages_dir or Path(temporary) / "packages"
         root.mkdir(parents=True, exist_ok=True)
@@ -1368,8 +1380,13 @@ def explorer_demo(
         app_config = load_config(None)
         _use_platform_services_or_exit(None)
         analysis = _analyze(root, app_config, None, no_cache=True)
-        options = ExplorerOptions(dataset_kind="synthetic", descriptions="approved")
-        _write_explorer_or_exit(output, root, analysis, app_config, EMPTY_CATALOG, None, options)
+        docs_dir = Path(temporary) / "service-docs"
+        described = write_demo_descriptions(docs_dir, analysis, root, app_config)
+        typer.echo(f"Wrote {described} synthetic description files (every review state).")
+        options = ExplorerOptions(dataset_kind="synthetic", descriptions=shown)
+        _write_explorer_or_exit(
+            output, root, analysis, app_config, EMPTY_CATALOG, docs_dir, options
+        )
 
 
 @explorer_app.command("serve")
@@ -1428,23 +1445,7 @@ def _write_explorer_or_exit(
     options: ExplorerOptions,
 ) -> None:
     started = time.monotonic()
-    facts = compute_service_facts(analysis, external_catalog)
-    inputs = ExplorerInputs(analysis=analysis, facts=facts, external_systems=external_catalog)
-    if docs_dir is not None:
-        services = analysis.services
-        docs = load_service_docs(docs_dir, services)
-        hashes = current_facts_hashes(
-            analysis, packages_path, app_config, external_catalog, facts=facts, only=set(docs)
-        )
-        inputs = ExplorerInputs(
-            analysis=analysis,
-            facts=facts,
-            service_docs=docs,
-            service_states={name: doc.state(hashes.get(name)) for name, doc in docs.items()},
-            overview_docs=package_overview_docs(docs_dir, [p.name for p in analysis.packages]),
-            overview_states=overview_states(analysis, docs_dir, facts),
-            external_systems=external_catalog,
-        )
+    inputs = explorer_inputs(analysis, packages_path, app_config, external_catalog, docs_dir)
     try:
         bundle = build_bundle(inputs, options)
         report = write_explorer(output, bundle, packages_path)

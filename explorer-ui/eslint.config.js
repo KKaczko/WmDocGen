@@ -24,7 +24,15 @@ const noHtmlInjection = {
 };
 
 export default tseslint.config(
-  { ignores: ["node_modules", "playwright-report", "test-results", ".e2e", "src/contract/explorer-v1.ts"] },
+  {
+    ignores: [
+      "node_modules",
+      "playwright-report",
+      "test-results",
+      ".e2e",
+      "src/contract/explorer-v1.ts",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.strict,
   {

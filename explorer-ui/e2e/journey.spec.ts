@@ -48,11 +48,18 @@ test("search, open a service, follow a call and come back", async ({ page, baseU
   await expect(calls.getByRole("row", { name: /billing\.api:postInvoice/ })).toContainText(
     "Outside the analysed packages",
   );
-  await expect(page.getByText("order", { exact: true })).toBeVisible();
-  await expect(page.getByText("orders.rest.order:_post")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Signature" }).getByText("order", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Called by" }).getByText("orders.rest.order:_post"),
+  ).toBeVisible();
 
   // 4. Follow the adapter call: an opaque service, said plainly.
-  await page.getByRole("link", { name: "orders.db:insertOrder" }).click();
+  await page
+    .getByRole("region", { name: "Calls" })
+    .getByRole("link", { name: "orders.db:insertOrder" })
+    .click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("insertOrder");
   await expect(page.getByText("JDBC adapter service")).toBeVisible();
   await expect(page.getByText("Not analysed (opaque)").first()).toBeVisible();
@@ -63,9 +70,7 @@ test("search, open a service, follow a call and come back", async ({ page, baseU
 
   expect(seen.errors).toEqual([]);
   // Offline by construction: every request stays on the explorer's own origin.
-  expect(seen.requests.filter((url) => !url.startsWith(baseURL ?? "http://127.0.0.1"))).toEqual(
-    [],
-  );
+  expect(seen.requests.filter((url) => !url.startsWith(baseURL ?? "http://127.0.0.1"))).toEqual([]);
 });
 
 test("a dynamic call is shown as a boundary, not as a guessed target", async ({ page }) => {

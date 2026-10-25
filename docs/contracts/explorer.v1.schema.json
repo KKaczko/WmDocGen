@@ -1,5 +1,114 @@
 {
   "$defs": {
+    "AdapterInfo": {
+      "additionalProperties": false,
+      "description": "Allow-listed JDBC adapter configuration (see wm_doc.adapters); never credentials.",
+      "properties": {
+        "adapterType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adaptertype"
+        },
+        "connection": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connection"
+        },
+        "databaseName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Databasename"
+        },
+        "databaseProduct": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Databaseproduct"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operation"
+        },
+        "tables": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tables",
+          "type": "array"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "transactionType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transactiontype"
+        }
+      },
+      "required": [
+        "adapterType",
+        "operation",
+        "template",
+        "connection",
+        "tables",
+        "databaseProduct",
+        "databaseName",
+        "transactionType"
+      ],
+      "title": "AdapterInfo",
+      "type": "object"
+    },
     "AnalysisInfo": {
       "additionalProperties": false,
       "properties": {
@@ -164,6 +273,40 @@
       "title": "Call",
       "type": "object"
     },
+    "CodeSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "kind": {
+          "const": "code",
+          "default": "code",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        }
+      },
+      "required": [
+        "kind",
+        "code",
+        "ref"
+      ],
+      "title": "CodeSegment",
+      "type": "object"
+    },
     "Counts": {
       "additionalProperties": false,
       "properties": {
@@ -219,6 +362,133 @@
         "label"
       ],
       "title": "Dataset",
+      "type": "object"
+    },
+    "Description": {
+      "additionalProperties": false,
+      "description": "A reviewed or drafted description file: model-written, never a fact.",
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/DescriptionSection"
+          },
+          "title": "Sections",
+          "type": "array"
+        },
+        "state": {
+          "enum": [
+            "approved",
+            "stale",
+            "draft",
+            "edited"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "unverifiedNames": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unverifiednames",
+          "type": "array"
+        }
+      },
+      "required": [
+        "state",
+        "model",
+        "detail",
+        "unverifiedNames",
+        "sections"
+      ],
+      "title": "Description",
+      "type": "object"
+    },
+    "DescriptionSection": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "key": {
+          "enum": [
+            "purpose",
+            "usage",
+            "dataEffects",
+            "mainSteps",
+            "detailedFlow",
+            "errorHandling"
+          ],
+          "title": "Key",
+          "type": "string"
+        },
+        "paragraphs": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Paragraphs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "paragraphs",
+        "items"
+      ],
+      "title": "DescriptionSection",
       "type": "object"
     },
     "Disclosure": {
@@ -283,6 +553,150 @@
         "resolved"
       ],
       "title": "DocumentRef",
+      "type": "object"
+    },
+    "DocumentUse": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "resolved": {
+          "title": "Resolved",
+          "type": "boolean"
+        },
+        "role": {
+          "enum": [
+            "input",
+            "output",
+            "input-output"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "role",
+        "resolved"
+      ],
+      "title": "DocumentUse",
+      "type": "object"
+    },
+    "Effect": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "knownFrom": {
+          "title": "Knownfrom",
+          "type": "string"
+        },
+        "object": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Object",
+          "type": "array"
+        },
+        "via": {
+          "items": {
+            "$ref": "#/$defs/PathStep"
+          },
+          "title": "Via",
+          "type": "array"
+        },
+        "where": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Where",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "object",
+        "where",
+        "knownFrom",
+        "via"
+      ],
+      "title": "Effect",
+      "type": "object"
+    },
+    "EntryPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Name",
+          "type": "array"
+        },
+        "path": {
+          "items": {
+            "$ref": "#/$defs/PathStep"
+          },
+          "title": "Path",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "path"
+      ],
+      "title": "EntryPoint",
       "type": "object"
     },
     "Finding": {
@@ -410,6 +824,34 @@
         "name"
       ],
       "title": "PackageRef",
+      "type": "object"
+    },
+    "PathStep": {
+      "additionalProperties": false,
+      "description": "A service on a call chain; `id` is set when it is an analysed service.",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "id"
+      ],
+      "title": "PathStep",
       "type": "object"
     },
     "SearchIndex": {
@@ -566,6 +1008,17 @@
     "ServiceDetail": {
       "additionalProperties": false,
       "properties": {
+        "adapter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdapterInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "analysis": {
           "$ref": "#/$defs/AnalysisInfo"
         },
@@ -596,6 +1049,48 @@
           "default": "wm-doc-explorer.v1",
           "title": "Contract",
           "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Description"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "documents": {
+          "items": {
+            "$ref": "#/$defs/DocumentUse"
+          },
+          "title": "Documents",
+          "type": "array"
+        },
+        "effects": {
+          "items": {
+            "$ref": "#/$defs/Effect"
+          },
+          "title": "Effects",
+          "type": "array"
+        },
+        "effectsHidden": {
+          "default": 0,
+          "title": "Effectshidden",
+          "type": "integer"
+        },
+        "entryPoints": {
+          "items": {
+            "$ref": "#/$defs/EntryPoint"
+          },
+          "title": "Entrypoints",
+          "type": "array"
+        },
+        "entryPointsTotal": {
+          "default": 0,
+          "title": "Entrypointstotal",
+          "type": "integer"
         },
         "id": {
           "title": "Id",
@@ -647,7 +1142,14 @@
         "calls",
         "callsTotal",
         "callers",
-        "callersTotal"
+        "callersTotal",
+        "entryPoints",
+        "entryPointsTotal",
+        "effects",
+        "effectsHidden",
+        "documents",
+        "adapter",
+        "description"
       ],
       "title": "ServiceDetail",
       "type": "object"
@@ -813,6 +1315,27 @@
         "xmlPath"
       ],
       "title": "SourceRef",
+      "type": "object"
+    },
+    "TextSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "title": "TextSegment",
       "type": "object"
     }
   },

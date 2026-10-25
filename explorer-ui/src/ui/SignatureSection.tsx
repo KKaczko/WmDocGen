@@ -1,9 +1,12 @@
 import type { Signature, SignatureField } from "../contract";
+import { SectionHeading } from "./SectionHeading";
 
 export function SignatureSection({ signature }: { signature: Signature }) {
   return (
     <section className="section" aria-labelledby="signature-title">
-      <h2 id="signature-title">Signature</h2>
+      <SectionHeading id="signature-title" source="analysis">
+        Signature
+      </SectionHeading>
       {signature.origin === "specification" && signature.specification !== null ? (
         <p className="note">
           Taken from the specification <code>{signature.specification}</code>.
