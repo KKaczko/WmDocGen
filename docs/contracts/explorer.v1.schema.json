@@ -453,7 +453,11 @@
             "dataEffects",
             "mainSteps",
             "detailedFlow",
-            "errorHandling"
+            "errorHandling",
+            "capabilities",
+            "areas",
+            "entryPoints",
+            "systemsAndData"
           ],
           "title": "Key",
           "type": "string"
@@ -910,6 +914,255 @@
       "title": "Manifest",
       "type": "object"
     },
+    "PackageDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "calledFrom": {
+          "items": {
+            "$ref": "#/$defs/PackageLink"
+          },
+          "title": "Calledfrom",
+          "type": "array"
+        },
+        "callsInto": {
+          "items": {
+            "$ref": "#/$defs/PackageLink"
+          },
+          "title": "Callsinto",
+          "type": "array"
+        },
+        "contract": {
+          "const": "wm-doc-explorer.v1",
+          "default": "wm-doc-explorer.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "documentTypes": {
+          "title": "Documenttypes",
+          "type": "integer"
+        },
+        "effects": {
+          "items": {
+            "$ref": "#/$defs/PackageEffect"
+          },
+          "title": "Effects",
+          "type": "array"
+        },
+        "effectsTotal": {
+          "title": "Effectstotal",
+          "type": "integer"
+        },
+        "entryPoints": {
+          "items": {
+            "$ref": "#/$defs/PackageEntryPoint"
+          },
+          "title": "Entrypoints",
+          "type": "array"
+        },
+        "entryPointsTotal": {
+          "title": "Entrypointstotal",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "overview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Description"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "services": {
+          "items": {
+            "$ref": "#/$defs/PackageService"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "servicesTotal": {
+          "title": "Servicestotal",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract",
+        "id",
+        "name",
+        "documentTypes",
+        "services",
+        "servicesTotal",
+        "entryPoints",
+        "entryPointsTotal",
+        "effects",
+        "effectsTotal",
+        "callsInto",
+        "calledFrom",
+        "overview"
+      ],
+      "title": "PackageDetail",
+      "type": "object"
+    },
+    "PackageEffect": {
+      "additionalProperties": false,
+      "description": "Data or a system the package's own services touch (not through other packages).",
+      "properties": {
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "knownFrom": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Knownfrom",
+          "type": "array"
+        },
+        "object": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Object",
+          "type": "array"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/$defs/PathStep"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "servicesTotal": {
+          "title": "Servicestotal",
+          "type": "integer"
+        },
+        "where": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Where",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "object",
+        "where",
+        "knownFrom",
+        "services",
+        "servicesTotal"
+      ],
+      "title": "PackageEffect",
+      "type": "object"
+    },
+    "PackageEntryPoint": {
+      "additionalProperties": false,
+      "description": "A service that work reaches from outside its package, and from where.",
+      "properties": {
+        "reachedFrom": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Reachedfrom",
+          "type": "array"
+        },
+        "service": {
+          "$ref": "#/$defs/PathStep"
+        }
+      },
+      "required": [
+        "service",
+        "reachedFrom"
+      ],
+      "title": "PackageEntryPoint",
+      "type": "object"
+    },
+    "PackageLink": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "title": "Calls",
+          "type": "integer"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "id",
+        "calls"
+      ],
+      "title": "PackageLink",
+      "type": "object"
+    },
     "PackageRef": {
       "additionalProperties": false,
       "properties": {
@@ -927,6 +1180,58 @@
         "name"
       ],
       "title": "PackageRef",
+      "type": "object"
+    },
+    "PackageService": {
+      "additionalProperties": false,
+      "properties": {
+        "analysis": {
+          "enum": [
+            "full",
+            "partial",
+            "opaque"
+          ],
+          "title": "Analysis",
+          "type": "string"
+        },
+        "description": {
+          "enum": [
+            "approved",
+            "stale",
+            "draft",
+            "edited",
+            "none"
+          ],
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "flow",
+            "java",
+            "adapter",
+            "opaque"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "analysis",
+        "description"
+      ],
+      "title": "PackageService",
       "type": "object"
     },
     "PathStep": {
@@ -1106,6 +1411,42 @@
         "purpose"
       ],
       "title": "SearchService",
+      "type": "object"
+    },
+    "ServerOverview": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "wm-doc-explorer.v1",
+          "default": "wm-doc-explorer.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Description"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "skippedPackages": {
+          "items": {
+            "$ref": "#/$defs/SkippedPackage"
+          },
+          "title": "Skippedpackages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract",
+        "description",
+        "skippedPackages"
+      ],
+      "title": "ServerOverview",
       "type": "object"
     },
     "ServiceDetail": {
@@ -1391,6 +1732,25 @@
         "children"
       ],
       "title": "SignatureField",
+      "type": "object"
+    },
+    "SkippedPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "reason"
+      ],
+      "title": "SkippedPackage",
       "type": "object"
     },
     "SourceRef": {

@@ -17,7 +17,7 @@ import {
   EffectsSection,
   EntryPointsSection,
 } from "./FactsSections";
-import { ANALYSIS_LABEL, DESCRIPTION_LABEL, KIND_LABEL, servicePath } from "./labels";
+import { ANALYSIS_LABEL, DESCRIPTION_LABEL, KIND_LABEL, packagePath, servicePath } from "./labels";
 import { Provenance } from "./Provenance";
 import { SignatureSection } from "./SignatureSection";
 
@@ -96,7 +96,9 @@ function ServiceDetails({
           <CopyButton text={detail.name} label="Copy the full service name" />
         </p>
         <ul className="badges" aria-label="Service facts">
-          <li className="badge">Package {detail.package.name}</li>
+          <li className="badge">
+            Package <Link to={packagePath(detail.package.name)}>{detail.package.name}</Link>
+          </li>
           <li className={`badge kind-${detail.kind}`}>{KIND_LABEL[detail.kind]}</li>
           <li className={`badge analysis-${detail.analysis.status}`}>
             {ANALYSIS_LABEL[detail.analysis.status]}

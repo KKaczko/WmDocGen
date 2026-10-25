@@ -15,6 +15,8 @@ export type SearchHit =
 
 interface Entry {
   readonly hit: Omit<SearchHit, "score">;
+  readonly id: string;
+  /** Lower-case full name: matched against, and the tie-break order. */
   readonly name: string;
   readonly shortName: string;
   readonly words: readonly string[];
@@ -66,12 +68,28 @@ function scoreWord(entry: Entry, word: string): number {
   return 0;
 }
 
-function compareHits(a: SearchHit, b: SearchHit): number {
+interface Match {
+  readonly entry: Entry;
+  readonly score: number;
+}
+
+// A one-letter query can match every service, so this runs thousands of times per keystroke:
+// it compares precomputed lower-case names by code unit (no locale rules, same in every
+// browser) instead of calling localeCompare.
+function compareMatches(a: Match, b: Match): number {
   if (a.score !== b.score) return b.score - a.score;
-  if (a.item.name.length !== b.item.name.length) return a.item.name.length - b.item.name.length;
-  const folded = a.item.name.toLowerCase().localeCompare(b.item.name.toLowerCase(), "en");
-  if (folded !== 0) return folded;
-  return a.item.id < b.item.id ? -1 : a.item.id > b.item.id ? 1 : 0;
+  const left = a.entry.name;
+  const right = b.entry.name;
+  if (left.length !== right.length) return left.length - right.length;
+  if (left !== right) return left < right ? -1 : 1;
+  return a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0;
+}
+
+function top(matches: Match[], limit: number): SearchHit[] {
+  matches.sort(compareMatches);
+  return matches
+    .slice(0, limit)
+    .map((match) => ({ ...match.entry.hit, score: match.score }) as SearchHit);
 }
 
 export function createSearcher(index: SearchIndex): Searcher {
@@ -80,6 +98,7 @@ export function createSearcher(index: SearchIndex): Searcher {
       const shortName = item.name.slice(item.name.lastIndexOf(":") + 1);
       return {
         hit: { type: "service" as const, item },
+        id: item.id,
         name: item.name.toLowerCase(),
         shortName: shortName.toLowerCase(),
         words: nameWords(item.name),
@@ -89,6 +108,7 @@ export function createSearcher(index: SearchIndex): Searcher {
     }),
     ...index.packages.map((item) => ({
       hit: { type: "package" as const, item },
+      id: item.id,
       name: item.name.toLowerCase(),
       shortName: item.name.toLowerCase(),
       words: nameWords(item.name),
@@ -101,8 +121,8 @@ export function createSearcher(index: SearchIndex): Searcher {
     query(text, limits = {}) {
       const words = text.toLowerCase().split(/\s+/).filter(Boolean);
       if (words.length === 0) return [];
-      const services: SearchHit[] = [];
-      const packages: SearchHit[] = [];
+      const services: Match[] = [];
+      const packages: Match[] = [];
       for (const entry of entries) {
         let total = 0;
         for (const word of words) {
@@ -114,15 +134,9 @@ export function createSearcher(index: SearchIndex): Searcher {
           total += score;
         }
         if (total === 0) continue;
-        const hit = { ...entry.hit, score: total } as SearchHit;
-        (hit.type === "service" ? services : packages).push(hit);
+        (entry.hit.type === "service" ? services : packages).push({ entry, score: total });
       }
-      services.sort(compareHits);
-      packages.sort(compareHits);
-      return [
-        ...services.slice(0, limits.services ?? 20),
-        ...packages.slice(0, limits.packages ?? 6),
-      ];
+      return [...top(services, limits.services ?? 20), ...top(packages, limits.packages ?? 6)];
     },
   };
 }

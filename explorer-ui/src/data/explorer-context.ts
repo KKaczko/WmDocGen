@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-import type { Manifest, SearchIndex, SearchService } from "../contract";
+import type { Manifest, SearchIndex, SearchPackage, SearchService } from "../contract";
 import type { Searcher } from "../domain/search";
 import type { ExplorerRepository } from "./repository";
 
@@ -12,6 +12,8 @@ export interface Explorer {
   readonly searcher: Searcher;
   /** Exact service name -> its entries (more than one only for duplicate names). */
   readonly servicesByName: ReadonlyMap<string, readonly SearchService[]>;
+  /** Exact package name -> its search entry. */
+  readonly packagesByName: ReadonlyMap<string, SearchPackage>;
 }
 
 export const ExplorerContext = createContext<Explorer | null>(null);

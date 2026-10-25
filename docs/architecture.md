@@ -334,6 +334,19 @@ M12 then migrates to `analysis.v11` for the approved readers:
 - Entry points also come from legacy REST v1 handlers (`_get`, `_post`, ... at
   `/rest/<namespace as path>`).
 
+M13 (owner-approved PoC) adds the explorer and keeps `analysis.v11`:
+
+- `wm-doc explorer build|demo|serve` writes a static web app next to the data contract
+  `wm-doc-explorer.v1` (`docs/contracts/explorer.v1.schema.json`): a manifest, a search
+  index, a call graph table, a server overview, and one file per service and per package.
+  It is a projection of the analysis and existing facts; `analysis.json` is not read by the
+  app and is unchanged.
+- `wm_doc.call_targets` holds the classification of call targets shared by focused
+  publication and the explorer; `scope.json` output is byte-identical.
+- The app (`explorer-ui/`, prebuilt into `src/wm_doc/explorer/app/`) renders all text as
+  text, sends no external requests and walks only emitted edges. Decision record:
+  `docs/adr/0001-explorer.md`; guide: `docs/explorer.md`.
+
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of
 treating them as silently supported. Mapping paths preserve the raw declared webMethods path as

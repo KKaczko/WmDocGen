@@ -33,7 +33,11 @@ from wm_doc.explorer.contract import DescriptionsShown
 from wm_doc.explorer.ids import IdCollisionError
 from wm_doc.explorer.inputs import explorer_inputs
 from wm_doc.explorer.serve import is_loopback, make_server
-from wm_doc.explorer.synthetic import write_demo_descriptions, write_demo_packages
+from wm_doc.explorer.synthetic import (
+    write_demo_descriptions,
+    write_demo_overviews,
+    write_demo_packages,
+)
 from wm_doc.explorer.write import ExplorerOutputError, check_output_location, write_explorer
 from wm_doc.external_systems import (
     EMPTY_CATALOG,
@@ -1355,6 +1359,15 @@ def explorer_demo(
             help="Extra generated services on top of the small order-handling server.",
         ),
     ] = 40,
+    documents: Annotated[
+        int,
+        typer.Option(
+            "--documents",
+            min=0,
+            max=50_000,
+            help="Generated document types, used as inputs by the generated services.",
+        ),
+    ] = 0,
     packages_dir: Annotated[
         Path | None,
         typer.Option(
@@ -1375,14 +1388,19 @@ def explorer_demo(
         root = packages_dir or Path(temporary) / "packages"
         root.mkdir(parents=True, exist_ok=True)
         _check_explorer_output_or_exit(output, root)
-        count = write_demo_packages(root, services)
+        count = write_demo_packages(root, services, documents)
         typer.echo(f"Generated {count} synthetic services.")
         app_config = load_config(None)
         _use_platform_services_or_exit(None)
-        analysis = _analyze(root, app_config, None, no_cache=True)
+        # Kept packages (--packages-dir) can be analysed again later, so cache them.
+        analysis = _analyze(root, app_config, None, no_cache=packages_dir is None)
         docs_dir = Path(temporary) / "service-docs"
         described = write_demo_descriptions(docs_dir, analysis, root, app_config)
-        typer.echo(f"Wrote {described} synthetic description files (every review state).")
+        overviews = write_demo_overviews(docs_dir, analysis)
+        typer.echo(
+            f"Wrote {described} synthetic description files (every review state) and "
+            f"{overviews} overviews."
+        )
         options = ExplorerOptions(dataset_kind="synthetic", descriptions=shown)
         _write_explorer_or_exit(
             output, root, analysis, app_config, EMPTY_CATALOG, docs_dir, options

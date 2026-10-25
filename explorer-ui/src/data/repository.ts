@@ -1,4 +1,11 @@
-import type { GraphData, Manifest, SearchIndex, ServiceDetail } from "../contract";
+import type {
+  GraphData,
+  Manifest,
+  PackageDetail,
+  SearchIndex,
+  ServerOverview,
+  ServiceDetail,
+} from "../contract";
 import { CONTRACT, ID_PATTERN } from "../contract";
 
 /**
@@ -11,6 +18,9 @@ export interface ExplorerRepository {
   service(id: string): Promise<ServiceDetail>;
   /** Every call, for the graph view; loaded on first use. */
   graph(): Promise<GraphData>;
+  package(id: string): Promise<PackageDetail>;
+  /** The server overview description and the packages left out of the analysis. */
+  overview(): Promise<ServerOverview>;
 }
 
 export class NotFoundError extends Error {
@@ -53,6 +63,17 @@ export class StaticJsonRepository implements ExplorerRepository {
 
   graph(): Promise<GraphData> {
     return this.#get<GraphData>("graph.json");
+  }
+
+  overview(): Promise<ServerOverview> {
+    return this.#get<ServerOverview>("overview.json");
+  }
+
+  package(id: string): Promise<PackageDetail> {
+    if (!ID_PATTERN.test(id)) {
+      return Promise.reject(new NotFoundError("Not a package ID."));
+    }
+    return this.#get<PackageDetail>(`packages/${id}.json`);
   }
 
   service(id: string): Promise<ServiceDetail> {

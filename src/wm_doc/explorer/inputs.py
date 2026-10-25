@@ -15,7 +15,7 @@ from wm_doc.explorer.build import ExplorerInputs
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog
 from wm_doc.ir import AnalysisResult
 from wm_doc.overviews import overview_states, package_overview_docs
-from wm_doc.service_docs import load_service_docs
+from wm_doc.service_docs import load_service_docs, overview_doc_path, read_doc
 
 
 def explorer_inputs(
@@ -39,5 +39,6 @@ def explorer_inputs(
         service_states={name: doc.state(hashes.get(name)) for name, doc in docs.items()},
         overview_docs=package_overview_docs(docs_dir, [p.name for p in analysis.packages]),
         overview_states=overview_states(analysis, docs_dir, facts),
+        server_doc=read_doc(overview_doc_path(docs_dir, None)),
         external_systems=external_systems,
     )

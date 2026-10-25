@@ -25,6 +25,14 @@ export const DESCRIPTION_LABEL: Record<SearchService["description"], string> = {
   none: "No description",
 };
 
+export const OVERVIEW_LABEL: Record<SearchService["description"], string> = {
+  approved: "Approved overview",
+  stale: "Approved overview, facts changed",
+  draft: "Draft overview",
+  edited: "Edited draft overview",
+  none: "No overview",
+};
+
 export const STATUS_LABEL: Record<CallStatus, string> = {
   resolved: "In these packages",
   platform: "Built-in service",
@@ -53,6 +61,10 @@ export const RELATION_LABEL: Record<Call["relation"], string> = {
 export function servicePath(name: string, packageName?: string): string {
   const query = packageName === undefined ? "" : `?package=${encodeURIComponent(packageName)}`;
   return `/s/${encodeURIComponent(name)}${query}`;
+}
+
+export function packagePath(name: string): string {
+  return `/p/${encodeURIComponent(name)}`;
 }
 
 export function shortName(name: string): string {

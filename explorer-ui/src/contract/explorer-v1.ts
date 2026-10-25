@@ -205,7 +205,17 @@ export interface Description {
  */
 export interface DescriptionSection {
   items: (TextSegment | CodeSegment)[][];
-  key: "purpose" | "usage" | "dataEffects" | "mainSteps" | "detailedFlow" | "errorHandling";
+  key:
+    | "purpose"
+    | "usage"
+    | "dataEffects"
+    | "mainSteps"
+    | "detailedFlow"
+    | "errorHandling"
+    | "capabilities"
+    | "areas"
+    | "entryPoints"
+    | "systemsAndData";
   paragraphs: (TextSegment | CodeSegment)[][];
 }
 /**
@@ -323,4 +333,84 @@ export interface GraphTarget {
   name: string;
   note: string | null;
   status: "resolved" | "platform" | "outside" | "unresolved" | "dynamic" | "unsupported";
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "PackageDetail".
+ */
+export interface PackageDetail {
+  calledFrom: PackageLink[];
+  callsInto: PackageLink[];
+  contract: "wm-doc-explorer.v1";
+  documentTypes: number;
+  effects: PackageEffect[];
+  effectsTotal: number;
+  entryPoints: PackageEntryPoint[];
+  entryPointsTotal: number;
+  id: string;
+  name: string;
+  overview: Description | null;
+  services: PackageService[];
+  servicesTotal: number;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "PackageLink".
+ */
+export interface PackageLink {
+  calls: number;
+  id: string | null;
+  name: string;
+}
+/**
+ * Data or a system the package's own services touch (not through other packages).
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "PackageEffect".
+ */
+export interface PackageEffect {
+  action: string;
+  knownFrom: string[];
+  object: (TextSegment | CodeSegment)[];
+  services: PathStep[];
+  servicesTotal: number;
+  where: (TextSegment | CodeSegment)[];
+}
+/**
+ * A service that work reaches from outside its package, and from where.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "PackageEntryPoint".
+ */
+export interface PackageEntryPoint {
+  reachedFrom: (TextSegment | CodeSegment)[][];
+  service: PathStep;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "PackageService".
+ */
+export interface PackageService {
+  analysis: "full" | "partial" | "opaque";
+  description: "approved" | "stale" | "draft" | "edited" | "none";
+  id: string;
+  kind: "flow" | "java" | "adapter" | "opaque";
+  name: string;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "ServerOverview".
+ */
+export interface ServerOverview {
+  contract: "wm-doc-explorer.v1";
+  description: Description | null;
+  skippedPackages: SkippedPackage[];
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "SkippedPackage".
+ */
+export interface SkippedPackage {
+  name: string;
+  reason: string;
 }

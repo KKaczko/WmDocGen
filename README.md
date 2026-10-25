@@ -244,8 +244,9 @@ operation, or "Not analysed") and the error handling ("not analysed").
 
 ## Explorer (preview)
 
-A static web app to search the server and move from a service to what it calls and what
-calls it, with a bounded call graph around each service. Try it on generated demo data, then on your packages:
+A static web app to search the server, read packages and services, and move from a service
+to what it calls and what calls it, with a bounded call graph around each service. Try it
+on generated demo data (safe to show anyone), then on your packages:
 
 ```bash
 wm-doc explorer demo -o out/explorer-demo

@@ -39,6 +39,14 @@ SECTION_KEYS: dict[str, SectionKey] = {
     "Detailed flow": "detailedFlow",
     "Error handling": "errorHandling",
 }
+# Package and server overview files (`_package.md`, `_server.md`).
+OVERVIEW_SECTION_KEYS: dict[str, SectionKey] = {
+    "Purpose": "purpose",
+    "Main capabilities": "capabilities",
+    "Business areas": "areas",
+    "Entry points": "entryPoints",
+    "Systems and data": "systemsAndData",
+}
 
 
 class TextGuard:
@@ -110,7 +118,9 @@ class TextGuard:
         return found
 
 
-def narrative_blocks(narrative: str) -> list[tuple[SectionKey, list[str], list[str]]]:
+def narrative_blocks(
+    narrative: str, keys: Mapping[str, SectionKey] = SECTION_KEYS
+) -> list[tuple[SectionKey, list[str], list[str]]]:
     """The known sections of a description narrative: (key, paragraphs, list items)."""
     sections: list[tuple[SectionKey, list[str], list[str]]] = []
     key: SectionKey | None = None
@@ -125,7 +135,7 @@ def narrative_blocks(narrative: str) -> list[tuple[SectionKey, list[str], list[s
     for line in narrative.splitlines():
         if line.startswith("## "):
             flush()
-            key = SECTION_KEYS.get(line[3:].strip())
+            key = keys.get(line[3:].strip())
             lines = []
         elif key is not None:
             lines.append(line)

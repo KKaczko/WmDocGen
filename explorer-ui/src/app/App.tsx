@@ -10,6 +10,7 @@ import { createSearcher } from "../domain/search";
 import { HomePage } from "../ui/HomePage";
 import { Layout } from "../ui/Layout";
 import { NotFoundPage } from "../ui/NotFoundPage";
+import { PackagePage } from "../ui/PackagePage";
 import { ServicePage } from "../ui/ServicePage";
 
 // Hash routes work on any static server: no server-side fallback is needed.
@@ -20,6 +21,7 @@ const router = createHashRouter([
     children: [
       { index: true, element: <HomePage /> },
       { path: "s/:name", element: <ServicePage /> },
+      { path: "p/:name", element: <PackagePage /> },
       { path: "*", element: <NotFoundPage /> },
     ],
   },
@@ -33,6 +35,7 @@ async function loadExplorer(repository: ExplorerRepository): Promise<Explorer> {
     search,
     searcher: createSearcher(search),
     servicesByName: indexServicesByName(search.services),
+    packagesByName: new Map(search.packages.map((item) => [item.name, item])),
   };
 }
 
