@@ -47,22 +47,37 @@ from wm_doc.explorer.contract import (
     GraphEdge,
     GraphTarget,
     Manifest,
+    PackageDetail,
+    PackageEffect,
+    PackageEntryPoint,
+    PackageLink,
     PackageRef,
+    PackageService,
     PathStep,
     Relation,
     SearchIndex,
     SearchPackage,
     SearchService,
+    SectionKey,
+    Segment,
+    ServerOverview,
     ServiceDetail,
     ServiceKind,
     ServiceLink,
     Severity,
     Signature,
     SignatureField,
+    SkippedPackage,
     SourceRef,
+    TextSegment,
 )
 from wm_doc.explorer.ids import IdRegistry, package_id, service_id
-from wm_doc.explorer.text import TextGuard, narrative_blocks
+from wm_doc.explorer.text import (
+    OVERVIEW_SECTION_KEYS,
+    SECTION_KEYS,
+    TextGuard,
+    narrative_blocks,
+)
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
 from wm_doc.ir import (
     AdapterDetails,
@@ -80,7 +95,8 @@ from wm_doc.ir import (
     SourceReference,
 )
 from wm_doc.ir import SignatureField as IrSignatureField
-from wm_doc.service_docs import DETAIL_KEY, DocState, ServiceDoc
+from wm_doc.overviews import PackageSummary, summarize_packages
+from wm_doc.service_docs import DETAIL_KEY, SERVER_OVERVIEW, DocState, ServiceDoc
 
 MAX_LIST_ITEMS = 500
 MAX_FINDINGS = 100
@@ -88,6 +104,8 @@ MAX_EVIDENCE = 3
 MAX_SIGNATURE_FIELDS = 300
 MAX_SIGNATURE_DEPTH = 6
 MAX_UNVERIFIED_NAMES = 50
+MAX_PACKAGE_SERVICES = 5_000
+MAX_EFFECT_SERVICES = 20
 # In an effect known from a literal, a code span not preceded by "from " is the literal value
 # itself (see effects._input_values); mapped pipeline paths read "from `path`".
 _LITERAL_SPAN_RE = re.compile(r"(?<!from )`[^`]*`")
@@ -139,6 +157,7 @@ class ExplorerInputs:
     service_states: Mapping[str, DocState] = field(default_factory=dict)
     overview_docs: Mapping[str, ServiceDoc] = field(default_factory=dict)
     overview_states: Mapping[str, DocState] = field(default_factory=dict)
+    server_doc: ServiceDoc | None = None
     external_systems: ExternalSystemCatalog = EMPTY_CATALOG
 
 
@@ -148,6 +167,8 @@ class ExplorerBundle:
     search: SearchIndex
     services: dict[str, ServiceDetail]
     graph: GraphData
+    packages: dict[str, PackageDetail]
+    overview: ServerOverview
 
 
 def service_kind(service: FlowService) -> ServiceKind:
@@ -293,12 +314,30 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         )
 
     search_packages = []
+    summaries = summarize_packages(analysis, inputs.facts)
+    package_details: dict[str, PackageDetail] = {}
+    services_by_package = defaultdict(list)
+    for item in search_services:
+        services_by_package[item.package].append(item)
     for package in sorted(analysis.packages, key=lambda item: (item.name.casefold(), item.name)):
         overview_state = _STATE[
             inputs.overview_states.get(f"package:{package.name}", DocState.MISSING)
         ]
         overview_state = overview_state if overview_state in shown else "none"
         overview = inputs.overview_docs.get(package.name)
+        package_details[package_ids[package.name]] = _package_detail(
+            package.name,
+            package_ids,
+            summaries[package.name],
+            services_by_package[guard.name(package.name)],
+            [service for service in package.services],
+            inputs.facts,
+            refs,
+            guard,
+            _description(overview, overview_state, refs, guard, OVERVIEW_SECTION_KEYS)
+            if overview is not None and overview_state != "none"
+            else None,
+        )
         search_packages.append(
             SearchPackage(
                 id=package_ids[package.name],
@@ -312,6 +351,22 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
                 ),
             )
         )
+
+    server_state = _STATE[inputs.overview_states.get(SERVER_OVERVIEW, DocState.MISSING)]
+    server_state = server_state if server_state in shown else "none"
+    server = ServerOverview(
+        description=(
+            _description(inputs.server_doc, server_state, refs, guard, OVERVIEW_SECTION_KEYS)
+            if inputs.server_doc is not None and server_state != "none"
+            else None
+        ),
+        skipped_packages=[
+            SkippedPackage(name=guard.name(item.name), reason=guard.name(item.reason))
+            for item in sorted(
+                analysis.excluded_packages, key=lambda item: (item.name.casefold(), item.name)
+            )
+        ],
+    )
 
     approved = sum(1 for item in search_services if item.description == "approved")
     manifest = Manifest(
@@ -344,6 +399,8 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         search=SearchIndex(services=search_services, packages=search_packages),
         services=details,
         graph=graph.data(),
+        packages=package_details,
+        overview=server,
     )
 
 
@@ -439,24 +496,119 @@ def _adapter(
     )
 
 
+def _package_detail(
+    name: str,
+    package_ids: Mapping[str, str],
+    summary: PackageSummary,
+    entries: list[SearchService],
+    services: list[FlowService],
+    facts: Mapping[str, ServiceFacts],
+    refs: Mapping[str, str],
+    guard: TextGuard,
+    overview: Description | None,
+) -> PackageDetail:
+    """One package: its services, how work reaches it, its own data effects, its neighbours."""
+    rows: dict[tuple[str, str, str], tuple[Effect, set[str], set[str]]] = {}
+    for service in services:
+        service_name = service.identity.full_name
+        for effect in facts[service_name].effects if service_name in facts else ():
+            # Own effects only, as in the package overview facts: callees' effects belong to
+            # the callee's package, and signature documents describe one service.
+            if effect.via or not effect.propagates:
+                continue
+            shown = _effect(effect, refs, guard)
+            key = (shown.action, _plain(shown.object), _plain(shown.where))
+            row = rows.setdefault(key, (shown, set(), set()))
+            row[1].add(service_name)
+            row[2].add(shown.known_from)
+    effects = [
+        PackageEffect(
+            action=shown.action,
+            object=shown.object,
+            where=shown.where,
+            known_from=sorted(known),
+            services=_path(sorted(users, key=lambda item: (item.casefold(), item)), refs, guard)[
+                :MAX_EFFECT_SERVICES
+            ],
+            services_total=len(users),
+        )
+        for shown, users, known in sorted(
+            rows.values(),
+            key=lambda row: (-len(row[1]), row[0].action, _plain(row[0].object)),
+        )
+    ]
+    links = [
+        (summary.calls_into, "calls_into"),
+        (summary.called_from, "called_from"),
+    ]
+    neighbours = {
+        field: [
+            PackageLink(name=guard.name(other), id=package_ids.get(other), calls=count)
+            for other, count in counts
+        ]
+        for counts, field in links
+    }
+    entry_points = [
+        PackageEntryPoint(
+            service=PathStep(name=guard.name(entry.service), id=refs.get(entry.service)),
+            reached_from=[
+                guard.segments(text, refs, prose=False, limit=600) for text in entry.reached_from
+            ],
+        )
+        for entry in summary.entries
+    ]
+    return PackageDetail(
+        id=package_ids[name],
+        name=guard.name(name),
+        document_types=summary.document_count,
+        services=[
+            PackageService(
+                id=item.id,
+                name=item.name,
+                kind=item.kind,
+                analysis=item.analysis,
+                description=item.description,
+            )
+            for item in entries[:MAX_PACKAGE_SERVICES]
+        ],
+        services_total=len(entries),
+        entry_points=entry_points[:MAX_LIST_ITEMS],
+        entry_points_total=len(entry_points),
+        effects=effects[:MAX_LIST_ITEMS],
+        effects_total=len(effects),
+        calls_into=neighbours["calls_into"][:MAX_LIST_ITEMS],
+        called_from=neighbours["called_from"][:MAX_LIST_ITEMS],
+        overview=overview,
+    )
+
+
+def _plain(segments: Iterable[Segment]) -> str:
+    return "".join(
+        segment.text if isinstance(segment, TextSegment) else f"`{segment.code}`"
+        for segment in segments
+    )
+
+
 def _description(
-    doc: ServiceDoc, state: ShownState, refs: Mapping[str, str], guard: TextGuard
+    doc: ServiceDoc,
+    state: ShownState,
+    refs: Mapping[str, str],
+    guard: TextGuard,
+    keys: Mapping[str, SectionKey] = SECTION_KEYS,
 ) -> Description:
     detail = doc.extra_front_matter.get(DETAIL_KEY)
     return Description(
         state=state,
         model=guard.name(doc.model)[:120],
         detail=guard.name(detail)[:40] if isinstance(detail, str) else None,
-        unverified_names=[guard.name(name) for name in doc.unverified_names][
-            :MAX_UNVERIFIED_NAMES
-        ],
+        unverified_names=[guard.name(name) for name in doc.unverified_names][:MAX_UNVERIFIED_NAMES],
         sections=[
             DescriptionSection(
                 key=key,
                 paragraphs=[guard.segments(text, refs, prose=True) for text in paragraphs],
                 items=[guard.segments(text, refs, prose=True) for text in items],
             )
-            for key, paragraphs, items in narrative_blocks(doc.narrative)
+            for key, paragraphs, items in narrative_blocks(doc.narrative, keys)
         ],
     )
 

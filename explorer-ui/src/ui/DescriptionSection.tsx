@@ -2,16 +2,20 @@ import type { Description, DescriptionSection as Section } from "../contract";
 import { RichText } from "./RichText";
 import { SectionHeading } from "./SectionHeading";
 
-const TITLES: Record<Section["key"], string> = {
+export const TITLES: Record<Section["key"], string> = {
   purpose: "Purpose",
   usage: "Usage",
   dataEffects: "What it does to data",
   mainSteps: "Main steps",
   detailedFlow: "Detailed flow",
   errorHandling: "Error handling",
+  capabilities: "Main capabilities",
+  areas: "Business areas",
+  entryPoints: "Entry points",
+  systemsAndData: "Systems and data",
 };
 
-const WARNINGS: Partial<Record<Description["state"], string>> = {
+export const WARNINGS: Partial<Record<Description["state"], string>> = {
   stale:
     "The facts of this service changed after the description was approved. Check it against the facts below.",
   draft: "Nobody has reviewed this description yet. Check it against the facts below.",
@@ -107,7 +111,7 @@ function SectionBody({ section }: { section: Section | undefined }) {
   );
 }
 
-function Blocks({ section }: { section: Section }) {
+export function Blocks({ section }: { section: Section }) {
   return (
     <>
       {section.paragraphs.map((paragraph, index) => (

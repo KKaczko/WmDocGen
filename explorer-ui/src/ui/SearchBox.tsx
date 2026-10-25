@@ -4,7 +4,7 @@ import { useNavigate } from "react-router";
 
 import { useExplorer } from "../data/explorer-context";
 import type { SearchHit } from "../domain/search";
-import { KIND_LABEL, servicePath } from "./labels";
+import { KIND_LABEL, packagePath, servicePath } from "./labels";
 
 /** Global search: an ARIA combobox over services and packages. `/` focuses it. */
 export function SearchBox() {
@@ -39,9 +39,7 @@ export function SearchBox() {
       const duplicates = (servicesByName.get(hit.item.name) ?? []).length > 1;
       void navigate(servicePath(hit.item.name, duplicates ? hit.item.package : undefined));
     } else {
-      // Package pages arrive with the package explorer; until then, search the package.
-      setText(hit.item.name);
-      setOpen(true);
+      void navigate(packagePath(hit.item.name));
     }
   }
 

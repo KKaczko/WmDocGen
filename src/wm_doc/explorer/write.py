@@ -8,6 +8,8 @@ Layout under the output folder:
     data/search.json           search index
     data/graph.json            every call, as edges between services and other targets
     data/services/<id>.json    one file per service
+    data/packages/<id>.json    one file per package
+    data/overview.json         server overview description and skipped packages
 
 Only these names are ever removed or replaced. The output folder may not be inside the
 analysed packages folder (or contain it): analysed packages are never written to.
@@ -74,12 +76,13 @@ def render_data_files(bundle: ExplorerBundle) -> dict[str, bytes]:
     files: dict[str, bytes] = {
         "search.json": dump(bundle.search),
         "graph.json": dump(bundle.graph),
+        "overview.json": dump(bundle.overview),
     }
     for identifier, detail in bundle.services.items():
         files[f"services/{identifier}.json"] = dump(detail)
-    lines = "".join(
-        f"{path} {hashlib.sha256(files[path]).hexdigest()}\n" for path in sorted(files)
-    )
+    for identifier, package in bundle.packages.items():
+        files[f"packages/{identifier}.json"] = dump(package)
+    lines = "".join(f"{path} {hashlib.sha256(files[path]).hexdigest()}\n" for path in sorted(files))
     digest = hashlib.sha256(lines.encode("utf-8")).hexdigest()
     files["manifest.json"] = dump(bundle.manifest.model_copy(update={"digest": digest}))
     return files

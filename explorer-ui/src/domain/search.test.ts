@@ -88,6 +88,8 @@ describe("createSearcher", () => {
     });
     const started = performance.now();
     for (const text of ["handle", "area1", "invoice", "pkg12 thing", "zzz"]) big.query(text);
-    expect((performance.now() - started) / 5).toBeLessThan(50);
+    // One letter matches nearly everything: the slowest case per keystroke.
+    for (const text of ["s", "e", "pkg", "flows"]) big.query(text);
+    expect((performance.now() - started) / 9).toBeLessThan(50);
   });
 });

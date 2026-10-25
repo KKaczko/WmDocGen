@@ -238,7 +238,18 @@ class AdapterInfo(ContractModel):
 
 
 SectionKey = Literal[
-    "purpose", "usage", "dataEffects", "mainSteps", "detailedFlow", "errorHandling"
+    # service descriptions
+    "purpose",
+    "usage",
+    "dataEffects",
+    "mainSteps",
+    "detailedFlow",
+    "errorHandling",
+    # package and server overviews
+    "capabilities",
+    "areas",
+    "entryPoints",
+    "systemsAndData",
 ]
 
 
@@ -284,6 +295,69 @@ class ServiceDetail(ContractModel):
     description: Description | None = None
 
 
+# --- packages/<id>.json and overview.json ----------------------------------------------------
+
+
+class PackageService(ContractModel):
+    id: str
+    name: str
+    kind: ServiceKind
+    analysis: AnalysisLevel
+    description: DescriptionState
+
+
+class PackageEntryPoint(ContractModel):
+    """A service that work reaches from outside its package, and from where."""
+
+    service: PathStep
+    reached_from: list[list[Segment]]
+
+
+class PackageEffect(ContractModel):
+    """Data or a system the package's own services touch (not through other packages)."""
+
+    action: str
+    object: list[Segment]
+    where: list[Segment]
+    known_from: list[str]
+    services: list[PathStep]
+    services_total: int
+
+
+class PackageLink(ContractModel):
+    name: str
+    id: str | None = None
+    calls: int
+
+
+class PackageDetail(ContractModel):
+    contract: ContractVersion = CONTRACT
+    id: str
+    name: str
+    document_types: int
+    services: list[PackageService]
+    services_total: int
+    entry_points: list[PackageEntryPoint]
+    entry_points_total: int
+    effects: list[PackageEffect]
+    effects_total: int
+    # Calls between packages: how many service-to-service dependencies cross over.
+    calls_into: list[PackageLink]
+    called_from: list[PackageLink]
+    overview: Description | None = None
+
+
+class SkippedPackage(ContractModel):
+    name: str
+    reason: str
+
+
+class ServerOverview(ContractModel):
+    contract: ContractVersion = CONTRACT
+    description: Description | None = None
+    skipped_packages: list[SkippedPackage] = Field(default_factory=list)
+
+
 # --- graph.json -------------------------------------------------------------------------------
 # Every call the tool established, as one table, loaded once by the graph view. Node indexes:
 # 0..S-1 are `services` (IDs, in search.json order), S.. are `targets`. Python owns every edge;
@@ -318,6 +392,8 @@ def contract_schema() -> dict[str, Any]:
             (SearchIndex, "serialization"),
             (ServiceDetail, "serialization"),
             (GraphData, "serialization"),
+            (PackageDetail, "serialization"),
+            (ServerOverview, "serialization"),
         ],
         by_alias=True,
         title="WmDocGen explorer data contract wm-doc-explorer.v1",

@@ -22,6 +22,12 @@ callees on the right.
 - The settings live in the URL (`depth`, `dir`, `builtins`, `limit`, `view`), so Back restores
   them and a link can be shared.
 
+The home page shows the server overview (when an approved one exists), counts, how much
+was analysed and described, every package, and the packages left out of the analysis.
+A package page shows its overview, its services (filter by name or type), its entry points
+(services that work reaches from outside the package, and from where), the packages it
+calls into and is called from, and the data and systems its own services touch.
+
 ## Using it
 
 ```bash
@@ -54,6 +60,8 @@ The app reads only these files, never `analysis.json`:
 | `data/manifest.json` | contract version, generator, dataset kind and label, disclosure settings, counts, content digest |
 | `data/search.json` | every service (ID, name, package, kind, analysis level, description state, purpose line) and package |
 | `data/graph.json` | every call as `[from, to, relation, count]` between services (indexes into `services`, in `search.json` order) and other targets (built-in, outside, unresolved, dynamic); loaded on the first graph view |
+| `data/overview.json` | the server overview description and the packages left out of the analysis |
+| `data/packages/<id>.json` | one package: services, entry points, calls into and from other packages, own data effects, overview |
 | `data/services/<id>.json` | one service: identity, analysis coverage and findings, source path, signature, calls with status and evidence, callers, entry points, data effects (with how each is known), document types used, adapter configuration, description |
 
 - Models: `src/wm_doc/explorer/contract.py`. JSON Schema:
@@ -88,6 +96,33 @@ The app reads only these files, never `analysis.json`:
 - Optional fields may be added within v1; removing or renaming anything is v2. The app shows an
   error page for another contract version.
 
+## Scale
+
+Measured on synthetic packages of about 7,300 services and 9,600 document types (the size
+of the production server), after analysis:
+
+| What | Measured | Budget |
+| --- | --- | --- |
+| Export (facts, build, write) | about 12 s | 30 s |
+| Memory for the export | about 270 MB | 300 MB |
+| All data files | 27 MB | 30 MB |
+| `search.json` / `graph.json` | 1.1 MB / 0.7 MB | 2 MB each |
+| JavaScript (compressed) | 110 KB, plus 77 KB for the graph on service pages | 250 KB |
+
+In the browser at that size (`npm run e2e:scale`, Chromium, served by `wm-doc explorer serve`
+without compression):
+
+| What | Measured | Budget |
+| --- | --- | --- |
+| Data and code loaded at start | 1.5 MB | 3 MB |
+| Search usable after opening the page | about 1.1 s | 1.5 s |
+| Search per keystroke, input to painted frame (95th percentile) | about 30 ms | 100 ms |
+| Opening a service from search | about 150 ms | 300 ms |
+| Call graph of a service with 7,300 callers | under 1 s, 28 nodes | 2 s |
+
+Analysis itself is not part of these numbers: it takes minutes on a fresh run and is cached
+afterwards.
+
 ## Security
 
 - Every string is rendered as text by React; there is no HTML or Markdown rendering path, and
@@ -108,6 +143,7 @@ npm run check        # contract types, formatting, type check, lint, unit tests
 npm run build        # writes src/wm_doc/explorer/app (committed)
 npx playwright install chromium
 npm run e2e          # builds a demo with wm-doc and runs the browser tests (incl. axe)
+npm run e2e:scale    # browser budgets on ~7,300 synthetic services (first run: minutes)
 ```
 
 For live development, build demo data once (`uv run wm-doc explorer demo -o

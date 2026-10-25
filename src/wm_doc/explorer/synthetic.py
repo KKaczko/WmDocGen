@@ -29,6 +29,13 @@ from wm_doc.config import AppConfig
 from wm_doc.describer import current_facts_hashes, render_facts_block
 from wm_doc.effects import compute_service_facts
 from wm_doc.ir import AnalysisResult
+from wm_doc.overviews import (
+    OverviewNarrative,
+    facts_markdown_block,
+    package_facts_text,
+    server_facts_text,
+    summarize_packages,
+)
 from wm_doc.service_docs import (
     DETAIL_KEY,
     UNVERIFIED_KEY,
@@ -36,6 +43,8 @@ from wm_doc.service_docs import (
     Narrative,
     ServiceDoc,
     doc_path,
+    facts_hash,
+    overview_doc_path,
     text_hash,
     write_doc,
 )
@@ -49,6 +58,7 @@ FAKE_SECRETS = (
     "https://billing.synthetic.invalid/api",
 )
 FILLER_PACKAGE_SIZE = 25
+FILLER_DOCUMENTS_PER_PACKAGE = 400
 
 
 @dataclass(frozen=True)
@@ -59,14 +69,18 @@ class _Field:
     ref: str | None = None
 
 
-def write_demo_packages(root: Path, filler_services: int = 0) -> int:
-    """Write the synthetic packages under *root*; return the number of services written."""
+def write_demo_packages(root: Path, filler_services: int = 0, filler_documents: int = 0) -> int:
+    """Write the synthetic packages under *root*; return the number of services written.
+
+    `filler_services` and `filler_documents` add generated services and document types for
+    larger demos and scale tests (the services take the documents as inputs).
+    """
     writer = _Writer(root)
     _orders_api(writer)
     _orders_db(writer)
     _common_utils(writer)
     _customer_api(writer)
-    _filler(writer, filler_services)
+    _filler(writer, filler_services, filler_documents)
     return writer.services
 
 
@@ -103,9 +117,7 @@ class _Writer:
         )
         self.services += 1
 
-    def opaque(
-        self, package: str, full_name: str, svc_type: str, extra: str = ""
-    ) -> None:
+    def opaque(self, package: str, full_name: str, svc_type: str, extra: str = "") -> None:
         path = self.node_dir(package, full_name)
         (path / "node.ndf").write_text(_service_node(svc_type, (), (), extra), encoding="utf-8")
         self.services += 1
@@ -492,7 +504,23 @@ def _customer_api(writer: _Writer) -> None:
     )
 
 
-def _filler(writer: _Writer, count: int) -> None:
+def _filler(writer: _Writer, count: int, documents: int) -> None:
+    for index in range(documents):
+        package_index, position = divmod(index, FILLER_DOCUMENTS_PER_PACKAGE)
+        fields: tuple[_Field, ...] = (
+            _Field("id"),
+            _Field("name"),
+            _Field("amount"),
+            _Field("status"),
+            _Field("created"),
+        )
+        if position > 0 and position % 4 == 0:
+            previous = _document_name(package_index, position - 1)
+            fields += (_Field("parent", "recref", ref=previous),)
+            fields += (_Field("history", "recref", 1, previous),)
+        writer.document(
+            f"DemoDocs{package_index + 1:03d}", _document_name(package_index, position), fields
+        )
     for index in range(count):
         package_index, position = divmod(index, FILLER_PACKAGE_SIZE)
         package = f"Demo{package_index + 1:03d}"
@@ -504,12 +532,26 @@ def _filler(writer: _Writer, count: int) -> None:
             steps.append(_invoke("orders.api:getOrder"))
         if position % 7 == 3:
             steps.append(_invoke("pub.client:http"))
+        inputs: tuple[_Field, ...] = (_Field("requestId"),)
+        if documents:
+            document = index % documents
+            inputs += (
+                _Field(
+                    "record",
+                    "recref",
+                    ref=_document_name(*divmod(document, FILLER_DOCUMENTS_PER_PACKAGE)),
+                ),
+            )
         writer.flow(
             package,
             f"{namespace}:step{position:03d}",
             _try_catch(steps, [_invoke("common.error:handleError")]),
-            inputs=(_Field("requestId"),),
+            inputs=inputs,
         )
+
+
+def _document_name(package_index: int, position: int) -> str:
+    return f"demodocs{package_index + 1:03d}.records:Record{position:04d}"
 
 
 # --- Description files ------------------------------------------------------------------------
@@ -660,3 +702,105 @@ def write_demo_descriptions(
         )
         write_doc(doc_path(docs_dir, service.identity.package, name), doc)
     return len(names)
+
+
+# --- Overview files --------------------------------------------------------------------------
+
+_PACKAGE_OVERVIEWS: dict[str, tuple[str, OverviewNarrative]] = {
+    "OrdersApi": (
+        "approved",
+        OverviewNarrative(
+            kind="package",
+            purpose="Takes orders over REST, stores them and sends invoices to billing.",
+            items=(
+                "Order intake through `orders.rest.order:_post` and `orders.api:createOrder`.",
+                "Order lookup through `orders.rest.order:_get`.",
+                "Cancellation from the JMS queue `orders/CancelQueue`.",
+            ),
+            entry_points="REST v1 handlers and one JMS trigger.",
+            systems_and_data="The orders database through OrdersDb, and the billing service.",
+        ),
+    ),
+    "OrdersDb": (
+        "draft",
+        OverviewNarrative(
+            kind="package",
+            purpose="Holds the JDBC adapter services for the orders database.",
+            items=("Insert, select and delete on `ORDERS` and `ORDER_LINES`.",),
+            entry_points="Called by OrdersApi only.",
+            systems_and_data="An Oracle database through the connection `orders.db:conn`.",
+        ),
+    ),
+}
+
+_SERVER_OVERVIEW = OverviewNarrative(
+    kind="server",
+    purpose="A synthetic order-handling server: orders come in over REST and JMS, are stored "
+    "in an Oracle database and invoiced through an external billing service.",
+    items=(
+        "Orders: OrdersApi and OrdersDb.",
+        "Customers: CustomerApi, backed by an external CRM.",
+        "Shared logging and error handling: CommonUtils.",
+        "Generated demo flows: the Demo packages.",
+    ),
+    entry_points="REST v1 handlers, a JMS trigger, and services with no callers.",
+    systems_and_data="An Oracle orders database, a billing service and a CRM outside the packages.",
+)
+
+
+def write_demo_overviews(docs_dir: Path, analysis: AnalysisResult) -> int:
+    """Write synthetic package and server overview files; return how many."""
+    summaries = summarize_packages(analysis, compute_service_facts(analysis))
+    written = 0
+    for package, (state, narrative) in _PACKAGE_OVERVIEWS.items():
+        if package not in summaries:
+            continue
+        facts = package_facts_text(summaries[package])
+        _write_overview(
+            overview_doc_path(docs_dir, package),
+            f"package:{package}",
+            package,
+            state,
+            narrative,
+            facts,
+            "package",
+        )
+        written += 1
+    _write_overview(
+        overview_doc_path(docs_dir, None),
+        "server",
+        "",
+        "approved",
+        _SERVER_OVERVIEW,
+        server_facts_text(summaries),
+        "server",
+    )
+    return written + 1
+
+
+def _write_overview(
+    path: Path,
+    service: str,
+    package: str,
+    state: str,
+    narrative: OverviewNarrative,
+    facts: str,
+    kind: str,
+) -> None:
+    markdown = narrative.markdown()
+    current = facts_hash(facts)
+    write_doc(
+        path,
+        ServiceDoc(
+            service=service,
+            package=package,
+            status=DocStatus.APPROVED if state == "approved" else DocStatus.DRAFT,
+            model="synthetic-demo-model",
+            facts_hash=current,
+            text_hash=text_hash(markdown),
+            narrative=markdown,
+            notes=NOTES_MARKER,
+            facts_markdown=facts_markdown_block(kind, facts),
+            current_facts_hash=current,
+        ),
+    )
