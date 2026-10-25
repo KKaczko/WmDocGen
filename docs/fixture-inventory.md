@@ -1,11 +1,11 @@
 # Fixture Inventory Notes
 
-Primary fixture:
+Primary fixture (synthetic, see `docs/fixture-provenance.md`):
 
-- `samples/Synthetic/SampleOrders/ns/oa/adapter/orders/validateOrderBatch`
+- `samples/Synthetic/SampleOrders/ns/sample/orders/intake/validateOrderBatch`
 - Contains `node.ndf + flow.xml`
 - `node.ndf` declares `svc_type=flow`
-- Treated as the primary webMethods Integration Server 10.15 evidence for future milestones
+- Hand-written in the IS 10.15 file format with invented names
 
 Compatibility fixture:
 
@@ -34,22 +34,22 @@ wm-doc analyze samples --output out\site --docs-dir out\service-docs
 
 Current analysis observations:
 
-- SampleOrders primary service:
-  `sample.orders.intake:validateOrderBatch`
-- SampleOrders remains a normal FLOW service fixture: its `node.ndf` declares `svc_type=flow`.
-- SampleOrders signature contains one `input` document reference and one `output` document reference.
-- SampleOrders observed FLOW tags include `FLOW`, `SEQUENCE`, `BRANCH`, `LOOP`, `INVOKE`, `MAPINVOKE`,
-  `MAP`, `MAPCOPY`, `MAPSET`, `MAPDELETE`, `MAPSOURCE`, `MAPTARGET`, `DATA`, and `EXIT`.
-- SampleOrders static invoke-like steps extracted: 43.
-- SampleOrders static invoke targets are unresolved in the local sample snapshot because corresponding
-  package metadata for adapter, `pub.*`, and related targets is not present.
+- SampleOrders primary service: `sample.orders.intake:validateOrderBatch`
+- SampleOrders is a normal FLOW service fixture: its `node.ndf` declares `svc_type=flow`.
+- SampleOrders signature contains one `input` document reference and one `output` document
+  reference.
+- SampleOrders FLOW tags include `FLOW`, `SEQUENCE`, `BRANCH`, `LOOP`, `INVOKE`, `MAPINVOKE`,
+  `MAP`, `MAPCOPY`, `MAPSET`, `MAPDELETE`, `MAPSOURCE`, `MAPTARGET`, `DATA`, `COMMENT` and `EXIT`.
+- SampleOrders static invoke-like steps extracted: 20 (12 `INVOKE`, 8 `MAPINVOKE`).
+- SampleOrders invoke targets are unresolved because the platform (`pub.*`) and `sample.*`
+  services it calls are not in the analysed packages.
 - PGP active FLOW Services parsed by the same parser: 23.
 - PGP active FLOW Services include static `INVOKE` and `MAPINVOKE` calls, but the observed sample set
   does not include `LOOP` or `EXIT`.
 - PGP includes 11 Java Services. M4a analyzes them from generated source and `java.frag` without
   executing, compiling, or loading Java code.
-- PGP includes 7 active Document Type artifacts. SampleOrders includes service signature references to
-  two OA document types, but those document artifacts are not present in the local snapshot.
+- PGP includes 7 active Document Type artifacts. SampleOrders includes service signature
+  references to two document types that are deliberately not part of the fixture.
 - Current samples contain no real opaque/non-FLOW/non-Java service fixture. M5-lite production
   behavior for opaque services is therefore validated with synthetic common-`node.ndf` tests only.
   Detailed JDBC Adapter Service, SQL, connection-alias, UM/JMS, trigger, scheduler, and native
@@ -68,20 +68,20 @@ Current analysis observations:
 
 M2b observed active mapping tag counts:
 
-- SampleOrders: 135 `MAP`, 190 `MAPCOPY`, 21 `MAPSET`, 8 `MAPDELETE`, 60 `MAPSOURCE`,
-  60 `MAPTARGET`, 21 `DATA`, and 30 `MAPINVOKE`.
+- SampleOrders: 42 `MAP`, 35 `MAPCOPY`, 6 `MAPSET`, 3 `MAPDELETE`, 9 `MAPSOURCE`,
+  9 `MAPTARGET`, 6 `DATA`, and 8 `MAPINVOKE`.
 - PGP: 130 `MAP`, 107 `MAPCOPY`, 72 `MAPSET`, 170 `MAPDELETE`, 90 `MAPSOURCE`,
   90 `MAPTARGET`, 72 `DATA`, and 10 `MAPINVOKE`.
 
 M2b canonical mapping counts:
 
-- Total flow maps: 265.
-- Total mapping operations: 568, split into 297 `COPY`, 93 `SET`, and 178 `DELETE`.
-- Total MAPINVOKE transformer bindings: 198, split into 132 `INTO_TRANSFORMER` and
-  66 `FROM_TRANSFORMER`.
-- SampleOrders canonical mapping operations: 219, split into 190 `COPY`, 21 `SET`, and 8 `DELETE`.
-- SampleOrders transformer bindings: 168, split into 112 `INTO_TRANSFORMER` and
-  56 `FROM_TRANSFORMER`.
+- Total flow maps: 172.
+- Total mapping operations: 393, split into 142 `COPY`, 78 `SET`, and 173 `DELETE`.
+- Total MAPINVOKE transformer bindings: 47, split into 29 `INTO_TRANSFORMER` and
+  18 `FROM_TRANSFORMER`.
+- SampleOrders canonical mapping operations: 44, split into 35 `COPY`, 6 `SET`, and 3 `DELETE`.
+- SampleOrders transformer bindings: 17, split into 9 `INTO_TRANSFORMER` and
+  8 `FROM_TRANSFORMER`.
 
 Observed mapping relationships:
 
@@ -146,7 +146,7 @@ M7 process catalog and graph-publishing counts for default fixture analysis:
 - Process unresolved calls: 0.
 - Process document relationships: 0.
 - Technical entrypoint candidates: 15.
-- A real fixture-side process catalog used by tests can declare SampleOrders and PGP registry
+- A fixture-side process catalog used by tests can declare SampleOrders and PGP registry
   processes without modifying files under `samples/`.
 - Output inventory expectations:
   - M5-lite baseline: 45 generated files.
@@ -171,8 +171,8 @@ M7 process catalog and graph-publishing counts for default fixture analysis:
 - M8a focused process scope is validated with temporary process catalogs outside `samples/`.
   Process-scoped output writes only the selected process catalog/page and selected process DOT
   graph; global `graphs/dependencies.dot` and `graphs/documents.dot` are omitted in scoped mode.
-- SampleOrders process document references remain visible as unresolved technical identifiers in
-  process Markdown and do not create placeholder document pages.
+- SampleOrders process document references remain visible as unresolved technical identifiers
+  in process Markdown and do not create placeholder document pages.
 - M7 cleanup tests intentionally create stale generated-output shape conflicts and symlinks outside
   `samples/`; they validate publishing hygiene and do not alter fixture package evidence.
 
@@ -195,8 +195,8 @@ Service signature document references:
   `pgp.documents:PubKeyRegEntry`.
 - `pgp.services.registry:getSecKey` output `keyRegEntry` resolves to
   `pgp.documents:SecKeyRegEntry`.
-- SampleOrders input and output document references remain unresolved because the referenced Document
-  Types are not part of the fixture snapshot.
+- SampleOrders input and output document references remain unresolved because the referenced
+  Document Types are not part of the fixture.
 
 Specification artifacts:
 

@@ -21,7 +21,8 @@ Verification output:
 
 - Generated `out/m0-inventory/inventory.json`
 - Generated `out/m0-inventory/fixture-inventory.md`
-- Detected packages: `SampleOrders`, `PGP`
+- Detected packages: the original primary fixture package (since replaced by the synthetic
+  `SampleOrders`) and `PGP`
 - Detected active artifact counts: 24 FLOW Services, 11 Java Services, 8 Specifications,
   7 Document Types, 14 namespace folders, 1 manifest
 - Detected helper backup files: 23
@@ -57,7 +58,7 @@ Implemented in this milestone:
 - Unresolved dependency reporting for external, runtime, adapter, and `pub.*` targets
 - Configurable case-insensitive glob classification with `neverImportant` precedence
 - Deterministic outputs: `analysis.json`, per-service Markdown, and Graphviz DOT
-- Tests for SampleOrders, PGP compatibility, malformed XML, missing `flow.xml`, unknown FLOW elements,
+- Tests for the primary fixture, PGP compatibility, malformed XML, missing `flow.xml`, unknown FLOW elements,
   unresolved invocations, deterministic rendering, classification, and XML security
 
 Verification output:
@@ -69,8 +70,8 @@ Verification output:
 - Static dependency edges: 108
 - Resolved edges: 49
 - Unresolved edges: 59
-- Primary SampleOrders service static invocations: 43
-- Primary SampleOrders service unresolved invocations: 43
+- Original primary fixture service static invocations: 43
+- Original primary fixture service unresolved invocations: 43
 - PGP FLOW Services parsed by the same parser: 23
 
 Not implemented in M1:
@@ -120,9 +121,9 @@ Verification baseline:
 - Unresolved call occurrences: 59
 - Resolved unique dependencies: 45
 - Unresolved unique dependencies: 41
-- Primary SampleOrders call occurrences: 43
-- Primary SampleOrders unique dependencies: 25
-- Primary SampleOrders FLOW node counts: 32 `SEQUENCE`, 27 `BRANCH`, 2 `LOOP`, 9 `EXIT`,
+- Original primary fixture call occurrences: 43
+- Original primary fixture unique dependencies: 25
+- Original primary fixture FLOW node counts: 32 `SEQUENCE`, 27 `BRANCH`, 2 `LOOP`, 9 `EXIT`,
   135 `MAP`, 13 `INVOKE`, and 30 `MAPINVOKE`
 
 Not implemented in M2a:
@@ -184,9 +185,9 @@ Verification baseline:
 - Transformer bindings: 198
 - `INTO_TRANSFORMER` bindings: 132
 - `FROM_TRANSFORMER` bindings: 66
-- Primary SampleOrders maps: 135
-- Primary SampleOrders mapping operations: 219
-- Primary SampleOrders transformer bindings: 168
+- Original primary fixture maps: 135
+- Original primary fixture mapping operations: 219
+- Original primary fixture transformer bindings: 168
 
 Not implemented in M2b:
 
@@ -305,7 +306,7 @@ Observed local document-to-document dependencies:
 Observed service-document dependencies:
 
 - Five PGP service signature references resolve to local PGP Document Types.
-- Two SampleOrders service signature references remain unresolved because the corresponding Document
+- Two primary fixture service signature references remain unresolved because the corresponding Document
   Type artifacts are not present in the analyzed snapshot.
 
 Not implemented in M3:

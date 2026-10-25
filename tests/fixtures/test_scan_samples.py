@@ -10,7 +10,7 @@ from wm_doc.render.json import render_inventory_json
 def test_scan_samples_discovers_expected_artifact_counts() -> None:
     inventory = scan_path(_repo_root() / "samples")
 
-    assert [package.name for package in inventory.packages] == ["SampleOrders", "PGP"]
+    assert [package.name for package in inventory.packages] == ["PGP", "SampleOrders"]
 
     artifacts = [artifact for package in inventory.packages for artifact in package.artifacts]
     counts = Counter(artifact.probable_type for artifact in artifacts)

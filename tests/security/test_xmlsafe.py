@@ -153,9 +153,9 @@ def test_parse_xml_file_accepts_normal_webmethods_xml() -> None:
         / "Synthetic"
         / "SampleOrders"
         / "ns"
-        / "oa"
-        / "adapter"
+        / "sample"
         / "orders"
+        / "intake"
         / "validateOrderBatch"
         / "node.ndf"
     )
