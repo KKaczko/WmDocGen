@@ -9,6 +9,7 @@ adapter services) and 9,600 document types.
 Current milestone: M12 (approved by the repository owner). The earlier business-context /
 business-enrichment path (`build-business-context`, `enrich-business`, `ollama-test`,
 `business-context.v*`, `business-result.v*`) was removed in M12; do not reintroduce it.
+M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
 
 ## Pipeline and modules
 
@@ -51,6 +52,10 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
   written only when `--render-graphs` asks for images.
 - Providers (`ollama_provider.py`, `openai_compatible_provider.py`, `provider_probe.py`).
 - Rendering (`render/`), `stats.py`, `shapes.py`, `scope_analysis.py` (focused publication).
+  `call_targets.py` classifies how a call ends (resolved, platform, outside, unresolved,
+  dynamic, unsupported) for scope boundaries and the explorer; `output_cleanup.py` removes
+  managed output paths for `analyze` and `explorer build`.
+- Explorer (`explorer/`, app source in `explorer-ui/`): see "Explorer".
 
 ## Contracts
 
@@ -104,6 +109,26 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
 - Legacy REST handlers: services named `_get`, `_post`, `_put`, `_patch`, `_delete` or
   `_default` are IS REST v1 endpoints at `/rest/<namespace as path>`.
 
+## Explorer (owner approval, M13 PoC)
+
+- `wm-doc explorer build|demo|serve`. `wm_doc.explorer` projects the in-memory analysis and
+  existing facts into the `wm-doc-explorer.v1` contract (`explorer/contract.py`, schema in
+  `docs/contracts/explorer.v1.schema.json`); the app never reads `analysis.json`. Core modules
+  never import `wm_doc.explorer` (tested).
+- Python owns all resolution and classification; the app only displays and walks emitted
+  facts. All text is rendered as text (no HTML or Markdown rendering, no
+  `dangerouslySetInnerHTML`); a strict CSP; no external requests. Literal values, designer
+  comments, Notes, SQL and connection properties are never exported; free text passes the
+  disclosure scan or is withheld and counted.
+- The output folder must not overlap the packages folder. Files are named by hashed IDs.
+- `explorer-ui/` (React, TypeScript, Vite; exact dependency versions, `npm ci
+  --ignore-scripts`) is a developer-only toolchain. Its build output
+  `src/wm_doc/explorer/app/` is committed and must be rebuilt with every app change; the
+  build is reproducible. Demos use `explorer demo` (synthetic packages) only.
+- PoC plan: PR 1 search and service pages; PR 2 descriptions, effects and trust labels;
+  PR 3 bounded dependency graph (React Flow, caps on depth, nodes and neighbours per node);
+  PR 4 package explorer and scale checks.
+
 ## Out of scope without explicit owner approval
 
 Semantic parsers for REST/SOAP descriptor details beyond service references, other adapter
@@ -111,7 +136,8 @@ types' configuration, native BPM process models, runtime simulation, Java execut
 compilation or class loading, broad Java external-effect classification, non-Ollama or cloud model
 providers, RAG or arbitrary external documents, a prompt editing UI (beyond the approved
 `--instructions` file), fine-tuning, snapshot diffing,
-Mermaid, JavaScript graph viewers, static-site frameworks, ZIP publishing.
+Mermaid, JavaScript graph viewers or static-site frameworks other than the explorer, ZIP
+publishing, a backend or database for the explorer.
 
 ## Important constraints
 
