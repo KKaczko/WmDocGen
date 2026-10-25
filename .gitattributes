@@ -1,0 +1,6 @@
+# Generated files: rebuilt by tools, reviewed by their source.
+src/wm_doc/explorer/app/** linguist-generated=true -diff
+explorer-ui/src/contract/explorer-v1.ts linguist-generated=true
+docs/contracts/*.schema.json linguist-generated=true
+explorer-ui/package-lock.json linguist-generated=true -diff
+explorer-ui/src/domain/graph-fixture.json linguist-generated=true

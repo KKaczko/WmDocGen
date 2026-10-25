@@ -32,6 +32,8 @@ packages = ["src/wm_doc"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["slow: long scale checks; run with `uv run pytest -m slow`"]
+addopts = "-m 'not slow'"
 
 [tool.ruff]
 line-length = 100
