@@ -843,22 +843,19 @@ def test_generated_markdown_links_are_valid_for_fixture_catalog_modes(tmp_path) 
         assert len(list((output / "processes").glob("*.md"))) == 3
         assert len(list((output / "graphs" / "processes").glob("*.dot"))) == 2
         _assert_generated_markdown_links_valid(output)
-        order_page = (
-            output / "processes" / "order batch-validation.md"
+        batch_page = (
+            output / "processes" / "order-batch-validation.md"
         ).read_text(encoding="utf-8")
         assert (
-            "`sample.orders.doc.intake:"
-            "docValidateOrderBatchInput` | `UNRESOLVED`"
-        ) in order_page
+            "`sample.orders.doc.intake:docValidateOrderBatchInput` | `UNRESOLVED`"
+        ) in batch_page
         assert (
-            "../documents/sample.orders.doc."
-            "orderBatch_docValidateOrderBatchInput.md"
-            not in order_page
+            "../documents/sample.orders.doc.intake_docValidateOrderBatchInput.md"
+            not in batch_page
         )
         assert (
-            "../documents/sample.orders.doc."
-            "orderBatch_docValidateOrderBatchOutput.md"
-            not in order_page
+            "../documents/sample.orders.doc.intake_docValidateOrderBatchOutput.md"
+            not in batch_page
         )
 
 
@@ -900,15 +897,15 @@ def test_graph_render_modes_publish_expected_files_and_links(tmp_path, monkeypat
         assert ("[SVG](dependencies.svg)" in graph_index) is (expected_svg > 0)
         assert ("[PNG](dependencies.png)" in graph_index) is (expected_png > 0)
         process_page = (
-            output / "processes" / "order batch-validation.md"
+            output / "processes" / "order-batch-validation.md"
         ).read_text(encoding="utf-8")
-        assert "../graphs/processes/order batch-validation.dot" in process_page
+        assert "../graphs/processes/order-batch-validation.dot" in process_page
         assert (
-            "![Process call graph](../graphs/processes/order batch-validation.svg)"
+            "![Process call graph](../graphs/processes/order-batch-validation.svg)"
             in process_page
         ) is (expected_svg > 0)
         assert (
-            "![Process call graph](../graphs/processes/order batch-validation.png)"
+            "![Process call graph](../graphs/processes/order-batch-validation.png)"
             in process_page
         ) is (expected_svg == 0 and expected_png > 0)
         _assert_generated_markdown_links_valid(output)
@@ -967,8 +964,8 @@ def test_graph_rendered_outputs_are_cleaned_when_later_disabled(
     one_process_file.write_text(
         """version: 1
 processes:
-  - id: order batch-validation
-    name: order batch validation
+  - id: order-batch-validation
+    name: Order batch validation
     entrypoints:
       - sample.orders.intake:validateOrderBatch
 """,
@@ -985,7 +982,7 @@ processes:
     assert not list(output.rglob("*.png"))
     assert not (output / "processes" / "pgp-key-lookup.md").exists()
     assert not (output / "graphs" / "processes" / "pgp-key-lookup.dot").exists()
-    assert (output / "graphs" / "processes" / "order batch-validation.dot").exists()
+    assert (output / "graphs" / "processes" / "order-batch-validation.dot").exists()
     _assert_generated_markdown_links_valid(output)
 
 
@@ -1055,7 +1052,7 @@ def test_generated_output_cleanup_replaces_managed_path_shape_conflicts(
     assert unrelated.read_text(encoding="utf-8") == "keep me"
     assert (output / "graphs" / "processes").is_dir()
     assert (
-        output / "graphs" / "processes" / "order batch-validation.dot"
+        output / "graphs" / "processes" / "order-batch-validation.dot"
     ).is_file()
     assert not list(output.rglob("*.tmp"))
     _assert_generated_markdown_links_valid(output)
@@ -2195,9 +2192,9 @@ def _write_fixture_process_catalog(path: Path) -> None:
     path.write_text(
         """version: 1
 processes:
-  - id: order batch-validation
-    name: order batch validation
-    description: Validates and prepares order batch information.
+  - id: order-batch-validation
+    name: Order batch validation
+    description: Validates a batch of incoming orders.
     entrypoints:
       - sample.orders.intake:validateOrderBatch
   - id: pgp-key-lookup

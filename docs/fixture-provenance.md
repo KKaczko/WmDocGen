@@ -2,21 +2,21 @@
 
 ## Synthetic / SampleOrders
 
-`samples/Synthetic/SampleOrders` is a sanitized private fixture. The prompt identifies it as
-originating from Software AG / IBM webMethods Integration Server 10.15.
+`samples/Synthetic/SampleOrders` is a hand-written synthetic fixture. Every package, namespace,
+service, document, field and literal name in it is invented.
 
-Known provenance:
-
-- Only the files included in this repository snapshot are available.
-- The fixture has been represented to this project as sanitized.
-- It is not a complete-package coverage claim.
-- It is the primary source of truth for observed webMethods IS 10.15 behavior in this project.
-
-Unknown or not claimed:
-
-- Original repository, author, commit, and license are not available.
-- Runtime Integration Server configuration is not available.
-- No claim is made that this fixture represents all 10.15 package formats.
+- It contains one FLOW service, `sample.orders.intake:validateOrderBatch` (`node.ndf` and
+  `flow.xml`), written in the IS 10.15 file format.
+- It uses the FLOW constructs observed in real 10.15 services: TRY/CATCH sequences, SWITCH and
+  label-expression branches with `$default` cases, a `LOOP` over an array, `EXIT` from labelled
+  steps, `INVOKE` input/output maps with `MAPSOURCE`/`MAPTARGET` schemas, transformers
+  (`MAPINVOKE`), `MAPSET` literals, a `MAPCOPY` with an indexed source, `MAPDELETE`, step
+  comments, transactions, a publish with a literal document type, and calls to services that are
+  not in the analysed packages.
+- Its signature refers to two document types that are deliberately not in the fixture, so they
+  stay unresolved.
+- It replaced an earlier primary fixture that could not be redistributed. It is not a
+  complete-package coverage claim.
 
 M5-lite fixture note:
 

@@ -14,7 +14,7 @@ from wm_doc.render.service_markdown import render_service_markdown
 from wm_doc.render.service_summary import error_handling_mechanisms, render_service_summary
 
 SAMPLES = Path(__file__).resolve().parents[2] / "samples"
-OA = "sample.orders.intake:validateOrderBatch"
+ORDER_BATCH = "sample.orders.intake:validateOrderBatch"
 
 
 @pytest.fixture(scope="module")
@@ -75,7 +75,7 @@ def _find(node: FlowNode | None, node_type: FlowNodeType) -> FlowNode | None:
 
 
 def test_default_page_lists_transformer_calls(samples: dict[str, FlowService]) -> None:
-    page = render_service_markdown(samples[OA])
+    page = render_service_markdown(samples[ORDER_BATCH])
 
     assert "## Calls" in page
     assert "## Normal Service Dependencies" not in page
@@ -88,19 +88,19 @@ def test_default_page_lists_transformer_calls(samples: dict[str, FlowService]) -
 def test_summary_ranks_effects_and_counts_external_calls(
     samples: dict[str, FlowService],
 ) -> None:
-    summary = render_service_summary(samples[OA])
+    summary = render_service_summary(samples[ORDER_BATCH])
 
     first_sentence = summary.split(". ", 1)[0]
     assert first_sentence.startswith("Starts a transaction, commits a transaction")
     # Before ranking, list/string helpers crowded the publish out of the first four labels.
     assert "publishes a message" in first_sentence
     assert "measures a list" not in first_sentence
-    assert "Calls 15 services outside the analysed packages and 10 platform services." in summary
+    assert "Calls 9 services outside the analysed packages and 10 platform services." in summary
     assert "local service" not in summary
 
 
 def test_summary_recognises_flow_error_handling(samples: dict[str, FlowService]) -> None:
-    assert error_handling_mechanisms(samples[OA]) == [
+    assert error_handling_mechanisms(samples[ORDER_BATCH]) == [
         "TRY/CATCH blocks",
         "a try/catch sequence (exit on first success)",
         "`pub.flow:getLastError`",
