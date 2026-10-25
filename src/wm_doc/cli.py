@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Annotated
@@ -28,6 +28,17 @@ from wm_doc.describer import (
 )
 from wm_doc.discovery import scan_path
 from wm_doc.effects import compute_service_facts
+from wm_doc.explorer.build import ExplorerOptions, build_bundle
+from wm_doc.explorer.contract import DescriptionsShown
+from wm_doc.explorer.ids import IdCollisionError
+from wm_doc.explorer.inputs import explorer_inputs
+from wm_doc.explorer.serve import is_loopback, make_server
+from wm_doc.explorer.synthetic import (
+    write_demo_descriptions,
+    write_demo_overviews,
+    write_demo_packages,
+)
+from wm_doc.explorer.write import ExplorerOutputError, check_output_location, write_explorer
 from wm_doc.external_systems import (
     EMPTY_CATALOG,
     ExternalSystemCatalog,
@@ -41,7 +52,6 @@ from wm_doc.graph_publish import (
     GraphRenderMode,
     GraphRenderResult,
     GraphvizRunner,
-    _safe_diagnostic,
     build_graph_assets,
     graph_render_failures,
     render_graphs,
@@ -60,6 +70,8 @@ from wm_doc.openai_compatible_provider import (
     OpenAICompatibleProvider,
     resolve_api_key,
 )
+from wm_doc.output_cleanup import OutputCleanupError
+from wm_doc.output_cleanup import remove_managed_path as _remove_managed_path
 from wm_doc.overviews import (
     describe_overviews,
     overview_states,
@@ -1246,6 +1258,235 @@ def export_comments(
     typer.echo(f"Exported comments for {sum(written.values())} service(s).")
 
 
+explorer_app = typer.Typer(
+    help="Build and serve the interactive explorer: a static web app over the analysis.",
+    no_args_is_help=True,
+)
+app.add_typer(explorer_app, name="explorer")
+
+ExplorerOutputOption = Annotated[
+    Path,
+    typer.Option(
+        "--output",
+        "-o",
+        help="Folder for the explorer (app and data). Must be outside the packages folder.",
+    ),
+]
+
+
+DescriptionsOption = Annotated[
+    str,
+    typer.Option(
+        "--descriptions",
+        help="Which descriptions to show: approved (reviewed ones, also when the facts "
+        "changed since), all (also unreviewed drafts) or none.",
+    ),
+]
+
+
+def _descriptions_or_exit(value: str) -> DescriptionsShown:
+    if value == "approved":
+        return "approved"
+    if value == "all":
+        return "all"
+    if value == "none":
+        return "none"
+    typer.echo("EXPLORER_INPUT_INVALID: --descriptions must be approved, all or none.", err=True)
+    raise typer.Exit(code=2)
+
+
+@explorer_app.command("build")
+def explorer_build(
+    packages_path: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    output: ExplorerOutputOption,
+    docs_dir: Annotated[
+        Path | None,
+        typer.Option("--docs-dir", help="Description files to show (see --descriptions)."),
+    ] = None,
+    descriptions: DescriptionsOption = "approved",
+    dataset_kind: Annotated[
+        str,
+        typer.Option(
+            "--dataset-kind",
+            help="private (default; the app warns not to share it) or synthetic (demo data).",
+        ),
+    ] = "private",
+    dataset_label: Annotated[
+        str | None, typer.Option("--dataset-label", help="Short label shown in the app.")
+    ] = None,
+    config: ConfigOption = None,
+    processes_file: ProcessesFileOption = None,
+    include_package: IncludePackageOption = None,
+    exclude_package: ExcludePackageOption = None,
+    all_packages: AllPackagesOption = False,
+    no_analysis_cache: NoAnalysisCacheOption = False,
+    external_systems_file: ExternalSystemsOption = None,
+    platform_services_file: PlatformServicesOption = None,
+) -> None:
+    """Write the explorer for a packages folder: the prebuilt app plus its data files."""
+    shown = _descriptions_or_exit(descriptions)
+    if dataset_kind not in ("private", "synthetic"):
+        typer.echo("EXPLORER_INPUT_INVALID: --dataset-kind must be private or synthetic.", err=True)
+        raise typer.Exit(code=2)
+    _check_explorer_output_or_exit(output, packages_path)
+    app_config = _with_package_selection(
+        load_config(config), include_package, exclude_package, all_packages
+    )
+    external_catalog = _load_external_systems_or_exit(external_systems_file)
+    _use_platform_services_or_exit(platform_services_file)
+    analysis = _analyze(packages_path, app_config, processes_file, no_cache=no_analysis_cache)
+    options = ExplorerOptions(
+        dataset_kind="synthetic" if dataset_kind == "synthetic" else "private",
+        dataset_label=dataset_label,
+        descriptions=shown,
+    )
+    _write_explorer_or_exit(
+        output, packages_path, analysis, app_config, external_catalog, docs_dir, options
+    )
+
+
+@explorer_app.command("demo")
+def explorer_demo(
+    output: ExplorerOutputOption,
+    services: Annotated[
+        int,
+        typer.Option(
+            "--services",
+            min=0,
+            max=20_000,
+            help="Extra generated services on top of the small order-handling server.",
+        ),
+    ] = 40,
+    documents: Annotated[
+        int,
+        typer.Option(
+            "--documents",
+            min=0,
+            max=50_000,
+            help="Generated document types, used as inputs by the generated services.",
+        ),
+    ] = 0,
+    packages_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--packages-dir",
+            help="Keep the generated synthetic packages in this (new) folder.",
+        ),
+    ] = None,
+    descriptions: DescriptionsOption = "all",
+) -> None:
+    """Build the explorer from generated synthetic packages: safe to show and share."""
+    if packages_dir is not None and packages_dir.exists() and any(packages_dir.iterdir()):
+        typer.echo(
+            "EXPLORER_INPUT_INVALID: --packages-dir must be a new or empty folder.", err=True
+        )
+        raise typer.Exit(code=2)
+    shown = _descriptions_or_exit(descriptions)
+    with tempfile.TemporaryDirectory(prefix="wm-doc-demo-") as temporary:
+        root = packages_dir or Path(temporary) / "packages"
+        root.mkdir(parents=True, exist_ok=True)
+        _check_explorer_output_or_exit(output, root)
+        count = write_demo_packages(root, services, documents)
+        typer.echo(f"Generated {count} synthetic services.")
+        app_config = load_config(None)
+        _use_platform_services_or_exit(None)
+        # Kept packages (--packages-dir) can be analysed again later, so cache them.
+        analysis = _analyze(root, app_config, None, no_cache=packages_dir is None)
+        docs_dir = Path(temporary) / "service-docs"
+        described = write_demo_descriptions(docs_dir, analysis, root, app_config)
+        overviews = write_demo_overviews(docs_dir, analysis)
+        typer.echo(
+            f"Wrote {described} synthetic description files (every review state) and "
+            f"{overviews} overviews."
+        )
+        options = ExplorerOptions(dataset_kind="synthetic", descriptions=shown)
+        _write_explorer_or_exit(
+            output, root, analysis, app_config, EMPTY_CATALOG, docs_dir, options
+        )
+
+
+@explorer_app.command("serve")
+def explorer_serve(
+    folder: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True)
+    ],
+    port: Annotated[int, typer.Option("--port", min=1, max=65_535)] = 8765,
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Address to listen on; the default is this computer only."),
+    ] = "127.0.0.1",
+) -> None:
+    """Serve a built explorer folder over HTTP (browsers do not load it from file://)."""
+    if not (folder / "index.html").is_file() or not (folder / "data" / "manifest.json").is_file():
+        typer.echo(
+            "EXPLORER_FOLDER_INVALID: not an explorer folder; run `wm-doc explorer build` first.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not is_loopback(host):
+        typer.echo(
+            "Warning: listening on a non-loopback address shares the explorer with your network.",
+            err=True,
+        )
+    try:
+        server = make_server(folder, host, port)
+    except OSError as exc:
+        typer.echo(f"EXPLORER_SERVE_FAILED: could not listen on {host}:{port}.", err=True)
+        raise typer.Exit(code=1) from exc
+    shown = f"[{host}]" if ":" in host else host
+    typer.echo(f"Explorer at http://{shown}:{port}/ (Ctrl+C to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+def _check_explorer_output_or_exit(output: Path, packages_root: Path) -> None:
+    try:
+        check_output_location(output, packages_root)
+    except ExplorerOutputError as exc:
+        typer.echo(f"{exc.code}: {exc.safe_message}", err=True)
+        raise typer.Exit(code=2) from exc
+
+
+def _write_explorer_or_exit(
+    output: Path,
+    packages_path: Path,
+    analysis: AnalysisResult,
+    app_config: AppConfig,
+    external_catalog: ExternalSystemCatalog,
+    docs_dir: Path | None,
+    options: ExplorerOptions,
+) -> None:
+    started = time.monotonic()
+    inputs = explorer_inputs(analysis, packages_path, app_config, external_catalog, docs_dir)
+    try:
+        bundle = build_bundle(inputs, options)
+        report = write_explorer(output, bundle, packages_path)
+    except (ExplorerOutputError, OutputCleanupError, IdCollisionError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    counts = bundle.manifest.counts
+    typer.echo(
+        f"Explorer data: {counts.services} services in {counts.packages} packages, "
+        f"{report.data_files} files, {report.data_bytes / 1_000_000:.1f} MB "
+        f"[{_duration(time.monotonic() - started)}]"
+    )
+    withheld = bundle.manifest.disclosure.withheld_strings
+    if withheld:
+        typer.echo(f"Withheld {withheld} text(s) that looked like secrets, paths or markup.")
+    if not report.app_included:
+        typer.echo(
+            "Warning: this installation has no prebuilt explorer app; only data was written.",
+            err=True,
+        )
+    typer.echo(f"Open it with: wm-doc explorer serve {output}")
+
+
 def _service_graph_links(
     output: Path, graph_paths: dict[str, Path], assets: list[GraphAsset]
 ) -> dict[str, tuple[str, str]]:
@@ -1634,56 +1875,3 @@ def _clean_generated_output(output: Path) -> None:
         _remove_managed_path(output, Path(filename))
     for directory in MANAGED_ROOT_DIRS:
         _remove_managed_path(output, Path(directory))
-
-
-def _remove_managed_path(output: Path, relative_path: Path) -> None:
-    target = output / relative_path
-    if not target.exists() and not target.is_symlink():
-        return
-    _validate_managed_path(output, target, relative_path)
-    try:
-        if target.is_symlink():
-            target.unlink()
-        elif _is_junction(target):
-            target.rmdir()
-        elif target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
-    except OSError as exc:
-        raise OutputCleanupError(
-            "OUTPUT_CLEANUP_FAILED",
-            f"Could not remove managed generated output path `{relative_path.as_posix()}`.",
-            _safe_diagnostic(str(exc), output),
-        ) from exc
-
-
-def _validate_managed_path(output: Path, target: Path, relative_path: Path) -> None:
-    if relative_path.is_absolute() or ".." in relative_path.parts:
-        raise OutputCleanupError(
-            "OUTPUT_PATH_UNSAFE",
-            f"Managed generated output path `{relative_path.as_posix()}` is unsafe.",
-        )
-    output_root = output.absolute()
-    try:
-        target.absolute().relative_to(output_root)
-    except ValueError as exc:
-        raise OutputCleanupError(
-            "OUTPUT_PATH_UNSAFE",
-            f"Managed generated output path `{relative_path.as_posix()}` escaped the output root.",
-        ) from exc
-
-
-def _is_junction(path: Path) -> bool:
-    is_junction = getattr(path, "is_junction", None)
-    return bool(is_junction and is_junction())
-
-
-class OutputCleanupError(Exception):
-    def __init__(self, code: str, safe_message: str, diagnostic: str | None = None) -> None:
-        message = f"{code}: {safe_message}"
-        if diagnostic:
-            message = f"{message} Diagnostic: {diagnostic}"
-        super().__init__(message)
-        self.code = code
-        self.safe_message = message

@@ -9,6 +9,17 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from wm_doc.call_targets import (
+    CONTROL_RE,
+    TargetStatus,
+    classify_finding,
+    classify_java_invocation,
+    classify_target,
+    placeholder_target,
+    valid_name_segment,
+    valid_namespace,
+    valid_service_full_name,
+)
 from wm_doc.ir import (
     AnalysisFinding,
     AnalysisResult,
@@ -18,7 +29,6 @@ from wm_doc.ir import (
     FindingSeverity,
     FindingStatus,
     FlowService,
-    JavaInvocationTargetStatus,
     ProcessEntrypointStatus,
     ServiceAnalysisStatus,
     ServiceDocumentDependency,
@@ -27,9 +37,7 @@ from wm_doc.ir import (
     UniqueDependency,
 )
 
-NAMESPACE_SEGMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PROCESS_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
-CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 MAX_REACHING_ROOT_SAMPLES = 5
 MAX_REPRESENTATIVE_PATH_SAMPLES = 3
 MAX_SOURCE_SAMPLES = 3
@@ -805,13 +813,10 @@ def _scope_boundaries(
             continue
         if invocation.resolved and invocation.canonical_target in included_services:
             continue
-        if invocation.target_status == JavaInvocationTargetStatus.STATIC_TARGET:
+        java_status = classify_java_invocation(invocation)
+        if java_status is None:
             continue
-        status = (
-            ScopeBoundaryStatus.UNRESOLVED
-            if invocation.target_status == JavaInvocationTargetStatus.MALFORMED_TARGET
-            else ScopeBoundaryStatus.DYNAMIC
-        )
+        status = _SCOPE_STATUS[java_status]
         target = (
             invocation.canonical_target
             or invocation.declared_target
@@ -1205,56 +1210,35 @@ def _scope_metrics(
     )
 
 
+# The shared classification (`wm_doc.call_targets`) in scope.v1 vocabulary.
+_SCOPE_STATUS = {
+    TargetStatus.PLATFORM: ScopeBoundaryStatus.EXTERNAL_BUILTIN,
+    TargetStatus.OUTSIDE: ScopeBoundaryStatus.OUTSIDE_SNAPSHOT,
+    TargetStatus.UNRESOLVED: ScopeBoundaryStatus.UNRESOLVED,
+    TargetStatus.DYNAMIC: ScopeBoundaryStatus.DYNAMIC,
+    TargetStatus.UNSUPPORTED: ScopeBoundaryStatus.UNSUPPORTED,
+}
+_TARGET_STATUS = {scope: target for target, scope in _SCOPE_STATUS.items()}
+
+
 def _unresolved_dependency_status(target: str) -> ScopeBoundaryStatus:
-    folded = target.casefold()
-    if folded.startswith("pub.") or folded.startswith("wm."):
-        return ScopeBoundaryStatus.EXTERNAL_BUILTIN
-    if _valid_service_full_name(target):
-        return ScopeBoundaryStatus.OUTSIDE_SNAPSHOT
-    return ScopeBoundaryStatus.UNRESOLVED
+    return _SCOPE_STATUS[classify_target(target, resolved=False)]
 
 
 def _finding_boundary_status(finding: AnalysisFinding) -> ScopeBoundaryStatus | None:
-    code = finding.code.upper()
-    message = finding.message.upper()
-    if "DYNAMIC" in code and ("SERVICE" in code or "INVOKE" in code or "CALL" in code):
-        return ScopeBoundaryStatus.DYNAMIC
-    if "UNSUPPORTED" in code and ("SERVICE" in code or "INVOKE" in code or "CALL" in code):
-        return ScopeBoundaryStatus.UNSUPPORTED
-    if "PARTIALLY_STATIC_SERVICE_TARGET" in code:
-        return ScopeBoundaryStatus.DYNAMIC
-    if "DYNAMIC" in message and ("SERVICE" in message or "INVOK" in message):
-        return ScopeBoundaryStatus.DYNAMIC
-    return None
+    status = classify_finding(finding)
+    return None if status is None else _SCOPE_STATUS[status]
 
 
 def _finding_boundary_target(
     finding: AnalysisFinding, status: ScopeBoundaryStatus
 ) -> str:
-    if status == ScopeBoundaryStatus.DYNAMIC:
-        return "<dynamic-target>"
-    if status == ScopeBoundaryStatus.UNSUPPORTED:
-        return "<unsupported-call-like-construct>"
-    return "<unresolved-target>"
+    return placeholder_target(_TARGET_STATUS[status])
 
 
-def _valid_service_full_name(value: str) -> bool:
-    if CONTROL_RE.search(value) or value.count(":") != 1:
-        return False
-    namespace, service = value.split(":", 1)
-    return _valid_namespace(namespace) and _valid_name_segment(service)
-
-
-def _valid_namespace(value: str) -> bool:
-    if not value or CONTROL_RE.search(value):
-        return False
-    if any(char in value for char in "/\\:"):
-        return False
-    return all(_valid_name_segment(segment) for segment in value.split("."))
-
-
-def _valid_name_segment(value: str) -> bool:
-    return bool(value) and NAMESPACE_SEGMENT_RE.match(value) is not None
+_valid_service_full_name = valid_service_full_name
+_valid_namespace = valid_namespace
+_valid_name_segment = valid_name_segment
 
 
 def _valid_package_name(value: str) -> bool:

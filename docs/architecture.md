@@ -77,8 +77,11 @@ Subsystems:
   top-level index Markdown, entrypoint candidate Markdown, per-service Markdown, per-document
   Markdown, process Markdown, graph catalog Markdown, artifact inventory, service catalogue,
   Graphviz DOT, and optional derived SVG/PNG graph assets.
+- The explorer (`wm_doc.explorer`, M13 PoC) projects the analysis and facts into the
+  `wm-doc-explorer.v1` data contract (manifest, search index, one file per service) and copies
+  the prebuilt React app (`explorer-ui/` source) next to it; see `docs/explorer.md`.
 - The CLI exposes `wm-doc scan`, `stats`, `analyze`, `describe`, `approve`, `status`,
-  `export-comments`, `provider-probe` and `probe-shapes`.
+  `export-comments`, `provider-probe`, `probe-shapes` and `explorer build|demo|serve`.
 
 ## Analysis Schema
 
@@ -330,6 +333,19 @@ M12 then migrates to `analysis.v11` for the approved readers:
   queue or topic, and per condition or routing rule the subscribed document and handler.
 - Entry points also come from legacy REST v1 handlers (`_get`, `_post`, ... at
   `/rest/<namespace as path>`).
+
+M13 (owner-approved PoC) adds the explorer and keeps `analysis.v11`:
+
+- `wm-doc explorer build|demo|serve` writes a static web app next to the data contract
+  `wm-doc-explorer.v1` (`docs/contracts/explorer.v1.schema.json`): a manifest, a search
+  index, a call graph table, a server overview, and one file per service and per package.
+  It is a projection of the analysis and existing facts; `analysis.json` is not read by the
+  app and is unchanged.
+- `wm_doc.call_targets` holds the classification of call targets shared by focused
+  publication and the explorer; `scope.json` output is byte-identical.
+- The app (`explorer-ui/`, prebuilt into `src/wm_doc/explorer/app/`) renders all text as
+  text, sends no external requests and walks only emitted edges. Decision record:
+  `docs/adr/0001-explorer.md`; guide: `docs/explorer.md`.
 
 The M2b FLOW parser remains feature-based. It interprets only observed structures needed for this
 milestone and records other observed uppercase FLOW or mapping elements as findings instead of

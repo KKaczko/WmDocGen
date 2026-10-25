@@ -13,6 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 import wm_doc.cli as cli_module
+import wm_doc.output_cleanup as output_cleanup
 from wm_doc.analysis import analyze_path
 from wm_doc.cli import app
 from wm_doc.config import (
@@ -1078,7 +1079,7 @@ def test_generated_output_cleanup_failure_is_controlled_and_redacted(
             )
         original_rmtree(path)
 
-    monkeypatch.setattr(cli_module.shutil, "rmtree", failing_rmtree)
+    monkeypatch.setattr(output_cleanup.shutil, "rmtree", failing_rmtree)
 
     result = CliRunner().invoke(
         app,
