@@ -1,0 +1,254 @@
+{
+  "pgp.services.common:getFileContent": {
+    "facts": "147cd2d363a0043a",
+    "prompt_level_0": "d1f6c2bd03aae1fd3b57c94b4a6bbb8f122b5293b91e37f418a9b71afcaedf26",
+    "prompt_level_1": "d1f6c2bd03aae1fd3b57c94b4a6bbb8f122b5293b91e37f418a9b71afcaedf26",
+    "prompt_level_2": "d1f6c2bd03aae1fd3b57c94b4a6bbb8f122b5293b91e37f418a9b71afcaedf26",
+    "pseudocode": "d1f6c2bd03aae1fd3b57c94b4a6bbb8f122b5293b91e37f418a9b71afcaedf26"
+  },
+  "pgp.services.common:getPackagePath": {
+    "facts": "673ad57d5c3c0b54",
+    "prompt_level_0": "392aa5e89f0464487f997ef51c18c431fda39fe07774ee21728188ba6ffa3da7",
+    "prompt_level_1": "392aa5e89f0464487f997ef51c18c431fda39fe07774ee21728188ba6ffa3da7",
+    "prompt_level_2": "392aa5e89f0464487f997ef51c18c431fda39fe07774ee21728188ba6ffa3da7",
+    "pseudocode": "392aa5e89f0464487f997ef51c18c431fda39fe07774ee21728188ba6ffa3da7"
+  },
+  "pgp.services.common:getSupportedEncodings": {
+    "facts": "08607a5ac560fd60",
+    "prompt_level_0": "0319fdaa6f3a141359e8fde98ef7d4701b68cf7f2877253c92dc899a2453e9be",
+    "prompt_level_1": "0319fdaa6f3a141359e8fde98ef7d4701b68cf7f2877253c92dc899a2453e9be",
+    "prompt_level_2": "0319fdaa6f3a141359e8fde98ef7d4701b68cf7f2877253c92dc899a2453e9be",
+    "pseudocode": "0319fdaa6f3a141359e8fde98ef7d4701b68cf7f2877253c92dc899a2453e9be"
+  },
+  "pgp.services.common:readConfig": {
+    "facts": "2d6797ee474bd801",
+    "prompt_level_0": "3482e2f224ca971f5e037ab115be2755ded74b7a901f315c7c902e80ab859331",
+    "prompt_level_1": "13f2871e1297ae32c5e6b45f06cc710de844cd911660972d44e35152ead68a1a",
+    "prompt_level_2": "b0302a30022e6851cf91b7eb8d76696010e633e57df688d0963054f2cfc05085",
+    "pseudocode": "c1d2eb9a1e9dcb309a3f833214cb7dc7495f60fc68b5b549bb4f2576d953b1f7"
+  },
+  "pgp.services.common:selectFromConfig": {
+    "facts": "d7a2b33341f9fc28",
+    "prompt_level_0": "cbfa1efeb4626d03c3c22160d3240c8fa62f83fe0f078c06295f8f36b2ac52a4",
+    "prompt_level_1": "cbfa1efeb4626d03c3c22160d3240c8fa62f83fe0f078c06295f8f36b2ac52a4",
+    "prompt_level_2": "cbfa1efeb4626d03c3c22160d3240c8fa62f83fe0f078c06295f8f36b2ac52a4",
+    "pseudocode": "cbfa1efeb4626d03c3c22160d3240c8fa62f83fe0f078c06295f8f36b2ac52a4"
+  },
+  "pgp.services.decrypt:decryptAndVerify": {
+    "facts": "8ba7e410c78fb7fe",
+    "prompt_level_0": "d892212564d0209bf09340d3b7375688726817e26ebbd9510f4efd7f264ef8da",
+    "prompt_level_1": "d892212564d0209bf09340d3b7375688726817e26ebbd9510f4efd7f264ef8da",
+    "prompt_level_2": "d892212564d0209bf09340d3b7375688726817e26ebbd9510f4efd7f264ef8da",
+    "pseudocode": "d892212564d0209bf09340d3b7375688726817e26ebbd9510f4efd7f264ef8da"
+  },
+  "pgp.services.decrypt:decryptAndVerifyFile": {
+    "facts": "eeaaf68dd0762a1c",
+    "prompt_level_0": "919cf4b6201e4cc94d6eedd244cc36570792d3edede677c70173e81f72967d8a",
+    "prompt_level_1": "95b985cb84704395ecfe2895b71ceee354e80188d9fcd99c5e8d1e41e1fa8ee6",
+    "prompt_level_2": "cc518f22524af678eca97919a91ee18f658e04d299ba2a23fa1ead17230fbc98",
+    "pseudocode": "8626291a9e2a15729236ef86fc01c9b3175ab5d45db09fb9c8bf7c69cbd20de8"
+  },
+  "pgp.services.decrypt:decryptAndVerifyString": {
+    "facts": "a08dc4d14e5e8678",
+    "prompt_level_0": "3d3ddabcaa47729326677a2d0aa25c7c695c675cd13349a50bed0c601d0248c4",
+    "prompt_level_1": "56725b2c5f3c6a076b3512c0ff961eb68ccbe035c7a1ec36045c2b21b702fed9",
+    "prompt_level_2": "0ecb9ebd91334da9502b74b4b7b188cabfe3947fdfa3b0d0c7754259dd4e548b",
+    "pseudocode": "d96ac74e1f5f2dc5ca72bcfc3a379a6a027501282e33ecf445135c8234da5771"
+  },
+  "pgp.services.decrypt:decryptFile": {
+    "facts": "56e4832657762e58",
+    "prompt_level_0": "1f88bef47b26f9943aab18d9a437b6a6ea73650f205d1f9be8cda350c612ea04",
+    "prompt_level_1": "148a2f0f2533ba8c8ba50c64f9903e75b73ffbe78804ae5601ed2b576d313aad",
+    "prompt_level_2": "9adf6c0c9a592e98e4d07ec7290bda7b3277034c4bae1ac641d969d94890a595",
+    "pseudocode": "f9fbb989103efd16d68683bb5d138ddd8f0bd134799a0a36fefdca25a42b7465"
+  },
+  "pgp.services.decrypt:decryptString": {
+    "facts": "40b39325ac7c91b2",
+    "prompt_level_0": "9488a57d91458242f6443442169a38669ece509df4403d2134f03130c5fcd953",
+    "prompt_level_1": "169ce85e01354c0e7b526a1a7baf740e38640647a22bb27a3cfdff840a34e795",
+    "prompt_level_2": "0d0df0f1f002de05b4c6deb20f527cf20179a006ccceec6c4e55ab2bf1b933ca",
+    "pseudocode": "97c6555d170d6ac05eb9d7c7c1e133014c002cf8d36e4a70ee5706b6de2ac5bd"
+  },
+  "pgp.services.encrypt:encryptAndSign": {
+    "facts": "c0cbd07a55c2b947",
+    "prompt_level_0": "4e8b39e67395a4807d1786603a1fc15c18c7dcbd069b9341e36edb07c57950ba",
+    "prompt_level_1": "4e8b39e67395a4807d1786603a1fc15c18c7dcbd069b9341e36edb07c57950ba",
+    "prompt_level_2": "4e8b39e67395a4807d1786603a1fc15c18c7dcbd069b9341e36edb07c57950ba",
+    "pseudocode": "4e8b39e67395a4807d1786603a1fc15c18c7dcbd069b9341e36edb07c57950ba"
+  },
+  "pgp.services.encrypt:encryptAndSignFile": {
+    "facts": "b470b2067ae724cf",
+    "prompt_level_0": "0535e2e3f4c31f4f02e11257d7ad76b267e1e0333c6c2c9fe94965ca7f679bad",
+    "prompt_level_1": "e3bb7372669c75f5046dfe3b4262ecd15917c9c4701b3449d6bcdbe4324e0d65",
+    "prompt_level_2": "abc7f337e7db9f62e6c879b594dcef77259157fb4a036a178860175a4d6e6089",
+    "pseudocode": "b34f7bf657bf38b35b84c154884284f7db1ef38b91186243b4bb62232391fc52"
+  },
+  "pgp.services.encrypt:encryptAndSignString": {
+    "facts": "d9803604e0a702fe",
+    "prompt_level_0": "6bb6e717014abaa19dae9c5a9264f47d9dfb9196b38d56b2698bd509c33508e2",
+    "prompt_level_1": "e6d757dc2023f0571b83029b0d931dd65f79b9c1bdce9e12d6f871737e7b8c15",
+    "prompt_level_2": "3c0483ae24ce5a713e4d5279793b47028143a83e4167dde98aac5d493fcd3dbf",
+    "pseudocode": "d33a27b8e101686e12b5df0428c69959f4a2962263e811ad6d1541888df37a96"
+  },
+  "pgp.services.encrypt:encryptFile": {
+    "facts": "30a446c5e4ce87ae",
+    "prompt_level_0": "9b57d2dbe33314183ab42bd90e71d123ccc3aaade9254f2b10dc19e9ced0414e",
+    "prompt_level_1": "51b9cdea02ad28d7a31e3f84e17f6bde8e3c0c7a89bda5705cb31493c2d4b504",
+    "prompt_level_2": "8b7cdead55e388d346c13a72d99d6d3a918828ff66eb141a9e342d4ccc819f66",
+    "pseudocode": "bc85c873ad50f0f49a53b780998c3f01158cbc967718f4ff5d2fe7027fda0f52"
+  },
+  "pgp.services.encrypt:encryptString": {
+    "facts": "9e7b48a1105d96a1",
+    "prompt_level_0": "d06ee3cb209f7d9920f81190f51eaaa64cdb14ff8f1145bfccc7948adb43509c",
+    "prompt_level_1": "bc8b41450d02296501fc1f7adee47d5e956abb7cd29d3723e1ed49b1541af9dd",
+    "prompt_level_2": "885d469a8510c50d3a51c8916528a656fac75e895f45b08feab9aa27e1231b8a",
+    "pseudocode": "30e13dca2821914df406bc4f3f624efef41e1e5d80fc4a810a43243e48d10308"
+  },
+  "pgp.services.keys:listEncryptionAlgorithms": {
+    "facts": "347197e87b77d696",
+    "prompt_level_0": "2ed7d86e3041c04a4bfc78f44ddb4d571cc27047952db39469162cb0e1b674d6",
+    "prompt_level_1": "2ed7d86e3041c04a4bfc78f44ddb4d571cc27047952db39469162cb0e1b674d6",
+    "prompt_level_2": "2ed7d86e3041c04a4bfc78f44ddb4d571cc27047952db39469162cb0e1b674d6",
+    "pseudocode": "2ed7d86e3041c04a4bfc78f44ddb4d571cc27047952db39469162cb0e1b674d6"
+  },
+  "pgp.services.keys:listKeyExchangeAlgorithms": {
+    "facts": "a72c8ab8c6afbbb5",
+    "prompt_level_0": "367cecd3ad17e31447434b36eeafdb45ac545ac375fb25ee7e479a856e3cb334",
+    "prompt_level_1": "367cecd3ad17e31447434b36eeafdb45ac545ac375fb25ee7e479a856e3cb334",
+    "prompt_level_2": "367cecd3ad17e31447434b36eeafdb45ac545ac375fb25ee7e479a856e3cb334",
+    "pseudocode": "367cecd3ad17e31447434b36eeafdb45ac545ac375fb25ee7e479a856e3cb334"
+  },
+  "pgp.services.keys:listSignatureAlgorithms": {
+    "facts": "1249c18a3e29dafe",
+    "prompt_level_0": "19e992061671a94651d36e605b69046dffadd4aedf88cc885baebd3308fe0353",
+    "prompt_level_1": "19e992061671a94651d36e605b69046dffadd4aedf88cc885baebd3308fe0353",
+    "prompt_level_2": "19e992061671a94651d36e605b69046dffadd4aedf88cc885baebd3308fe0353",
+    "pseudocode": "19e992061671a94651d36e605b69046dffadd4aedf88cc885baebd3308fe0353"
+  },
+  "pgp.services.keys:readPrivateKeys": {
+    "facts": "fec2882e373c82ab",
+    "prompt_level_0": "11902223a1aba84b0dfa244c997629d596c80c9f52170481e62712246f8e458e",
+    "prompt_level_1": "11902223a1aba84b0dfa244c997629d596c80c9f52170481e62712246f8e458e",
+    "prompt_level_2": "11902223a1aba84b0dfa244c997629d596c80c9f52170481e62712246f8e458e",
+    "pseudocode": "11902223a1aba84b0dfa244c997629d596c80c9f52170481e62712246f8e458e"
+  },
+  "pgp.services.keys:readPublicKeys": {
+    "facts": "b8add19e0ed23a48",
+    "prompt_level_0": "1e8d14b773a579d7d05b5641aeff0d1359dc8f7662d6d04e984e0ac5113442f1",
+    "prompt_level_1": "1e8d14b773a579d7d05b5641aeff0d1359dc8f7662d6d04e984e0ac5113442f1",
+    "prompt_level_2": "1e8d14b773a579d7d05b5641aeff0d1359dc8f7662d6d04e984e0ac5113442f1",
+    "pseudocode": "1e8d14b773a579d7d05b5641aeff0d1359dc8f7662d6d04e984e0ac5113442f1"
+  },
+  "pgp.services.registry:getPubKey": {
+    "facts": "612df51b0576e9a2",
+    "prompt_level_0": "25d5bc561f4b08fefab742b832763ef3065b15cda9691404056d6ead7aa512f4",
+    "prompt_level_1": "0d543a573a2ceb6528cad690e3a1820a0f3dd4c32e3ab98b9da1f1f841239b68",
+    "prompt_level_2": "68aea2e9a3b9141753fd71616552a8cad18e50023fd3f370693de60698ce583a",
+    "pseudocode": "fb73655dab721079e7a43170574d4599c9928170ee934820e0ad7642dcffbbe0"
+  },
+  "pgp.services.registry:getSecKey": {
+    "facts": "73f1c6d00e075da9",
+    "prompt_level_0": "1e38ed148159d32f8a55981f919189944d08d5137b59f420d0d50633ecbf6800",
+    "prompt_level_1": "ea9c0c8e71d04312dccc6ebd2564a3b34b4ee00317371f625895b1982bb7f56e",
+    "prompt_level_2": "74b2ced80858abbfdcb5697d90fe8fa8f12a1921729d1c9fa6f7feae36a5d74e",
+    "pseudocode": "7dbeb7d726c77ada9c91755b9e87240086728752005bb344d187aa1c751a8185"
+  },
+  "pgp.test.decrypt:testDecryptAndVerifyFile": {
+    "facts": "aa670d0e20ae2ee1",
+    "prompt_level_0": "cf4886abab378329ee4b3d6cb60ebdf89580e69235df7c93f2c7d80e5dfd2fee",
+    "prompt_level_1": "eed767d406b3e2003b0bdad3500588d25226e4d5e8b91b5258dc564b34e5ab4a",
+    "prompt_level_2": "e10ff5998fcac90489dd29cbbbe4709252b5c6e706775c54f30c2f6a8cea97a7",
+    "pseudocode": "b8140e11e96bcaa7af3a70cabfcfccc76d55f3fc1487a55b883ed6963a6e857f"
+  },
+  "pgp.test.decrypt:testDecryptAndVerifyString": {
+    "facts": "dab08d3e0b7a17e4",
+    "prompt_level_0": "ef60cb5472a6ed538969e4408a86b2218d08d44d7b25ab2dcf06fce50c057f20",
+    "prompt_level_1": "3fc1751cd5ff1dd4afcfe55729897da83a6cdbe76f44218eb20b7e5cbfec1955",
+    "prompt_level_2": "033d67392974b5e3067b34419bfbd4e4e09be49d96a964a6dc5d1b31f22197ec",
+    "pseudocode": "556266b8d1562fa9b53ced6a3a32dc0a5a36e84a2b088aa9a8efa8518c49517e"
+  },
+  "pgp.test.decrypt:testDecryptAndVerifyUnsignedString": {
+    "facts": "fd4947ece23df6a9",
+    "prompt_level_0": "98fcb63ca7412fb78935e7444b27d376d6fae5d8921cc73120d1a747f321e936",
+    "prompt_level_1": "a1d0601178724bb47538c2c71eeca4cd3368b19afd8030a6bfa08ec28e0ff618",
+    "prompt_level_2": "6b6a6e6310c9b26a1cd95af828ba39acf42357ec31479b81f49262c3bb64a782",
+    "pseudocode": "bd5910b99c3b600971e5c07142e55780fecec344770400bcd0325d315ffc4587"
+  },
+  "pgp.test.decrypt:testDecryptFile": {
+    "facts": "707cd877bffe5fe0",
+    "prompt_level_0": "8a9ca0ef90b78fac9e605521cce147b8cdf4a369ccbd7f10755099f9e8ba4927",
+    "prompt_level_1": "1ac0b23c97413e0c73a8b1aa982eb35833830bb39df95e17a87504f61e0332e0",
+    "prompt_level_2": "7fa740066d8a116bfe140cccab1a590effd195341179bd5ee3f246e9a01dbb89",
+    "pseudocode": "6d1ed674fd782097f1892e5ff92bd5246049abae14609d78e105345c81b02efa"
+  },
+  "pgp.test.decrypt:testDecryptString": {
+    "facts": "d486c6375ed3aaca",
+    "prompt_level_0": "a5c649324ea507961ab4d6259f201e669f65c5c2e37ab202ea84ce4e5fd4cf66",
+    "prompt_level_1": "81e9e48f180b794969dbcb739bcc3a2c3c34b2e7387170d2eb14975708afcff9",
+    "prompt_level_2": "77fe5e4acf5ca3350c851886a38851b60c82e1e9b5ca2bea12a1aec02ba19646",
+    "pseudocode": "03714cf9a27c23b7b14156c143afc1f495dd91aaeb5a27c74b27e1c645cfa8ce"
+  },
+  "pgp.test.encrypt:testEncryptAndSignFile": {
+    "facts": "3978b052c9aeb223",
+    "prompt_level_0": "466d5e4a89f004e2e628b33c8e7ba4a209f19aec8d8afdd481facd000dd068e5",
+    "prompt_level_1": "a48f7c8fca6e02981c29993cf44b624ba012e0f329c228aa1f6cd64b1df29ab6",
+    "prompt_level_2": "1b3f92425d8017f73d791a7312756523179386f5c71cd21958ae4e9af3a69bba",
+    "pseudocode": "280fb83843c3e5c87229c29c12222175e37036d30fea9a2b4735680c87c1514a"
+  },
+  "pgp.test.encrypt:testEncryptAndSignString": {
+    "facts": "bead8dbec58d1737",
+    "prompt_level_0": "c4b513bfbeeb7c41abf725bbe97dd5fa3b11f7882e454ce54ec839f09f722c3c",
+    "prompt_level_1": "5337687f1d95eb48436b98a2c052bc238ca215ef47ea9f0ce82ce4cbdc435d85",
+    "prompt_level_2": "367da09e85d3672c28589aa1715e0677e79535f3c91dfc62a1dbdc1e3cf19bdf",
+    "pseudocode": "ccbb0cfdb18b5b0041bf55e16544e38c2cea8452213d5b68dbdb0dbb8f70379a"
+  },
+  "pgp.test.encrypt:testEncryptFile": {
+    "facts": "74c2e2e6a8ab0208",
+    "prompt_level_0": "9cbc797d9e1bd1b3af842566e589d6de729e588031a14ec8191301f0798f9562",
+    "prompt_level_1": "ac1d132bc9d20a9c35b5b26f83ea6c1ac833c631b6f9689279b85bcc109b0fda",
+    "prompt_level_2": "dc4ea79260c4d3607849f7a875f55265fb169d036ff7214fada3bc36639b0424",
+    "pseudocode": "cdb2dcbda931947942738a45b7a15494858917f18cde69c2fe96ba4b837f9988"
+  },
+  "pgp.test.encrypt:testEncryptString": {
+    "facts": "205558a8a966102d",
+    "prompt_level_0": "eca4487880767357ddd6455429911268f707f0ff4c4eb57e01fe054b51487dd9",
+    "prompt_level_1": "d8eb04202fa61c512824147fa66f04a796aca8840c4810db20d61b3927812d11",
+    "prompt_level_2": "3279f314b8e053216f35028aa0d03c7ea86e601fd13c0d56a4d185ca7c7e1f21",
+    "pseudocode": "3fa9c3abd7c3d6d61fcdab36f697da1008a908f0277d4a832cc396e38690c591"
+  },
+  "pgp.test.keys:testListAlgorithms": {
+    "facts": "d03774399eacafca",
+    "prompt_level_0": "6f8b9e9629046bb1a99117dfaedc8cf1a8c7b4f720368757af2b923ea5bb7284",
+    "prompt_level_1": "14710f9715e86af5ec6b7d2b9e2c85800a9511736bd0320ff210c67a92a52a85",
+    "prompt_level_2": "14710f9715e86af5ec6b7d2b9e2c85800a9511736bd0320ff210c67a92a52a85",
+    "pseudocode": "b5070874e7eea260195b3f0eaf4758febfbb2acd4b9b60dd9f3217a1352fd75d"
+  },
+  "pgp.test.keys:testReadPrivateKeys": {
+    "facts": "43d525892f0ee30a",
+    "prompt_level_0": "79fb73c4b9afd08df5aac405f48281c16dc83e817c4ea641d6cc47403c67c821",
+    "prompt_level_1": "b9ef4c369a6ec8cb2caa8132ee7192a2c5c8e9da55bd73d2bf58466fbd357cf5",
+    "prompt_level_2": "90e026e67d9047fd5d422927164361c00a290cb533e32fcbbfbf87107890fec6",
+    "pseudocode": "6ff6b07d928abaefd409649291c60ed2c99d0cab98007ca4abece928e16c379c"
+  },
+  "pgp.test.keys:testReadPublicKeys": {
+    "facts": "e3c46fc2ee343459",
+    "prompt_level_0": "4dc045d9543b9d1308984cc661b14367731a1fd08871d2f423aed54506cb674b",
+    "prompt_level_1": "53cd061d49f77685a90c2506d7ec48775b61cf8fb919f97445753effa265ece3",
+    "prompt_level_2": "9e3b3545531404e0e5e4d24b805f50a7069e44c5f2302caf043164a6746ea0fd",
+    "pseudocode": "0ddaa8acf5199e99cd467e11fa9801bfc128d2294aed4f9faed9a998160ca853"
+  },
+  "sample.orders.intake:validateOrderBatch": {
+    "facts": "96a8278f9133f455",
+    "prompt_level_0": "81082175a4c9a9777407ee652b4395dffdb09587ec803594896cdb8007fe493c",
+    "prompt_level_1": "2b9e38250e1fb0a7414d899c1a74ca231708177be764efce48f1154e3799d225",
+    "prompt_level_2": "34af7c49856016989c9a2fc297cb660313566d8159568a216d0dfb1164a8f86e",
+    "pseudocode": "3a7127fa0dac2062796df1326d80e87f68015ba867068d935d408860e66163d9"
+  },
+  "shapes.all:rareShapes": {
+    "facts": "a56c92ddb5a91853",
+    "prompt_level_0": "68caaf9db0729fecb18a8306982075d84abbf8b9228e5d847221b78c77bf0c33",
+    "prompt_level_1": "86af217c1f5d547c8f5f16093e55969c846c4e60a77424b8983f3d7d918a3df2",
+    "prompt_level_2": "94e3c4389b9398085a2c0c94b4e43eb4878f5b5cda267d88db271eac7e2fdb9d",
+    "pseudocode": "094cfbd582d9495935b526749b193789834a44fb68b8c761f534d2064da32343"
+  }
+}

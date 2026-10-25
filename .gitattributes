@@ -8,3 +8,6 @@ explorer-ui/src/domain/graph-fixture.json linguist-generated=true
 # Fixture files are checked against tests/fixtures/checksums.sha256, so their bytes must not
 # change on checkout: text files keep LF line endings everywhere, binary files are left alone.
 samples/** text=auto eol=lf
+
+# Golden test snapshots are compared byte for byte.
+tests/fixtures/golden/** text eol=lf

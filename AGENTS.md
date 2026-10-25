@@ -10,6 +10,7 @@ Current milestone: M12 (approved by the repository owner). The earlier business-
 business-enrichment path (`build-business-context`, `enrich-business`, `ollama-test`,
 `business-context.v*`, `business-result.v*`) was removed in M12; do not reintroduce it.
 M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
+M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditional FLOW logic".
 
 ## Pipeline and modules
 
@@ -56,6 +57,9 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
   dynamic, unsupported) for scope boundaries and the explorer; `output_cleanup.py` removes
   managed output paths for `analyze` and `explorer build`.
 - Explorer (`explorer/`, app source in `explorer-ui/`): see "Explorer".
+- Conditional FLOW logic (`flow_semantics.py`, later `flow_paths.py`, `flow_logic.py`,
+  `flow_lineage.py`, `flow_scenarios.py`): see "Conditional FLOW logic". Tests build FLOW
+  services with `tests/support/flowxml.py` (test-only; `samples/` stays read-only).
 
 ## Contracts
 
@@ -119,7 +123,8 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
   facts. All text is rendered as text (no HTML or Markdown rendering, no
   `dangerouslySetInnerHTML`); a strict CSP; no external requests. Literal values, designer
   comments, Notes, SQL and connection properties are never exported (a data effect known from
-  a literal shows `(literal, not exported)`); free text passes the
+  a literal shows `(literal, not exported)`; branch condition values are the one exception,
+  see "Conditional FLOW logic"); free text passes the
   disclosure scan or is withheld and counted.
 - The output folder must not overlap the packages folder. Files are named by hashed IDs.
 - The call graph (`graph.json`, `explorer-ui/src/domain/graph.ts`) walks only emitted
@@ -133,6 +138,31 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
 - PoC plan: PR 1 search and service pages; PR 2 descriptions, effects and trust labels;
   PR 3 bounded dependency graph (React Flow, caps on depth, nodes and neighbours per node);
   PR 4 package explorer and scale checks.
+
+## Conditional FLOW logic (owner approval, M14)
+
+- Goal: explain which calls run under which BRANCH conditions, which paths are alternatives,
+  where decision variables come from and how earlier responses feed later decisions. Static
+  only: no runtime simulation, no evaluation of expressions or regular expressions.
+- The logic is derived core facts computed on demand (like `effects.py`), never stored in
+  `analysis.json`. Every derived fact carries a certainty (observed, derived, possible,
+  unknown), a basis, and the id of the IS rule it rests on (`flow_semantics.py`, documented in
+  `docs/flow-semantics.md`); conclusions resting on an assumed rule are shown as assumptions.
+- Owner decisions (2026-10-25): branch condition values are shown in pages, prompts and the
+  Explorer, subject to the free-text policy and the secret guard (`explorer build
+  --condition-values exclude` opts out; MAPSET literals stay unexported in the Explorer); a
+  called service's declared outputs are possible sources only, and calls between a definition
+  and a decision are listed as a caveat; the owner checks the assumed rules on IS 10.15; AI
+  descriptions return structured items that reference decision, case and call ids, the tool
+  writes condition text, and answers are checked against the facts.
+- A step after a BRANCH never inherits that BRANCH's conditions. "Comes from" wording requires
+  exactly one observed origin on every path; nothing is concluded from similar field names.
+- The pseudo-code the model sees (every detail level, with notes and comments) and the facts
+  hash of description files are frozen for the samples and a builder-made service by
+  `tests/unit/test_flow_facts_golden.py`; change them only on purpose.
+- Plan: stage 0 foundations; 1 call conditions and a Decisions section; 2 decision-variable
+  lineage; 3 scenarios; 4 AI prompt and structured validation; 5 disclosure hardening
+  (`analysis.v12`); 6 Explorer conditional flow; 7 conservative cross-service facts.
 
 ## Out of scope without explicit owner approval
 
