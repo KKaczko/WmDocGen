@@ -361,3 +361,17 @@ Later milestones may add broad Java external-effect classification, fuller FLOW 
 parsers for JDBC adapter services, triggers and REST/SOAP descriptors (from real `probe-shapes`
 output), scheduler entries, native BPM process-model parsing, package dependency graphs and snapshot
 diffing. Those require a separate approval.
+
+## Conditional FLOW logic (M14)
+
+`flow_logic.py` derives, on demand and without storing anything in `analysis.json`, when each
+step of a FLOW service runs: decisions (BRANCH steps) with their case conditions as written,
+the guard of every call (cases it sits in, earlier cases that always leave, TRY/CATCH and
+EXIT-ON SUCCESS alternatives, loops, repeats), where each EXIT goes and which steps never run.
+It models a normal run (no step fails on its own) plus the failure paths that TRY/CATCH and
+EXIT-ON SUCCESS or DONE make explicit; an EXIT whose target cannot be determined never proves
+anything. Every conclusion cites the Integration Server rules in `flow_semantics.py`
+(`docs/flow-semantics.md`); rules not yet confirmed on IS 10.15 are shown as assumptions.
+`render/flow_markdown.py` writes the "Decisions" section of service pages (between Calls and
+Data and Systems Touched) and the rule table in `LIMITATIONS.md`. Case labels and step labels
+appear only when the free-text policy includes them, always inside code spans.

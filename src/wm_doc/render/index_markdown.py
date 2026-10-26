@@ -4,6 +4,7 @@ from pathlib import Path
 
 from wm_doc.graph_publish import GraphAsset
 from wm_doc.ir import AnalysisResult
+from wm_doc.render.flow_markdown import rules_markdown
 
 
 def render_documentation_index(
@@ -105,7 +106,7 @@ documented services; an uncatalogued platform service is left unlabelled rather 
 def write_analysis_limitations(output_dir: Path) -> Path:
     """Write the shared limitations page that service and document pages link to."""
     path = output_dir / "LIMITATIONS.md"
-    path.write_text(ANALYSIS_LIMITATIONS, encoding="utf-8")
+    path.write_text(ANALYSIS_LIMITATIONS + "\n" + rules_markdown(), encoding="utf-8")
     return path
 
 

@@ -116,7 +116,7 @@ RULES: tuple[Rule, ...] = (
         "service ($flow) or the nearest enclosing step with the given label, with SUCCESS or "
         "FAILURE.",
         DOCUMENTED,
-        ("V10", "V11"),
+        ("V11",),
     ),
     Rule(
         "S12",
@@ -253,6 +253,14 @@ RULES: tuple[Rule, ...] = (
         "A LOOP over a missing, null or empty array runs its children zero times and succeeds.",
         ASSUMED,
         ("V26",),
+    ),
+    Rule(
+        "S30",
+        "EXIT",
+        "An EXIT $parent that is itself a child of a BRANCH leaves the BRANCH (the case is not a "
+        "step of its own).",
+        ASSUMED,
+        ("V10",),
     ),
 )
 

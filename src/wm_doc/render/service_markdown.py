@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from jinja2 import Template
 
 from wm_doc.builtins import builtin_effect, is_builtin_name
+from wm_doc.flow_logic import compute_flow_logic
 from wm_doc.ir import (
     CallOccurrence,
     DependencyKind,
@@ -35,6 +36,7 @@ from wm_doc.ir import (
     UniqueDependency,
 )
 from wm_doc.render.document_markdown import document_markdown_filename
+from wm_doc.render.flow_markdown import render_decisions_section
 from wm_doc.render.service_summary import derived_layer, render_service_summary
 
 if TYPE_CHECKING:
@@ -244,6 +246,12 @@ Signature from specification `{{ service.specification }}`.
 [DOT source]({{ call_graph[1] }})
 
 {% endif %}
+{% if decisions_text %}
+## Decisions
+
+{{ decisions_text }}
+
+{% endif %}
 {% if facts %}
 ## Data and Systems Touched
 
@@ -355,6 +363,7 @@ def render_service_markdown(
     description_text = _text_display(service.description)
     return _TEMPLATE.render(
         service=service,
+        decisions_text=render_decisions_section(compute_flow_logic(service)),
         verbose=verbose,
         doc=doc,
         doc_badge=doc_badge(doc) if doc is not None else "",

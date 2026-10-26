@@ -526,9 +526,14 @@ def _replace_called_by_section(
 ) -> str:
     start_marker = "## Called By"
     end_marker = "\n## Processes"
-    start = markdown.find(start_marker)
+    # Anchor on headings at the start of a line: page text (labels in tables) may contain the
+    # same words.
+    start = markdown.find(f"\n{start_marker}\n")
+    if start == -1:
+        return markdown
+    start += 1
     end = markdown.find(end_marker, start)
-    if start == -1 or end == -1:
+    if end == -1:
         return markdown
     called_by = _render_scoped_called_by(incoming_dependencies, included_names)
     replacement = f"{start_marker}\n\n{called_by}"

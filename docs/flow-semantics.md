@@ -2,7 +2,7 @@
 
 wm-doc never runs a service. When it says which steps run under which conditions, or where a
 value that a BRANCH tests comes from, it relies on Integration Server FLOW behaviour. Every such
-rule is listed in `src/wm_doc/flow_semantics.py` with an id (S1-S26) and a status:
+rule is listed in `src/wm_doc/flow_semantics.py` with an id (S1-S30) and a status:
 
 | Status | Meaning | How readers see it |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ step (the statements here are short summaries of the ones in the code).
 | S8 | BRANCH | Label expressions are evaluated in document order; the first true one wins. | documented | V7 |
 | S9 | BRANCH | A non-string switch value is compared by its string form. | assumed | V8 |
 | S10 | SEQUENCE | EXIT-ON FAILURE stops at the first failure and fails; SUCCESS stops at the first success; DONE runs every child. | documented | V9 |
-| S11 | EXIT | EXIT leaves `$parent`, the innermost LOOP or REPEAT (`$loop`), `$flow` or the nearest enclosing step with the label, with SUCCESS or FAILURE. | documented | V10, V11 |
+| S11 | EXIT | EXIT leaves `$parent`, the innermost LOOP or REPEAT (`$loop`), `$flow` or the nearest enclosing step with the label, with SUCCESS or FAILURE. | documented | V11 |
 | S12 | EXIT | Exiting a LOOP ends the whole loop, not only the current iteration. | documented | |
 | S13 | TRY/CATCH | A failure or EXIT FAILURE inside TRY runs CATCH; FINALLY always runs, also after an EXIT. | assumed | V12 |
 | S14 | TRY/CATCH | IS 10.15 writes TRY/CATCH (and FINALLY) as sibling FORM sequences inside an EXIT-ON SUCCESS sequence; older services use an EXIT-ON SUCCESS sequence without FORM. | assumed | V13, V25 |
@@ -46,6 +46,7 @@ step (the statements here are short summaries of the ones in the code).
 | S27 | Pipeline | `pub.flow:restorePipeline*` put saved values back; replace or merge is not confirmed. | assumed | V23 |
 | S28 | BRANCH | Any step can be a child of a BRANCH; its NAME is the case label. | documented | V25 |
 | S29 | LOOP | A LOOP over a missing, null or empty array runs zero times and succeeds. | assumed | V26 |
+| S30 | EXIT | An EXIT `$parent` that is itself a BRANCH child leaves the BRANCH. | assumed | V10 |
 
 ## Owner checklist (IS 10.15, Designer)
 
