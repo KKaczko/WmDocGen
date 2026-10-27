@@ -57,8 +57,8 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   dynamic, unsupported) for scope boundaries and the explorer; `output_cleanup.py` removes
   managed output paths for `analyze` and `explorer build`.
 - Explorer (`explorer/`, app source in `explorer-ui/`): see "Explorer".
-- Conditional FLOW logic (`flow_semantics.py`, later `flow_paths.py`, `flow_logic.py`,
-  `flow_lineage.py`, `flow_scenarios.py`): see "Conditional FLOW logic". Tests build FLOW
+- Conditional FLOW logic (`flow_semantics.py`, `flow_paths.py`, `flow_logic.py`,
+  `flow_lineage.py`, later `flow_scenarios.py`): see "Conditional FLOW logic". Tests build FLOW
   services with `tests/support/flowxml.py` (test-only; `samples/` stays read-only).
 
 ## Contracts
@@ -156,7 +156,14 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   descriptions return structured items that reference decision, case and call ids, the tool
   writes condition text, and answers are checked against the facts.
 - A step after a BRANCH never inherits that BRANCH's conditions. "Comes from" wording requires
-  exactly one observed origin on every path; nothing is concluded from similar field names.
+  exactly one observed origin on every path and no call in between; nothing is concluded from
+  similar field names. A definition replaces earlier ones only when it certainly writes the
+  field (`flow_lineage.py`); copies from a possibly absent field or one list element,
+  transformer outputs, overwrite-off sets, declared callee outputs, `clearPipeline` (its
+  `preserve` list may come from the pipeline) and lines with uninterpreted attributes keep the
+  earlier ones possible.
+- Description files show the decisions and their origins under `### Decisions` in the facts
+  block (refreshed on every run, not part of the facts hash).
 - The pseudo-code the model sees (every detail level, with notes and comments) and the facts
   hash of description files are frozen for the samples and a builder-made service by
   `tests/unit/test_flow_facts_golden.py`; change them only on purpose.

@@ -226,6 +226,7 @@ class FlowLogic:
     unreachable: tuple[UnreachableStep, ...]
     limits: tuple[str, ...]
     step_text: dict[str, str]  # node id -> how a reader finds the step (policy-safe)
+    node_guards: dict[str, Guard]  # node id -> when the step runs (every analysed step)
     _decisions: dict[str, Decision] = field(init=False, repr=False, compare=False)
     _cases: dict[str, DecisionCase] = field(init=False, repr=False, compare=False)
     _exits: dict[str, ExitEffect] = field(init=False, repr=False, compare=False)
@@ -249,6 +250,10 @@ class FlowLogic:
 
     def call(self, call_id: str) -> CallContext:
         return self._calls[call_id]
+
+    def guard_of(self, node_id: str) -> Guard:
+        """When the step runs; an empty guard (every normal run) for steps never walked."""
+        return self.node_guards.get(node_id, Guard())
 
 
 def compute_flow_logic(service: FlowService) -> FlowLogic | None:
@@ -323,6 +328,7 @@ class _Analysis:
         self.call_contexts: dict[str, CallContext] = {}
         self.exit_effects: dict[str, ExitEffect] = {}
         self.decision_guards: dict[str, Guard] = {}
+        self.node_guards: dict[str, Guard] = {}
         self.loop_of: dict[str, str] = {}
         self.unreachable: list[UnreachableStep] = []
         self.too_deep = False
@@ -507,7 +513,7 @@ class _Analysis:
         if kind is FlowNodeType.LOOP:
             _completes, finishes, leaving = self._sequence_outcome(node)
             return _Outcome(True, leaving)  # a LOOP may run zero times (S29)
-        if kind is FlowNodeType.SEQUENCE and _is_alternatives(node):
+        if kind is FlowNodeType.SEQUENCE and is_alternatives(node):
             completes = False
             leaving_all = set()
             finally_completes = True
@@ -516,7 +522,7 @@ class _Analysis:
                 child_outcome = self.outcome(child)
                 finishes, leaving = self._lift(child_outcome, node)
                 leaving_all |= leaving
-                if _form(child) == "FINALLY":
+                if step_form(child) == "FINALLY":
                     finally_completes = child_outcome.completes or finishes
                     finally_finishes = finishes  # it may replace a pending EXIT (S13)
                 else:
@@ -531,7 +537,7 @@ class _Analysis:
 
     def _sequence_outcome(self, node: FlowNode) -> tuple[bool, bool, frozenset[str]]:
         """(the end of the children is reached, an EXIT finishes `node`, EXITs leaving it)."""
-        done = _exit_on(node) == "DONE"
+        done = sequence_exit_on(node) == "DONE"
         finishes = False
         leaving_all: set[str] = set()
         for child in node.children:
@@ -539,7 +545,7 @@ class _Analysis:
             child_finishes, leaving = self._lift(child_outcome, node)
             finishes = finishes or child_finishes
             leaving_all |= leaving
-            if _form(child) == "CATCH":
+            if step_form(child) == "CATCH":
                 continue  # skipped on a normal run
             if not child_outcome.completes and not done:
                 return False, finishes, frozenset(leaving_all)
@@ -578,6 +584,7 @@ class _Analysis:
             unreachable=tuple(self.unreachable),
             limits=tuple(limits),
             step_text={node.id: self._step_text(node) for node in self.order},
+            node_guards=self.node_guards,
         )
 
     def _walk(
@@ -595,7 +602,7 @@ class _Analysis:
         if depth > MAX_DEPTH:
             self.too_deep = True
             term = GuardTerm(GuardKind.NOT_ANALYSED, node.id, Certainty.UNKNOWN)
-            for inner in _subtree(node):
+            for inner in subtree(node):
                 self._record(inner, guard.extend(term), blocked, loop_id)
             return
         self._record(node, guard, blocked, loop_id)
@@ -623,7 +630,7 @@ class _Analysis:
                 exit_ids=leaving,
             )
             self._walk_sequence(node, guard.extend(term), depth, blocked, node.id)
-        elif kind is FlowNodeType.SEQUENCE and _is_alternatives(node):
+        elif kind is FlowNodeType.SEQUENCE and is_alternatives(node):
             self._walk_alternatives(node, guard, depth, blocked, loop_id)
         elif kind in (FlowNodeType.FLOW, FlowNodeType.SEQUENCE):
             self._walk_sequence(node, guard, depth, blocked, loop_id)
@@ -634,7 +641,7 @@ class _Analysis:
     def _loop_leavers(self, node: FlowNode) -> tuple[str, ...]:
         """EXITs inside a LOOP or REPEAT that may end it early (or go somewhere unknown)."""
         found = []
-        for inner in _subtree(node):
+        for inner in subtree(node):
             if inner.type is FlowNodeType.EXIT:
                 reach = self.reach[inner.id]
                 if reach is None or reach == node.id or self._above(reach, node.id):
@@ -648,6 +655,7 @@ class _Analysis:
         blocked: tuple[tuple[str, ...], tuple[str, ...]] | None,
         loop_id: str | None,
     ) -> None:
+        self.node_guards.setdefault(node.id, guard)
         if node.id in self.call_ids and node.id not in self.call_contexts:
             occurrence = self.occurrences[node.call_occurrence_id or ""]
             target = node.target or occurrence.target
@@ -738,12 +746,12 @@ class _Analysis:
         loop_id: str | None,
     ) -> None:
         """Children run in order; earlier EXITs may skip or block the later ones."""
-        done = _exit_on(node) == "DONE"
+        done = sequence_exit_on(node) == "DONE"
         current = guard
         local_block = blocked
         tries: list[str] = []
         for child in node.children:
-            form = _form(child)
+            form = step_form(child)
             child_guard = current
             if form == "CATCH":
                 child_guard = current.extend(
@@ -793,7 +801,7 @@ class _Analysis:
         rules = ["S10", "S11"]
         if any(
             inner.type is FlowNodeType.BRANCH and self._has_default(inner)
-            for inner in _subtree(child)
+            for inner in subtree(child)
         ):
             rules.append("S6")  # the BRANCH cannot fall through only because of its $default
         if any(_parent_is_case(self.parent[item]) for item in self.outcome(child).leaves):
@@ -847,8 +855,8 @@ class _Analysis:
                         exit_ids=self._exit_names(explained),
                     )
                 )
-        elif child.type is FlowNodeType.SEQUENCE and _is_alternatives(child):
-            alternatives = [item for item in child.children if _form(item) != "FINALLY"]
+        elif child.type is FlowNodeType.SEQUENCE and is_alternatives(child):
+            alternatives = [item for item in child.children if step_form(item) != "FINALLY"]
             if len(alternatives) > 1:
                 first, rest = alternatives[0], alternatives[1:]
                 if all(self._always_leaves(item, child, parent) for item in rest):
@@ -859,7 +867,7 @@ class _Analysis:
                             GuardKind.ONLY_IF_SUCCEEDED,
                             child.id,
                             Certainty.DERIVED,
-                            ("S13", "S14") if _form(first) == "TRY" else ("S10",),
+                            ("S13", "S14") if step_form(first) == "TRY" else ("S10",),
                             step_ids=(first.id,),
                             exit_ids=self._exit_names(explained),
                         )
@@ -884,7 +892,7 @@ class _Analysis:
         """
         earlier: list[str] = []
         for child in node.children:
-            form = _form(child)
+            form = step_form(child)
             if form == "FINALLY":
                 term = GuardTerm(GuardKind.FINALLY, node.id, Certainty.DERIVED, ("S13", "S14"))
                 self._walk(child, guard.extend(term), depth + 1, blocked, loop_id)
@@ -936,7 +944,7 @@ class _Analysis:
                     ends_with=ends,
                     call_ids=tuple(
                         self.call_ids[inner.id]
-                        for inner in _subtree(case)
+                        for inner in subtree(case)
                         if inner.id in self.call_ids
                     ),
                     source=case.source,
@@ -992,7 +1000,7 @@ class _Analysis:
         label = node.label
         visible = label.value if label and label.disclosure is TextDisclosure.INCLUDED else None
         kind = _STEP_NAMES.get(node.type, node.type.value)
-        form = _form(node)
+        form = step_form(node)
         if form:
             kind = f"{form} block"
         line = f" (line {node.source.line})" if node.source.line else ""
@@ -1054,10 +1062,10 @@ def case_rules(mode: DecisionMode, kind: ConditionKind) -> tuple[str, ...]:
     return sort_rules(("S1", *_CONDITION_RULES[(mode, kind)]))
 
 
-def _subtree(node: FlowNode) -> Iterator[FlowNode]:
+def subtree(node: FlowNode) -> Iterator[FlowNode]:
     yield node
     for child in node.children:
-        yield from _subtree(child)
+        yield from subtree(child)
 
 
 def _condition(case: FlowNode, mode: DecisionMode) -> CaseCondition:
@@ -1082,20 +1090,24 @@ def _condition(case: FlowNode, mode: DecisionMode) -> CaseCondition:
     return CaseCondition(ConditionKind.VALUE, text)
 
 
-def _form(node: FlowNode) -> str | None:
+def step_form(node: FlowNode) -> str | None:
     if node.type is not FlowNodeType.SEQUENCE:
         return None
     form = (node.form or "").strip().upper()
     return form if form in FORMS else None
 
 
-def _exit_on(node: FlowNode) -> str:
+def sequence_exit_on(node: FlowNode) -> str:
     return (node.exit_on or "FAILURE").strip().upper() if node.type is FlowNodeType.SEQUENCE else ""
 
 
-def _is_alternatives(node: FlowNode) -> bool:
+def is_alternatives(node: FlowNode) -> bool:
     """An EXIT-ON SUCCESS sequence (TRY/CATCH blocks inside it are its alternatives)."""
-    return node.type is FlowNodeType.SEQUENCE and not _form(node) and _exit_on(node) == "SUCCESS"
+    return (
+        node.type is FlowNodeType.SEQUENCE
+        and not step_form(node)
+        and sequence_exit_on(node) == "SUCCESS"
+    )
 
 
 def _handles_failure_of(parent: FlowNode, child: FlowNode) -> bool:
@@ -1108,12 +1120,12 @@ def _handles_failure_of(parent: FlowNode, child: FlowNode) -> bool:
     siblings = list(parent.children)
     position = next(index for index, item in enumerate(siblings) if item is child)
     later = siblings[position + 1 :]
-    if parent.type is FlowNodeType.SEQUENCE and not _form(parent):
-        if _exit_on(parent) == "DONE":
+    if parent.type is FlowNodeType.SEQUENCE and not step_form(parent):
+        if sequence_exit_on(parent) == "DONE":
             return True
-        if _exit_on(parent) == "SUCCESS":
-            return any(_form(item) != "FINALLY" for item in later)
-    return _form(child) == "TRY" and bool(later) and _form(later[0]) == "CATCH"
+        if sequence_exit_on(parent) == "SUCCESS":
+            return any(step_form(item) != "FINALLY" for item in later)
+    return step_form(child) == "TRY" and bool(later) and step_form(later[0]) == "CATCH"
 
 
 def _parent_is_case(parent: FlowNode | None) -> bool:
@@ -1124,7 +1136,7 @@ def _is_significant(node: FlowNode) -> bool:
     if node.type in (FlowNodeType.BRANCH, FlowNodeType.EXIT):
         return True
     if node.type is FlowNodeType.SEQUENCE:
-        return bool(_form(node)) or _exit_on(node) != "FAILURE"
+        return bool(step_form(node)) or sequence_exit_on(node) != "FAILURE"
     return False
 
 

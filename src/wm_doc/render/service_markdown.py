@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from jinja2 import Template
 
 from wm_doc.builtins import builtin_effect, is_builtin_name
+from wm_doc.flow_lineage import compute_flow_lineage
 from wm_doc.flow_logic import compute_flow_logic
 from wm_doc.ir import (
     CallOccurrence,
@@ -28,6 +29,7 @@ from wm_doc.ir import (
     ProcessDefinition,
     ProcessServiceMembership,
     ServiceDocumentDependency,
+    ServiceSignature,
     ServiceType,
     SignatureField,
     SourceReference,
@@ -330,7 +332,9 @@ def render_service_markdown(
     doc: ServiceDoc | None = None,
     facts: ServiceFacts | None = None,
     call_graph: tuple[str, str] | None = None,
+    signatures: Mapping[str, ServiceSignature] | None = None,
 ) -> str:
+    """One service page; `signatures` (analysed services) name declared callee outputs."""
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
     process_definitions = process_definitions or {}
@@ -361,9 +365,11 @@ def render_service_markdown(
     java_static_invocations = _java_invocations_for_static(service.java_analysis, True)
     java_dynamic_invocations = _java_invocations_for_static(service.java_analysis, False)
     description_text = _text_display(service.description)
+    logic = compute_flow_logic(service)
+    lineage = compute_flow_lineage(service, logic, signatures)
     return _TEMPLATE.render(
         service=service,
-        decisions_text=render_decisions_section(compute_flow_logic(service)),
+        decisions_text=render_decisions_section(logic, lineage),
         verbose=verbose,
         doc=doc,
         doc_badge=doc_badge(doc) if doc is not None else "",
@@ -1043,6 +1049,7 @@ def write_service_markdown(
     process_definitions = {process.process_id: process for process in processes or []}
     filenames = service_markdown_filenames(services)
     service_docs = service_docs or {}
+    signatures = {service.identity.full_name: service.signature for service in services}
     for service in sorted(services, key=lambda item: item.identity.full_name.casefold()):
         path = service_dir / filenames[service.identity.full_name]
         path.write_text(
@@ -1055,6 +1062,7 @@ def write_service_markdown(
                 doc=service_docs.get(service.identity.full_name),
                 facts=(service_facts or {}).get(service.identity.full_name),
                 call_graph=(service_graphs or {}).get(service.identity.full_name),
+                signatures=signatures,
             ),
             encoding="utf-8",
         )

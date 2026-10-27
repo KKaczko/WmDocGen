@@ -107,6 +107,7 @@ def write_scoped_service_markdown(
     incoming = _incoming_dependencies_by_target(analysis.unique_dependencies)
     process_definitions = _scoped_process_definitions(analysis, scope)
     process_memberships_by_service = _scoped_process_memberships_by_service(analysis, scope)
+    signatures = {item.identity.full_name: item.signature for item in analysis.services}
     written: list[Path] = []
     for service in sorted(services, key=lambda item: item.identity.full_name.casefold()):
         path = service_dir / service_markdown_filename(service.identity.full_name)
@@ -116,6 +117,7 @@ def write_scoped_service_markdown(
             process_memberships_by_service.get(service.identity.full_name, []),
             process_definitions,
             verbose=verbose,
+            signatures=signatures,
         )
         markdown = _insert_scope_section(
             markdown,

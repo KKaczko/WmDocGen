@@ -665,6 +665,7 @@ def write_demo_descriptions(
 ) -> int:
     """Write the synthetic description files for the services that exist; return how many."""
     services = {service.identity.full_name: service for service in analysis.services}
+    signatures = {name: service.signature for name, service in services.items()}
     names = [name for name in _DEMOS if name in services]
     facts = compute_service_facts(analysis)
     hashes = current_facts_hashes(analysis, packages_root, config, facts=facts, only=set(names))
@@ -696,7 +697,7 @@ def write_demo_descriptions(
             text_hash=text_hash(written_text),
             narrative=narrative,
             notes=NOTES_MARKER,
-            facts_markdown=render_facts_block(service, facts[name]),
+            facts_markdown=render_facts_block(service, facts[name], signatures),
             current_facts_hash=current,
             extra_front_matter=extra,
         )

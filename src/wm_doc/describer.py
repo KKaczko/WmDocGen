@@ -38,7 +38,16 @@ from wm_doc.config import AppConfig
 from wm_doc.disclosure import unsafe_disclosure_label
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
-from wm_doc.ir import AnalysisResult, FlowService, Importance, ServiceType, SignatureField
+from wm_doc.flow_lineage import compute_flow_lineage
+from wm_doc.flow_logic import compute_flow_logic
+from wm_doc.ir import (
+    AnalysisResult,
+    FlowService,
+    Importance,
+    ServiceSignature,
+    ServiceType,
+    SignatureField,
+)
 from wm_doc.ollama_provider import (
     HTTP_TIMEOUT_SECONDS,
     TEMPERATURE,
@@ -52,6 +61,7 @@ from wm_doc.pseudocode import (
     load_flow_comments,
     render_pseudocode,
 )
+from wm_doc.render.flow_markdown import render_decision_facts
 from wm_doc.render.service_markdown import render_effects_table, render_entry_points_table
 from wm_doc.render.service_summary import adapter_sentence
 from wm_doc.service_docs import (
@@ -620,8 +630,17 @@ def approve_docs(
     return sorted(approved, key=str.casefold), sorted(wanted - found, key=str.casefold)
 
 
-def render_facts_block(service: FlowService, facts: ServiceFacts) -> str:
-    """Deterministic facts shown at the bottom of every description file."""
+def render_facts_block(
+    service: FlowService,
+    facts: ServiceFacts,
+    signatures: Mapping[str, ServiceSignature] | None = None,
+) -> str:
+    """Deterministic facts shown at the bottom of every description file.
+
+    Refreshed on every run and not part of the facts hash, so adding facts here never marks
+    an approved description as changed. `signatures` (analysed services) name declared
+    callee outputs in the Decisions part.
+    """
     callers = (
         ", ".join(f"`{name}`" for name in facts.callers)
         if facts.callers
@@ -646,6 +665,10 @@ def render_facts_block(service: FlowService, facts: ServiceFacts) -> str:
     lines += _field_lines("Input", service.signature.inputs)
     lines += _field_lines("Output", service.signature.outputs)
     lines += ["", "### Data and systems touched", "", render_effects_table(facts).rstrip()]
+    logic = compute_flow_logic(service)
+    decisions = render_decision_facts(logic, compute_flow_lineage(service, logic, signatures))
+    if decisions:
+        lines += ["", decisions]
     return "\n".join(lines)
 
 
@@ -874,6 +897,7 @@ class _Run:
         self.services = services
         self.facts = facts
         self.callee_outputs = callee_outputs_lookup(services)
+        self.signatures = {name: item.signature for name, item in services.items()}
         self.session = session
         self.options = options
         self.position = {name: index for index, name in enumerate(order)}
@@ -944,7 +968,7 @@ class _Run:
             service, facts, comments, self.external_note, self.callee_outputs
         )
         current_hash = facts_hash(deterministic)
-        facts_markdown = render_facts_block(service, facts)
+        facts_markdown = render_facts_block(service, facts, self.signatures)
         path = self.path(name)
         existing = self.doc(name)
 

@@ -375,3 +375,16 @@ anything. Every conclusion cites the Integration Server rules in `flow_semantics
 `render/flow_markdown.py` writes the "Decisions" section of service pages (between Calls and
 Data and Systems Touched) and the rule table in `LIMITATIONS.md`. Case labels and step labels
 appear only when the free-text policy includes them, always inside code spans.
+
+`flow_lineage.py` adds, for every field a decision tests, where it may come from. It follows
+MAPCOPY sources back a bounded number of steps (demand-driven, at most 200 fields per service),
+then walks the FLOW once and keeps, per field, the definitions that may reach each point:
+mapping lines of MAP steps and INVOKE maps (one MAP reads before it writes, S19), transformer
+outputs (S18), a called service's declared outputs and the fields its own output map reads
+(possible only), `clearPipeline` and `restorePipeline*`, the service's declared inputs, or the
+caller's pipeline. BRANCH cases, EXITs, failure paths (CATCH, EXIT-ON SUCCESS and DONE,
+REPEAT) and LOOP iterations are joined. Any called service may change any field (S16), so the
+calls between the last certain definition and the decision are listed as a caveat. Steps with
+a scope and loops nested too deeply are not followed; the fields they may change get an
+unknown origin. The page shows "Where `/x` comes from" under each decision; description files
+show a one-line summary per field in the facts block.
