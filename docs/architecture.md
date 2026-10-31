@@ -397,3 +397,20 @@ calls between the last certain definition and the decision are listed as a cavea
 a scope and loops nested too deeply are not followed; the fields they may change get an
 unknown origin. The page shows "Where `/x` comes from" under each decision; description files
 show a one-line summary per field in the facts block.
+
+`flow_scenarios.py` combines decisions into scenarios, but only along data dependencies: a
+decision depends on an earlier one when an origin of a field it tests (or of a field copied into
+it) runs only in some cases of the earlier decision, or when the field may carry what a call in
+such a case returns. Each chain (at most 4 decisions, at most 32 scenarios per table) is
+enumerated depth-first; for every outcome chosen so far the lineage is walked again with those
+outcomes fixed and only the chain's fields followed, so later decisions see exactly the origins
+of those paths (cases of enclosing decisions that a chosen outcome implies are fixed too).
+A decision that some paths may skip (its guard has conditions the chosen outcomes do not settle,
+or an earlier LOOP or BRANCH may fail on a missing value) also gets "not reached". Outcomes
+leaving the same origins further on are grouped; an outcome is ruled out only when the field
+holds one observed, included literal on every path and a value label differs from it. Each
+scenario lists its calls, how it ends (an EXIT, a missing switch failing the BRANCH, a LOOP that
+may fail on a missing array), the calls whose responses it depends on, a feasibility (possible,
+conditional, unresolved) and the assumed rules it rests on. Decisions inside loops and
+independent decisions are never combined. The service page shows the tables under
+`### Scenarios` in the Decisions section.

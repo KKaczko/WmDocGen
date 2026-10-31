@@ -12,6 +12,7 @@ from jinja2 import Template
 from wm_doc.builtins import builtin_effect, is_builtin_name
 from wm_doc.flow_lineage import compute_flow_lineage
 from wm_doc.flow_logic import compute_flow_logic
+from wm_doc.flow_scenarios import compute_flow_scenarios
 from wm_doc.ir import (
     CallOccurrence,
     DependencyKind,
@@ -367,9 +368,10 @@ def render_service_markdown(
     description_text = _text_display(service.description)
     logic = compute_flow_logic(service)
     lineage = compute_flow_lineage(service, logic, signatures)
+    scenarios = compute_flow_scenarios(service, logic, lineage, signatures)
     return _TEMPLATE.render(
         service=service,
-        decisions_text=render_decisions_section(logic, lineage),
+        decisions_text=render_decisions_section(logic, lineage, scenarios),
         verbose=verbose,
         doc=doc,
         doc_badge=doc_badge(doc) if doc is not None else "",

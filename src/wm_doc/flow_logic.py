@@ -240,6 +240,9 @@ class FlowLogic:
     limits: tuple[str, ...]
     step_text: dict[str, str]  # node id -> how a reader finds the step (policy-safe)
     node_guards: dict[str, Guard]  # node id -> when the step runs (every analysed step)
+    # BRANCH or LOOP node id -> (where its own failure ends, as for an EXIT with FAILURE: the
+    # step that fails up to a handler, or the service; None when unknown; the rules used).
+    failure_ends: dict[str, tuple[str | None, tuple[str, ...]]] = field(default_factory=dict)
     _decisions: dict[str, Decision] = field(init=False, repr=False, compare=False)
     _cases: dict[str, DecisionCase] = field(init=False, repr=False, compare=False)
     _exits: dict[str, ExitEffect] = field(init=False, repr=False, compare=False)
@@ -567,7 +570,10 @@ class _Analysis:
         rules = self.reach_rules.setdefault(exit_id, set())
         if self.exit_targets[exit_id][2] is ExitScope.FLOW:
             return target  # the service fails; no CATCH or FINALLY runs (S33)
-        current = self.nodes[target]
+        return self._failure_reach(self.nodes[target], rules)
+
+    def _failure_reach(self, current: FlowNode, rules: set[str]) -> str | None:
+        """When `current` fails: the step whose failure is handled (or the service), or None."""
         while True:
             parent = self.parent[current.id]
             if parent is None:
@@ -840,7 +846,16 @@ class _Analysis:
             limits=tuple(limits),
             step_text={node.id: self._step_text(node) for node in self.order},
             node_guards=self.node_guards,
+            failure_ends=self._failure_ends(),
         )
+
+    def _failure_ends(self) -> dict[str, tuple[str | None, tuple[str, ...]]]:
+        found: dict[str, tuple[str | None, tuple[str, ...]]] = {}
+        for node in self.order:
+            if node.type in (FlowNodeType.BRANCH, FlowNodeType.LOOP):
+                rules: set[str] = set()
+                found[node.id] = (self._failure_reach(node, rules), sort_rules(rules))
+        return found
 
     def _walk(
         self,

@@ -29,7 +29,7 @@ fields they may change get an "unknown" definition instead.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -168,6 +168,9 @@ class FlowLineage:
     origins: tuple[Origin, ...]
     unfollowed: dict[str, tuple[str, ...]]  # decision id -> why some of its fields are not listed
     limits: tuple[str, ...]
+    # Steps some path the walk knows reaches (failure paths included); steps that are not
+    # followed count as reached with everything inside them.
+    reached_nodes: frozenset[str] = frozenset()
     _origins: dict[str, Origin] = field(init=False, repr=False, compare=False)
     _by_decision: dict[str, tuple[VariableOrigins, ...]] = field(
         init=False, repr=False, compare=False
@@ -191,19 +194,39 @@ class FlowLineage:
         return self._by_decision.get(decision_id, ())
 
 
+@dataclass(frozen=True, slots=True)
+class Choice:
+    """How a walk restricted to one scenario takes a decision.
+
+    Only the listed cases run; `no_match` lets the BRANCH do nothing (S7), `fails` lets it
+    fail because its switch variable is missing (S31).
+    """
+
+    cases: frozenset[str] = frozenset()  # case ids (D1.c2)
+    no_match: bool = False
+    fails: bool = False
+
+
 def compute_flow_lineage(
     service: FlowService,
     logic: FlowLogic | None,
     signatures: Mapping[str, ServiceSignature] | None = None,
+    *,
+    only: Collection[str] | None = None,
+    choices: Mapping[str, Choice] | None = None,
 ) -> FlowLineage | None:
     """Origins of the fields tested by each decision; None without decisions.
 
     `signatures` maps analysed services to their signatures, so a call to one of them can
-    name its declared outputs as possible origins.
+    name its declared outputs as possible origins. `only` follows the fields of those
+    decisions alone, and `choices` fixes how some decisions (outside loops) are taken; both
+    serve scenarios (`flow_scenarios`), which walk one combination of cases at a time.
     """
     if service.flow_tree is None or logic is None or not logic.decisions:
         return None
-    return _Lineage(service, service.flow_tree, logic, signatures or {}).run()
+    return _Lineage(
+        service, service.flow_tree, logic, signatures or {}, only=only, choices=choices
+    ).run()
 
 
 # --- implementation ------------------------------------------------------------------------
@@ -274,11 +297,31 @@ class _Lineage:
         root: FlowNode,
         logic: FlowLogic,
         signatures: Mapping[str, ServiceSignature],
+        *,
+        only: Collection[str] | None = None,
+        choices: Mapping[str, Choice] | None = None,
     ) -> None:
         self.service = service
         self.root = root
         self.logic = logic
         self.signatures = signatures
+        self.only = frozenset(only) if only is not None else None
+        # BRANCH node id -> (the case node ids that may run, its choice)
+        self.choices: dict[str, tuple[frozenset[str], Choice]] = {
+            logic.decision(decision_id).node_id: (
+                frozenset(logic.case(case_id).node_id for case_id in choice.cases),
+                choice,
+            )
+            for decision_id, choice in (choices or {}).items()
+        }
+        self.reached_nodes: set[str] = set()
+        # Steps the control model proves never run: after an EXIT that always leaves first, a
+        # CATCH whose TRY cannot fail (S13), a FINALLY that every way out skips (S33).
+        self.never = {
+            item.node_id
+            for item in logic.unreachable
+            if item.reason in ("after_exit", "try_cannot_fail", "flow_failure")
+        }
         self.nodes: dict[str, FlowNode] = {}
         self.parent: dict[str, FlowNode | None] = {}
         self.position: dict[str, int] = {}
@@ -373,6 +416,8 @@ class _Lineage:
         tracked: dict[Key, None] = {}
         limited = False
         for position, decision in enumerate(self.logic.decisions):
+            if self.only is not None and decision.id not in self.only:
+                continue
             if position >= MAX_DECISIONS:
                 self.unfollowed.setdefault(decision.id, []).append("decision_limit")
                 continue
@@ -575,6 +620,7 @@ class _Lineage:
         ]
         for child in node.children:
             if child.type is FlowNodeType.MAPINVOKE:
+                self.reached_nodes.add(child.id)
                 writes += self._transformer_writes(child)
         return writes
 
@@ -846,8 +892,9 @@ class _Lineage:
         later alternative, an EXIT-ON DONE sequence or a REPEAT does); without it they are not
         collected, which keeps large services fast.
         """
-        if state is None:
+        if state is None or node.id in self.never:
             return _Result(None, None, [])
+        self.reached_nodes.add(node.id)
         if depth > MAX_DEPTH:
             self.too_deep = True
             return self._blind(node, state, "too_deep", ())
@@ -861,6 +908,7 @@ class _Lineage:
         inside: set[str] = set()
         for inner in subtree(node):
             inside.add(inner.id)
+            self.reached_nodes.add(inner.id)
             decision = self.decisions.get(inner.id)
             if decision is not None:
                 self.blind.setdefault(decision.id, reason)
@@ -957,7 +1005,17 @@ class _Lineage:
             dead = {case.node_id for case in decision.cases if case.unreachable_rule == "S8"}
             if decision.has_default:
                 normal = None
-        failed: _State | None = state if fails else None
+        chosen = self.choices.get(node.id)
+        if chosen is not None:
+            allowed, choice = chosen
+            normal = state if choice.no_match else None
+            dead |= {
+                child.id
+                for child in node.children
+                if child.type is FlowNodeType.BRANCH_CASE and child.id not in allowed
+            }
+        own_failure = chosen is None or chosen[1].fails
+        failed: _State | None = state if fails and own_failure else None
         exits: list[tuple[str, _State]] = []
         for child in node.children:
             if child.id in dead:
@@ -979,8 +1037,12 @@ class _Lineage:
         handlers = any(step_form(child) in ("CATCH", "FINALLY") for child in node.children)
         keep = fails or handlers  # this sequence's own failure states are used
         current: _State | None = state
-        failed: _State | None = state if keep else None
+        # The sequence itself fails only on a timeout or a setting not read; its children
+        # report their own failure states, each including the state it started from.
+        own = bool((node.attributes.get("TIMEOUT") or "").strip() or node.unknown_attributes)
+        failed: _State | None = state if keep and own else None
         try_failed: _State | None = None
+        after_try = False  # inside a TRY with its CATCH and FINALLY blocks
         # Since the last TRY: where its EXITs start in `exits`, and its failure states.
         unit_start: int | None = None
         unit_failed: _State | None = None
@@ -988,14 +1050,14 @@ class _Lineage:
         for child in node.children:
             form = step_form(child)
             if form == "CATCH":
-                entry = try_failed if try_failed is not None else failed
+                entry = try_failed if after_try else failed
                 result = self._walk(child, entry, depth + 1, loops, fails=keep)
                 current = _join(current, result.normal)
                 if done:  # a CATCH that fails does not stop the sequence
                     current = _join(current, result.failed)
                 unit_failed = _join(unit_failed, result.failed)
-                try_failed = None
             elif form == "FINALLY":
+                after_try = False
                 start = len(exits) if unit_start is None else unit_start
                 pending = exits[start:]
                 entry = _join(current, failed if unit_start is None else unit_failed)
@@ -1011,10 +1073,11 @@ class _Lineage:
                 if form == "TRY":
                     unit_start, unit_failed = len(exits), None
                 result = self._walk(child, current, depth + 1, loops, fails=child_fails)
+                after_try = form == "TRY"
                 if form == "TRY":
                     # No rollback for the CATCH by default (S15); a configured rollback would
                     # restore states the failure states already include.
-                    try_failed = _join(try_failed, result.failed)
+                    try_failed = result.failed
                     unit_failed = result.failed
                 if done and form is None and before is not None:
                     current = _join(result.normal, self._rollback(before, result.failed))
@@ -1024,7 +1087,7 @@ class _Lineage:
                     current = result.normal
             exits += result.exits
             if keep:
-                failed = _join_all(failed, result.failed, current)
+                failed = _join(failed, result.failed)
         return _Result(current, failed, exits)
 
     def _finally(
@@ -1278,6 +1341,7 @@ class _Lineage:
             origins=origins,
             unfollowed={key: tuple(value) for key, value in self.unfollowed.items()},
             limits=tuple(dict.fromkeys(self.limits)),
+            reached_nodes=frozenset(self.reached_nodes),
         )
 
     def _sort_key(self, item: _Def) -> tuple[int, int, int, Key, int]:

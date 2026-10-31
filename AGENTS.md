@@ -58,7 +58,7 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   managed output paths for `analyze` and `explorer build`.
 - Explorer (`explorer/`, app source in `explorer-ui/`): see "Explorer".
 - Conditional FLOW logic (`flow_semantics.py`, `flow_paths.py`, `flow_logic.py`,
-  `flow_lineage.py`, later `flow_scenarios.py`): see "Conditional FLOW logic". Tests build FLOW
+  `flow_lineage.py`, `flow_scenarios.py`): see "Conditional FLOW logic". Tests build FLOW
   services with `tests/support/flowxml.py` (test-only; `samples/` stays read-only).
 
 ## Contracts
@@ -172,6 +172,17 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   transformer outputs, overwrite-off sets, declared callee outputs, `clearPipeline` (its
   `preserve` list may come from the pipeline) and lines with uninterpreted attributes keep the
   earlier ones possible.
+- Scenarios (`flow_scenarios.py`, the `### Scenarios` part of the Decisions section) combine
+  decisions only along data dependencies (an origin of a later decision's field runs only in
+  some cases of an earlier one, or it carries a response of a call there), one table per chain
+  of at most 4 decisions and at most 32 scenarios, then a "cut short" marker; independent
+  decisions and decisions inside loops are never combined. Each scenario re-walks the lineage
+  with its outcomes fixed (`compute_flow_lineage(..., only=, choices=)`), groups cases that
+  leave the same origins further on, and includes a missing switch failing the BRANCH (S31),
+  LOOPs failing on a missing array (S29) and EXIT `$flow` FAILURE (S33); a decision some paths
+  may skip also gets "not reached". An outcome is ruled out only when a unique observed included
+  literal (no surrounding blanks) differs from a value label; never by a match (labels are
+  trimmed when parsed), patterns, expressions, withheld labels or hidden literals.
 - Description files show the decisions and their origins under `### Decisions` in the facts
   block (refreshed on every run, not part of the facts hash). When stage 4 hashes the logic,
   the hashed form carries behaviour only, never a rule status or an assumption label, so a

@@ -38,6 +38,16 @@ from wm_doc.flow_logic import (
     sort_rules,
     weakest,
 )
+from wm_doc.flow_scenarios import (
+    MAX_CHAIN,
+    MAX_SCENARIOS,
+    FlowScenarios,
+    Outcome,
+    OutcomeKind,
+    RuledOut,
+    Scenario,
+    ScenarioTable,
+)
 from wm_doc.flow_semantics import RULES, assumption_label, rule_label
 from wm_doc.ir import CallType, MappingOperationType
 
@@ -139,7 +149,11 @@ _NOTE_SUFFIX = {
 }
 
 
-def render_decisions_section(logic: FlowLogic | None, lineage: FlowLineage | None = None) -> str:
+def render_decisions_section(
+    logic: FlowLogic | None,
+    lineage: FlowLineage | None = None,
+    scenarios: FlowScenarios | None = None,
+) -> str:
     """The section body (without its heading), or "" when there is nothing conditional."""
     if logic is None or not logic.significant:
         return ""
@@ -152,6 +166,8 @@ def render_decisions_section(logic: FlowLogic | None, lineage: FlowLineage | Non
     parts += _more(len(logic.decisions), MAX_DECISIONS_SHOWN, "decision")
     if lineage is not None and lineage.limits:
         parts.append("Origin limits: " + "; ".join(lineage.limits) + ".")
+    if scenarios is not None and scenarios.tables:
+        parts.append(render_scenarios(logic, scenarios))
     if logic.calls:
         parts.append(_calls_block(logic))
     if logic.exits:
@@ -808,6 +824,195 @@ def _unreachable_block(logic: FlowLogic) -> str:
 
 def _call_ref(logic: FlowLogic, call_id: str) -> str:
     return f"{call_id} {code_span(logic.call(call_id).target)}"
+
+
+# --- scenarios -----------------------------------------------------------------------------
+
+SCENARIOS_INTRO = (
+    "Decisions whose fields depend on an earlier decision are combined along that dependency, "
+    f"at most {MAX_CHAIN} in a row; decisions that depend on no other one are never multiplied "
+    "with each other. Each row takes one outcome per decision; cases that leave the same "
+    "origins further on are grouped. A combination is ruled out only when the field has one "
+    "observed literal on every path and a value label differs from it. Calls that also need "
+    'another condition say so. "possible": values this service sets itself may lead there; '
+    '"conditional": it also needs a value from the caller or a call\'s response; '
+    '"unresolved": a field or condition is not followed.'
+)
+MAX_RULED_SHOWN = 20
+
+
+def render_scenarios(logic: FlowLogic, scenarios: FlowScenarios) -> str:
+    """The "### Scenarios" part of the Decisions section, or "" without combined decisions."""
+    if not scenarios.tables:
+        return ""
+    lines = ["### Scenarios", "", SCENARIOS_INTRO]
+    for table in scenarios.tables:
+        if not table.scenarios:
+            lines += [
+                "",
+                f"{', '.join(table.decision_ids)} depend on each other but are not combined: "
+                "the limit on combinations followed per service was reached.",
+            ]
+            continue
+        lines += ["", *_scenario_table(logic, table)]
+    if scenarios.independent:
+        lines += ["", f"Not combined with another decision: {', '.join(scenarios.independent)}."]
+    if scenarios.in_loops:
+        lines += [
+            "",
+            "Inside a loop, so each iteration may take another case; not combined: "
+            f"{', '.join(scenarios.in_loops)}.",
+        ]
+    if scenarios.limits:
+        lines += ["", "Scenario limits: " + "; ".join(scenarios.limits) + "."]
+    return "\n".join(lines)
+
+
+def _scenario_table(logic: FlowLogic, table: ScenarioTable) -> list[str]:
+    lines = [
+        f"#### {', '.join(table.decision_ids)}",
+        "",
+        "| # | Conditions | Calls, in order | Ends with | Depends on responses of | Feasibility |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for scenario in table.scenarios:
+        calls = [_scenario_call(logic, table, scenario, call_id) for call_id in scenario.call_ids]
+        depends = ", ".join(_call_ref(logic, call_id) for call_id in scenario.depends_on_calls)
+        label = assumption_label(scenario.rules)
+        feasibility = scenario.feasibility.value + (f" ({label})" if label else "")
+        lines.append(
+            f"| {scenario.id} | {_cell(_conditions(logic, scenario.outcomes))} | "
+            f"{_cell(', '.join(calls)) or '-'} | {_cell(_scenario_end(logic, scenario))} | "
+            f"{_cell(depends) or '-'} | {_cell(feasibility)} |"
+        )
+    if table.walk_limit:
+        lines += [
+            "",
+            "Cut short: the limit on combinations followed per service was reached; further "
+            "combinations are not shown.",
+        ]
+    elif table.truncated:
+        lines += [
+            "",
+            f"Cut short: at most {MAX_SCENARIOS} scenarios are listed; further combinations "
+            "are not shown.",
+        ]
+    if table.left_out:
+        lines += [
+            "",
+            f"{', '.join(table.left_out)} also depend on these decisions and are not combined "
+            f"(at most {MAX_CHAIN} in a row).",
+        ]
+    if table.ruled_out:
+        lines += ["", "Ruled out:", ""]
+        lines += [f"- {_ruled_text(logic, item)}" for item in table.ruled_out[:MAX_RULED_SHOWN]]
+        hidden = len(table.ruled_out) - min(len(table.ruled_out), MAX_RULED_SHOWN)
+        if hidden:
+            lines.append(f"- and {hidden} more")
+    return lines
+
+
+def outcome_text(logic: FlowLogic, outcome: Outcome) -> str:
+    decision = logic.decision(outcome.decision_id)
+    if outcome.kind is OutcomeKind.NOT_REACHED:
+        return f"{decision.id} is not reached"
+    if outcome.kind is OutcomeKind.FAILS:
+        field = code_span(decision.switch.text()) if decision.switch else "the switch value"
+        return f"{decision.id} fails: {field} is missing ({rule_label(['S31'])})"
+    names = [case_short(logic.case(case_id)) for case_id in outcome.case_ids]
+    if not names:
+        return f"{decision.id}: no case matches"
+    text = f"{decision.id} = {' or '.join(names)}"
+    return f"{text} or no case matches" if outcome.no_match else text
+
+
+def _conditions(logic: FlowLogic, outcomes: tuple[Outcome, ...]) -> str:
+    return "; ".join(outcome_text(logic, item) for item in outcomes)
+
+
+def _scenario_call(
+    logic: FlowLogic, table: ScenarioTable, scenario: Scenario, call_id: str
+) -> str:
+    """A call of a scenario, with what else it needs: cases of a grouped outcome, decisions
+    outside the table, loops, failures."""
+    call = logic.call(call_id)
+    return _call_ref(logic, call_id) + _qualifiers(logic, table, scenario, call.guard, call.reach)
+
+
+def _qualifiers(
+    logic: FlowLogic,
+    table: ScenarioTable,
+    scenario: Scenario,
+    guard: Guard,
+    reach: Reach | None = None,
+) -> str:
+    text = ""
+    for outcome in scenario.outcomes:
+        if not outcome.grouped:
+            continue
+        for term in guard.terms:
+            if term.kind is GuardKind.IN_CASE and term.decision_id == outcome.decision_id:
+                cases = [case_short(logic.case(case_id)) for case_id in term.case_ids]
+                text += f" (only when {outcome.decision_id} = {' or '.join(cases)})"
+    others = [
+        term_text(logic, term)
+        for term in guard.terms
+        if (
+            term.kind in (GuardKind.IN_CASE, GuardKind.NOT_CASES)
+            and term.decision_id not in table.decision_ids
+        )
+        or term.kind in (GuardKind.PER_ITERATION, GuardKind.PER_ATTEMPT)
+    ]
+    if others:
+        text += f" (also only when {'; '.join(others)})"
+    if reach is Reach.FAILURE_PATH:
+        text += " (after a failure)"
+    return text
+
+
+def _scenario_end(logic: FlowLogic, scenario: Scenario) -> str:
+    if scenario.fails_at is not None:
+        text = f"{scenario.fails_at} fails ({rule_label(['S31'])}); "
+        if scenario.service_fails:
+            text += "the service fails"
+        elif scenario.failure_end is None:
+            text += "where the failure ends cannot be determined"
+        else:
+            text += (
+                f"{logic.step_text[scenario.failure_end]} fails with it, and what handles that "
+                "runs next (a CATCH, a later alternative or the rest of an EXIT-ON DONE "
+                "sequence)"
+            )
+    elif scenario.ends:
+        text = ", ".join(_exit_ref(logic, exit_id) for exit_id in scenario.ends)
+        if any("S33" in logic.exit(exit_id).rules for exit_id in scenario.ends):
+            text += f"; no CATCH or FINALLY runs ({rule_label(['S33'])})"
+    elif scenario.after is not None:
+        text = f"goes on after {scenario.after}"
+    else:
+        text = "-"
+    for node_id, array in scenario.loop_failures:
+        field = code_span(array) if array else "its array"
+        text += (
+            f"; or it fails instead if {field} is missing ({rule_label(['S29'])}), at "
+            f"{logic.step_text[node_id]}"
+        )
+    return text
+
+
+def _ruled_text(logic: FlowLogic, item: RuledOut) -> str:
+    decision = logic.decision(item.decision_id)
+    if item.case_id is None:
+        what = f"no case of {decision.id} matches"
+    else:
+        what = f"{decision.id} = {case_short(logic.case(item.case_id))}"
+    before = _conditions(logic, item.prefix)
+    when = f"{before}; {what}" if before else what
+    where = logic.step_text.get(item.node_id or "", "a step")
+    return (
+        f"{when}: {code_span(item.path)} is always {code_span(item.value)} there (set in "
+        f"{where}) ({rule_label(['S2'])})"
+    )
 
 
 def _exit_ref(logic: FlowLogic, exit_id: str) -> str:
