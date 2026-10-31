@@ -14,8 +14,13 @@ once in order and records, for every followed field, which definitions may reach
 
 Nothing is evaluated and no field is ever matched by a similar name. A definition replaces the
 earlier ones only when it certainly writes the field; otherwise the earlier ones stay possible.
+Linking a whole document shares it (S38): a line that changes a field inside one of the two
+linked documents may also change the same field of the other, which is kept as possible.
 BRANCH cases, failure paths (CATCH, EXIT-ON SUCCESS and DONE, REPEAT), EXITs and LOOP iterations
 are joined, so every definition that can reach a decision on a path the model knows is listed.
+After a failed child of an EXIT-ON SUCCESS or DONE sequence, or a failed attempt of a REPEAT on
+FAILURE, first-level fields go back to their earlier definitions, while nested fields keep both
+(S36); a TRY does not roll back for its CATCH (S15).
 Any called service shares the pipeline (S16) and may change any field: calls between the last
 certain definition and the decision are kept as a caveat rather than turned into definitions.
 Steps with a scope, loops nested too deeply and steps nested too deeply are not followed; the
@@ -34,13 +39,16 @@ from wm_doc.flow_logic import (
     ConditionKind,
     Decision,
     DecisionMode,
+    ExitScope,
     FlowLogic,
     Guard,
+    Unit,
     is_alternatives,
     sequence_exit_on,
     sort_rules,
     step_form,
     subtree,
+    units,
     weakest,
 )
 from wm_doc.flow_paths import PipelineRef, path_ref
@@ -81,6 +89,7 @@ class OriginKind(StrEnum):
     CLEARED = "cleared"  # pub.flow:clearPipeline
     RESTORED = "restored"  # pub.flow:restorePipeline*
     PARTIAL = "partial"  # a mapping line writes or drops a field inside it
+    LINKED = "linked"  # changed in place through a linked document (S38)
     COLLECTED = "collected"  # a LOOP's OUT-ARRAY
     SERVICE_INPUT = "service_input"  # a declared input, unchanged on this path
     CALLER = "caller"  # not set by this service on this path
@@ -101,6 +110,7 @@ ABSENT_KINDS = frozenset(
         OriginKind.SERVICE_INPUT,
         OriginKind.DROPPED,
         OriginKind.CLEARED,
+        OriginKind.LINKED,
         OriginKind.UNKNOWN,
     }
 )
@@ -290,6 +300,8 @@ class _Lineage:
         self.decision_keys: dict[str, tuple[Key, ...]] = {}
         # (decision id, field) where the decision names one list element (`/items[1]/x`).
         self.element_fields: set[tuple[str, Key]] = set()
+        # Followed fields that name the same field of two linked documents (S38).
+        self.aliases: dict[Key, set[Key]] = {}
         self.keys = self._tracked_keys()
         self.key_set = frozenset(self.keys)
         # Every prefix of a followed field -> the followed fields at or under it.
@@ -377,8 +389,10 @@ class _Lineage:
             self.limits.append(
                 f"only the fields of the first {MAX_DECISIONS} decisions are followed"
             )
-        # Fields copied into followed fields, a bounded number of steps back.
+        # Fields copied into followed fields, a bounded number of steps back, and fields of
+        # documents linked to them (S38).
         copies: dict[str, list[tuple[Key, Key]]] = {}
+        linked_from: dict[str, list[tuple[Key, Key]]] = {}
         for operation in self.service.mapping_operations:
             if operation.operation_type is not MappingOperationType.COPY:
                 continue
@@ -391,24 +405,51 @@ class _Lineage:
             if target is None or source is None or not target.base() or not source.base():
                 continue
             copies.setdefault(target.base()[0], []).append((target.base(), source.base()))
-        frontier = list(tracked)
-        for _round in range(MAX_COPY_CHAIN):
-            added: list[Key] = []
-            for key in frontier:
-                for written, read in copies.get(key[0], ()):
-                    if len(written) > len(key) or key[: len(written)] != written:
-                        continue
-                    candidate = read + key[len(written) :]
-                    if candidate in tracked:
+            linked_from.setdefault(source.base()[0], []).append((target.base(), source.base()))
+
+        def related(key: Key) -> list[tuple[Key, bool]]:
+            """(field, linked): copy sources of `key`, and the same field of linked documents."""
+            found: list[tuple[Key, bool]] = []
+            for written, read in copies.get(key[0], ()):
+                if len(written) <= len(key) and key[: len(written)] == written:
+                    found.append((read + key[len(written) :], len(written) < len(key)))
+            for written, read in linked_from.get(key[0], ()):
+                if len(read) < len(key) and key[: len(read)] == read:
+                    found.append((written + key[len(read) :], True))
+            return found
+
+        # Copy sources are followed MAX_COPY_CHAIN steps back; linked documents as far again.
+        frontier = [(key, 0, 0) for key in tracked]
+        while frontier:
+            added: list[tuple[Key, int, int]] = []
+            for key, copied, linked in frontier:
+                for candidate, is_link in related(key):
+                    depth = (copied, linked + 1) if is_link else (copied + 1, linked)
+                    if candidate in tracked or max(depth) > MAX_COPY_CHAIN:
                         continue
                     if len(tracked) >= MAX_TRACKED_PATHS:
                         limited = True
                         continue
                     tracked[candidate] = None
-                    added.append(candidate)
+                    added.append((candidate, *depth))
             frontier = added
+        unfollowed_links = False
+        for key in tracked:
+            for candidate, is_link in related(key):
+                if not is_link:
+                    continue
+                if candidate in tracked:
+                    self.aliases.setdefault(key, set()).add(candidate)
+                    self.aliases.setdefault(candidate, set()).add(key)
+                else:
+                    unfollowed_links = True
         if limited:
             self.limits.append(f"at most {MAX_TRACKED_PATHS} fields are followed per service")
+        if unfollowed_links:
+            self.limits.append(
+                "some fields of linked documents are not followed, so changes made through "
+                "them are not shown"
+            )
         return tuple(tracked)
 
     # definitions ----------------------------------------------------------------------------
@@ -592,7 +633,43 @@ class _Lineage:
                 all_weak = all_weak and weak
             defs, calls = state[key]
             result[key] = (defs | numbers, calls) if all_weak else (frozenset(numbers), ())
+        if self.aliases:
+            self._through_links(affected, result)
         return result
+
+    def _through_links(self, affected: dict[Key, list[_Write]], result: _State) -> None:
+        """A line changing a field inside a linked document also changes the other one (S38).
+
+        Only lines that write the field itself or something inside it change the shared
+        document in place; a line replacing a whole document above it does not.
+        """
+        for key, items in affected.items():
+            partners = self.aliases.get(key)
+            if not partners:
+                continue
+            for write in items:
+                if len(write.target) < len(key):
+                    continue
+                for other in sorted(partners):
+                    item = self._definition(
+                        OriginKind.LINKED,
+                        write.anchor,
+                        f"{write.op.id}:{'/'.join(key)}",
+                        other,
+                        certainty=Certainty.POSSIBLE,
+                        weak=True,
+                        phase=write.phase,
+                        order=write.op.order,
+                    )
+                    item.rules.add("S38")
+                    item.call_node = write.call_node
+                    item.role = write.role
+                    item.operation = write.kind
+                    item.written = key
+                    item.line = write.op.source.line or item.line
+                    item.source = write.op.source
+                    numbers, calls = result[other]
+                    result[other] = (numbers | {item.number}, calls)
 
     def _line_definition(
         self, write: _Write, key: Key, before: _State, several: bool
@@ -872,10 +949,12 @@ class _Lineage:
     ) -> _Result:
         decision = self.decisions.get(node.id)
         dead: set[str] = set()
-        normal: _State | None = state  # no case matched: the BRANCH does nothing (S7)
+        # No case matched: the BRANCH does nothing (S7) or, for a missing switch without $null
+        # and $default, fails (S31); the failure states include `state` too.
+        normal: _State | None = state
         if decision is not None:
             self._snapshot(decision, state)
-            dead = {case.node_id for case in decision.cases if case.unreachable_rule}
+            dead = {case.node_id for case in decision.cases if case.unreachable_rule == "S8"}
             if decision.has_default:
                 normal = None
         failed: _State | None = state if fails else None
@@ -902,6 +981,9 @@ class _Lineage:
         current: _State | None = state
         failed: _State | None = state if keep else None
         try_failed: _State | None = None
+        # Since the last TRY: where its EXITs start in `exits`, and its failure states.
+        unit_start: int | None = None
+        unit_failed: _State | None = None
         exits: list[tuple[str, _State]] = []
         for child in node.children:
             form = step_form(child)
@@ -909,17 +991,37 @@ class _Lineage:
                 entry = try_failed if try_failed is not None else failed
                 result = self._walk(child, entry, depth + 1, loops, fails=keep)
                 current = _join(current, result.normal)
+                if done:  # a CATCH that fails does not stop the sequence
+                    current = _join(current, result.failed)
+                unit_failed = _join(unit_failed, result.failed)
                 try_failed = None
             elif form == "FINALLY":
-                entry = _join(current, failed)
-                result = self._finally(child, entry, exits, depth, loops, keep)
+                start = len(exits) if unit_start is None else unit_start
+                pending = exits[start:]
+                entry = _join(current, failed if unit_start is None else unit_failed)
+                result = self._finally(child, entry, pending, depth, loops, keep)
+                exits[start:] = pending
                 current = result.normal
+                if done:  # a FINALLY that fails does not stop the sequence
+                    current = _join(current, result.failed)
+                unit_start = None
             else:
                 child_fails = keep or done or form == "TRY"
+                before = current
+                if form == "TRY":
+                    unit_start, unit_failed = len(exits), None
                 result = self._walk(child, current, depth + 1, loops, fails=child_fails)
                 if form == "TRY":
+                    # No rollback for the CATCH by default (S15); a configured rollback would
+                    # restore states the failure states already include.
                     try_failed = _join(try_failed, result.failed)
-                current = _join(result.normal, result.failed) if done else result.normal
+                    unit_failed = result.failed
+                if done and form is None and before is not None:
+                    current = _join(result.normal, self._rollback(before, result.failed))
+                elif done:
+                    current = _join(result.normal, result.failed)
+                else:
+                    current = result.normal
             exits += result.exits
             if keep:
                 failed = _join_all(failed, result.failed, current)
@@ -934,31 +1036,88 @@ class _Lineage:
         loops: int,
         fails: bool,
     ) -> _Result:
-        """FINALLY also runs before an EXIT leaves (S13): those EXITs carry its changes."""
-        for _exit_id, state in exits:
-            entry = _join(entry, state)
+        """FINALLY also runs before an EXIT leaves (S13, S34): those EXITs carry its changes.
+
+        EXIT $flow with FAILURE skips it (S33).
+        """
+        for exit_id, state in exits:
+            if not self._skips_finally(exit_id):
+                entry = _join(entry, state)
         result = self._walk(node, entry, depth + 1, loops, fails=fails)
         if result.normal is not None:
             finished = result.normal
-            exits[:] = [(exit_id, _merge(state, finished)) for exit_id, state in exits]
+            exits[:] = [
+                (exit_id, state if self._skips_finally(exit_id) else _merge(state, finished))
+                for exit_id, state in exits
+            ]
         return result
 
+    def _skips_finally(self, exit_id: str) -> bool:
+        effect = self.exits.get(exit_id)
+        return (
+            effect is not None and effect.scope is ExitScope.FLOW and effect.signal == "FAILURE"
+        )
+
+    def _rollback(self, before: _State, failed: _State | None) -> _State | None:
+        """The state after a failed child that rolls the pipeline back (S36).
+
+        First-level fields get their values from `before` again, unless the child changed
+        them in place (a line writing inside them, a list element, a step not followed);
+        nested fields may keep their changes, so both stay possible.
+        """
+        if failed is None:
+            return None
+        result: _State = {}
+        for key, value in failed.items():
+            old = before.get(key)
+            if old is None or len(key) > 1:
+                result[key] = _join_value(old, value)
+                continue
+            kept = frozenset(number for number in value[0] - old[0] if self._in_place(number))
+            result[key] = (old[0] | kept, _merge_calls(old[1], value[1])) if kept else old
+        return result
+
+    def _in_place(self, number: int) -> bool:
+        item = self.defs[number]
+        return (
+            item.kind in (OriginKind.PARTIAL, OriginKind.LINKED, OriginKind.UNKNOWN)
+            or "list_element" in item.notes
+        )
+
     def _alternatives(self, node: FlowNode, state: _State, depth: int, loops: int) -> _Result:
-        """EXIT-ON SUCCESS: each child runs after the one before it failed (S10, S15)."""
+        """EXIT-ON SUCCESS: each child runs after the one before it failed (S10).
+
+        The pipeline is rolled back after a failed child (S36), but not after a failed TRY
+        block, whose CATCH sees its changes (S15). A MAP that succeeds does not always end the
+        sequence, so the next child may also start from its result (S10).
+        """
         entry: _State | None = state
         normal: _State | None = None
         failed: _State | None = state
         exits: list[tuple[str, _State]] = []
         finals: list[FlowNode] = []
-        for child in node.children:
-            if step_form(child) == "FINALLY":
+        alternatives = 0
+        for unit in units(node.children):
+            child = unit.first
+            if step_form(child) == "FINALLY":  # no TRY before it: it runs after them all
                 finals.append(child)
                 continue
-            result = self._walk(child, entry, depth + 1, loops, fails=True)
+            alternatives += 1
+            if unit.is_try:
+                result = self._try_unit(unit, entry, depth, loops)
+            else:
+                result = self._walk(child, entry, depth + 1, loops, fails=True)
             normal = _join(normal, result.normal)
             failed = _join(failed, result.failed)
             exits += result.exits
-            entry = result.failed
+            if step_form(child) is None and entry is not None:
+                entry = self._rollback(entry, result.failed)
+            else:
+                entry = result.failed
+            if child.type is FlowNodeType.MAP:
+                entry = _join(entry, result.normal)
+        if not alternatives:
+            normal = state  # nothing to run: the sequence does nothing
         for child in finals:
             result = self._finally(child, _join(normal, failed), exits, depth, loops, True)
             normal = result.normal
@@ -966,10 +1125,32 @@ class _Lineage:
             exits += result.exits
         return _Result(normal, failed, exits)
 
+    def _try_unit(
+        self, unit: Unit, state: _State | None, depth: int, loops: int
+    ) -> _Result:
+        """A TRY with its CATCH and FINALLY blocks as one alternative (S13, S15, S33)."""
+        result = self._walk(unit.first, state, depth + 1, loops, fails=True)
+        normal, failed, exits = result.normal, result.failed, list(result.exits)
+        for catch in unit.catches:
+            caught = self._walk(catch, result.failed, depth + 1, loops, fails=True)
+            normal = _join(normal, caught.normal)
+            failed = _join(failed, caught.failed)
+            exits += caught.exits
+        if unit.final is not None:
+            final = self._finally(unit.final, _join(normal, failed), exits, depth, loops, True)
+            normal = final.normal
+            failed = _join(failed, final.failed)
+            exits += final.exits
+        return _Result(normal, failed, exits)
+
     def _loop(
         self, node: FlowNode, state: _State, depth: int, loops: int, fails: bool
     ) -> _Result:
-        """Body walked until the state at its start settles; zero iterations possible (S29)."""
+        """Body walked until the state at its start settles.
+
+        An existing empty array runs it zero times; a missing one fails the LOOP (S29), and the
+        failure states include the state before it.
+        """
         if loops >= MAX_LOOP_NESTING:
             entry = self._havoc(state, node, "deep_loop", ())
             result = self._sequence(node, entry, depth, loops + 1, fails)
@@ -984,7 +1165,10 @@ class _Lineage:
         return _Result(normal, failed, exits)
 
     def _repeat(self, node: FlowNode, state: _State, depth: int, loops: int) -> _Result:
-        """A REPEAT runs its children again after a failure or a success (S23)."""
+        """A REPEAT runs its children again after a failure or a success (S23).
+
+        On FAILURE each new attempt starts from the rolled-back pipeline (S36).
+        """
         if loops >= MAX_LOOP_NESTING:
             entry = self._havoc(state, node, "deep_loop", ())
             result = self._sequence(node, entry, depth, loops + 1, True)
@@ -1001,12 +1185,27 @@ class _Lineage:
         normal: _State | None = state if zero else None
         failed: _State | None = state if fails else None
         exits: list[tuple[str, _State]] = []
+        on_failure = (node.attributes.get("LOOP-ON") or "FAILURE").strip().upper() == "FAILURE"
         for _pass in range(MAX_PASSES):
             result = self._sequence(node, entry, depth, loops + 1, fails)
             normal = _join(normal, result.normal)
             failed = _join(failed, result.failed)
             exits += result.exits
-            again = _merge(state, _join(result.normal, None if zero else result.failed))
+            # EXIT $iteration ends this iteration only: the next one starts from its state.
+            ended = _join_all(
+                *(
+                    exit_state
+                    for exit_id, exit_state in result.exits
+                    if self._ends_iteration(exit_id, node)
+                )
+            )
+            if zero:
+                looped = _join(result.normal, ended)
+            elif on_failure:
+                looped = _join(self._rollback(entry, result.failed), ended)
+            else:
+                looped = _join_all(result.normal, result.failed, ended)
+            again = _merge(state, looped)
             if again == entry:
                 break
             entry = again
@@ -1022,6 +1221,14 @@ class _Lineage:
                 for exit_id, exit_state in exits
             ]
         return normal, failed, exits
+
+    def _ends_iteration(self, exit_id: str, node: FlowNode) -> bool:
+        effect = self.exits.get(exit_id)
+        return (
+            effect is not None
+            and effect.scope is ExitScope.ITERATION
+            and effect.reach_id == node.id
+        )
 
     def _collected(self, node: FlowNode, state: _State, out_array: Key) -> _State:
         if not out_array:

@@ -151,7 +151,8 @@ def test_nested_branches_stack_their_conditions(tmp_path: Path) -> None:
     assert logic.decision("D2").guard.terms[0].case_ids == ("D1.c1",)
     rest = _call(logic, "x.api:rest")
     assert "D2 = otherwise" in guard_text(logic, rest.guard)
-    assert "assumption S6" in render_decisions_section(logic)
+    assert "S6" in logic.decision("D2").cases[1].rules
+    assert "assumption S6" not in render_decisions_section(logic)  # documented
 
 
 def test_cases_that_exit_condition_the_steps_after_the_branch(tmp_path: Path) -> None:
@@ -241,7 +242,7 @@ def test_try_catch_and_alternatives(tmp_path: Path) -> None:
     catch = _call(logic, "pub.flow:getLastError")
     assert catch.reach is Reach.FAILURE_PATH
     assert catch.guard.terms[0].kind is GuardKind.ON_FAILURE_OF
-    assert "assumption S13, S14" in render_decisions_section(logic)
+    assert "assumption S14" in render_decisions_section(logic)
     afterwards = _call(logic, "x.api:afterwards")
     assert [term.kind for term in afterwards.guard.terms] == [GuardKind.ONLY_IF_SUCCEEDED]
     assert _call(logic, "x.api:second").guard.terms[-1].kind is GuardKind.ON_FAILURE_OF
@@ -316,10 +317,14 @@ def test_duplicate_labels_default_not_last_and_patterns(tmp_path: Path) -> None:
 
     decision = logic.decision("D1")
     assert decision.notes == ("DEFAULT_NOT_LAST", "DUPLICATE_LABEL")
-    assert decision.cases[2].unreachable_rule == "S2"
+    assert decision.cases[2].unreachable_rule == "S37"
     assert _call(logic, "x.api:second").reach is Reach.UNREACHABLE
-    assert decision.cases[3].condition.kind is ConditionKind.PATTERN
-    assert "assumption S5" in render_decisions_section(logic)
+    pattern = decision.cases[3]
+    assert pattern.condition.kind is ConditionKind.PATTERN
+    # A pattern may match what an earlier label matches: the first is assumed to win (S37).
+    assert pattern.excludes == ("D1.c1", "D1.c2", "D1.c3")
+    assert "S5" in pattern.rules
+    assert "assumption S37" in render_decisions_section(logic)
 
 
 @pytest.mark.parametrize("mode", [ExtractionMode.REDACT, ExtractionMode.OMIT])

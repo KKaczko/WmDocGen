@@ -18,14 +18,18 @@ Soundness rules. A "normal run" is one in which no step fails on its own; failur
 modelled only where TRY/CATCH, EXIT-ON SUCCESS or EXIT-ON DONE make them explicit. A step is
 called unreachable only when every normal path before it provably leaves; an EXIT whose target
 cannot be determined (for example because labels are withheld) may go anywhere, so it never
-proves anything. A step after a BRANCH never inherits that BRANCH's case.
+proves anything. A step after a BRANCH never inherits that BRANCH's case. A TRY block is read
+together with the CATCH and FINALLY blocks after it: a CATCH runs only when something in the
+TRY may fail (any step other than an EXIT may), and FINALLY runs unless every way out of the
+TRY and its CATCHes is an EXIT $flow with FAILURE (S33).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import NamedTuple
 
 from wm_doc.call_targets import TargetStatus, classify_target
 from wm_doc.flow_paths import PipelineRef, expression_refs, path_ref
@@ -34,6 +38,7 @@ from wm_doc.ir import (
     FlowNode,
     FlowNodeType,
     FlowService,
+    MappingOperationType,
     SourceReference,
     TextDisclosure,
 )
@@ -129,6 +134,7 @@ class ExitScope(StrEnum):
     FLOW = "$flow"
     PARENT = "$parent"
     LOOP = "$loop"
+    ITERATION = "$iteration"  # ends only the current iteration of the innermost LOOP or REPEAT
     LABEL = "label"
 
 
@@ -156,6 +162,7 @@ class DecisionCase:
     condition: CaseCondition
     excludes: tuple[str, ...]  # earlier cases that must not have matched
     unreachable_rule: str | None  # set when the case can never run
+    rules: tuple[str, ...]  # rules behind "this case runs only when its condition holds"
     ends_with: tuple[str, ...]  # when every path through the case leaves the BRANCH: those EXITs
     call_ids: tuple[str, ...]
     source: SourceReference
@@ -174,7 +181,10 @@ class Decision:
     switch: PipelineRef | None
     cases: tuple[DecisionCase, ...]
     has_default: bool
-    falls_through: bool  # "no case matched" is possible
+    falls_through: bool  # "no case matched" is possible: the BRANCH then does nothing (S7)
+    # With a switch and neither $null nor $default: a missing switch variable fails the BRANCH
+    # (S31). Which of the two happens cannot be known statically.
+    missing_fails: bool
     guard: Guard
     loop_id: str | None  # innermost enclosing LOOP/REPEAT; exclusive per iteration only
     notes: tuple[str, ...]
@@ -203,13 +213,16 @@ class CallContext:
     same_target_as: tuple[str, ...]  # up to MAX_SAME_TARGET other calls to the same service
     same_target_count: int  # how many other calls go to the same service
     source: SourceReference
+    unreachable_reason: str | None = None  # an UnreachableStep reason, when it never runs
 
 
 @dataclass(frozen=True, slots=True)
 class UnreachableStep:
     node_id: str
     kind: FlowNodeType
-    reason: str  # "after_exit" or "duplicate_case"
+    # after_exit, duplicate_case (S37), ignored_label (S8), try_cannot_fail (a CATCH),
+    # flow_failure (a FINALLY, S33) or no_linked_outputs (a transformer, S18)
+    reason: str
     exit_ids: tuple[str, ...]
     case_id: str | None
     rules: tuple[str, ...]
@@ -281,6 +294,49 @@ class _Outcome:
 _COMPLETES = _Outcome(True, frozenset())
 
 
+class _Block(NamedTuple):
+    """Why the steps from here on never run: the EXITs that always leave first, the rules."""
+
+    exit_ids: tuple[str, ...]
+    rules: tuple[str, ...]
+    reason: str = "after_exit"
+
+
+@dataclass(frozen=True, slots=True)
+class Unit:
+    """A child of a sequence; a TRY block comes with the CATCH and FINALLY blocks after it."""
+
+    first: FlowNode
+    catches: tuple[FlowNode, ...] = ()
+    final: FlowNode | None = None
+
+    @property
+    def is_try(self) -> bool:
+        return step_form(self.first) == "TRY"
+
+
+def units(children: Sequence[FlowNode]) -> list[Unit]:
+    """`children` in order, each TRY grouped with the CATCH blocks and the FINALLY after it."""
+    result: list[Unit] = []
+    index = 0
+    while index < len(children):
+        child = children[index]
+        index += 1
+        if step_form(child) != "TRY":
+            result.append(Unit(child))
+            continue
+        catches: list[FlowNode] = []
+        while index < len(children) and step_form(children[index]) == "CATCH":
+            catches.append(children[index])
+            index += 1
+        final = None
+        if index < len(children) and step_form(children[index]) == "FINALLY":
+            final = children[index]
+            index += 1
+        result.append(Unit(child, tuple(catches), final))
+    return result
+
+
 class _Analysis:
     def __init__(self, service: FlowService, root: FlowNode) -> None:
         self.service = service
@@ -313,14 +369,19 @@ class _Analysis:
             if node.type is FlowNodeType.EXIT
         }
         # How far each EXIT takes control: its target, or for FAILURE the step that fails up to
-        # the nearest step that handles failures (S10, S13).
+        # the nearest step that handles failures (S10, S13); and the rules that conclusion uses.
+        self.reach_rules: dict[str, set[str]] = {}
         self.reach: dict[str, str | None] = {
             exit_id: self._exit_reach(exit_id, target)
             for exit_id, (target, _note, _scope) in self.exit_targets.items()
         }
         self.conditions: dict[str, CaseCondition] = {}
         self.unreachable_cases: dict[str, str] = {}
+        self.case_rules: dict[str, tuple[str, ...]] = {}
+        self.case_excludes_earlier: set[str] = set()
         self.decision_info: dict[str, tuple[DecisionMode, list[str]]] = {}
+        self._can_fail_cache: dict[str, bool] = {}
+        self.unlinked = self._unlinked_transformers()
         for node in self.order:
             if node.type is FlowNodeType.BRANCH:
                 self._prepare_decision(node)
@@ -353,6 +414,112 @@ class _Analysis:
             self.exit_ids[item] for item in sorted(node_ids, key=self.position.__getitem__)
         )
 
+    def _unlinked_transformers(self) -> set[str]:
+        """Transformers whose output map links nothing: they do not run (S18).
+
+        Only claimed when every output map of the transformer was read and holds no link.
+        """
+        maps = {flow_map.structural_path: flow_map for flow_map in self.service.flow_maps}
+        linked_maps = {
+            operation.flow_map_id
+            for operation in self.service.mapping_operations
+            if operation.operation_type is MappingOperationType.COPY
+        }
+        found: set[str] = set()
+        if any(item.code == "UNKNOWN_MAPPING_CHILD" for item in self.service.findings):
+            return found  # a mapping element was not read: a link may hide there
+        for node in self.order:
+            if node.type is not FlowNodeType.MAPINVOKE or node.unknown_attributes:
+                continue
+            known = True
+            linked = False
+            for child in node.children:
+                if child.type is not FlowNodeType.MAP:
+                    known = False
+                    continue
+                flow_map = maps.get(child.structural_path)
+                mode = (flow_map.mode if flow_map is not None else None) or child.attributes.get(
+                    "MODE", ""
+                )
+                mode = mode.strip().upper()
+                if mode == "INVOKEINPUT":
+                    continue
+                if mode != "INVOKEOUTPUT" or flow_map is None:
+                    known = False
+                elif flow_map.id in linked_maps:
+                    linked = True
+            if known and not linked:
+                found.add(node.id)
+        return found
+
+    def _exit_signal(self, exit_id: str) -> str:
+        return (self.nodes[exit_id].signal or "SUCCESS").strip().upper()
+
+    def _skips_handlers(self, exit_id: str) -> bool:
+        """EXIT $flow with FAILURE: no CATCH or FINALLY of the service runs (S33)."""
+        return (
+            self.exit_targets[exit_id][2] is ExitScope.FLOW
+            and self._exit_signal(exit_id) == "FAILURE"
+        )
+
+    def _can_fail(self, node: FlowNode) -> bool:
+        """True when running `node` may fail, so that a CATCH after it may run (S13, S33).
+
+        Only EXITs, and SEQUENCE steps without a timeout or other settings holding nothing
+        else, are known not to fail on their own; an EXIT fails its steps with FAILURE, except
+        EXIT $flow with FAILURE, which skips every CATCH. An EXIT whose target is unknown may.
+        """
+        cached = self._can_fail_cache.get(node.id)
+        if cached is not None:
+            return cached
+        result = False
+        for inner in subtree(node):
+            kind = inner.type
+            if kind is FlowNodeType.EXIT:
+                signal = self._exit_signal(inner.id)
+                result = (
+                    self.reach[inner.id] is None
+                    or signal not in ("SUCCESS", "FAILURE")
+                    or (signal == "FAILURE" and not self._skips_handlers(inner.id))
+                )
+            elif kind in (FlowNodeType.SEQUENCE, FlowNodeType.BRANCH_CASE):
+                timeout = (inner.attributes.get("TIMEOUT") or "").strip()
+                nested_form = inner is not node and step_form(inner) is not None
+                result = bool(timeout or inner.unknown_attributes or nested_form)
+            else:
+                result = True
+            if result:
+                break
+        self._can_fail_cache[node.id] = result
+        return result
+
+    def _enters_finally(self, blocks: Iterable[FlowNode]) -> bool:
+        """True when FINALLY may run after `blocks` (a TRY and the CATCHes that may run).
+
+        It runs after any of them finishes, fails or is left by an EXIT, unless that EXIT is
+        EXIT $flow with FAILURE (S13, S33, S34, S35).
+        """
+        for block in blocks:
+            outcome = self.outcome(block)
+            if outcome.completes or self._can_fail(block) or not outcome.leaves:
+                return True
+            if any(not self._skips_handlers(exit_id) for exit_id in outcome.leaves):
+                return True
+        return False
+
+    def _live_catches(self, unit: Unit) -> tuple[FlowNode, ...]:
+        """The CATCH blocks of `unit` that may run: only when its TRY may fail (S13)."""
+        return unit.catches if self._can_fail(unit.first) else ()
+
+    def _flow_failures(self, blocks: Iterable[FlowNode]) -> tuple[str, ...]:
+        found = {
+            inner.id
+            for block in blocks
+            for inner in subtree(block)
+            if inner.type is FlowNodeType.EXIT and self._skips_handlers(inner.id)
+        }
+        return self._exit_names(found)
+
     # EXIT targets --------------------------------------------------------------------------
 
     def _exit_target(self, node: FlowNode) -> tuple[str | None, str | None, ExitScope]:
@@ -366,15 +533,18 @@ class _Analysis:
             while parent is not None and parent.type is FlowNodeType.BRANCH_CASE:
                 parent = self.parent[parent.id]
             return (parent.id if parent else None), None, ExitScope.PARENT
-        if raw == "$loop":
+        if raw in ("$loop", "$iteration"):
+            scope = ExitScope.LOOP if raw == "$loop" else ExitScope.ITERATION
+            if scope is ExitScope.ITERATION and (node.signal or "").strip().upper() == "FAILURE":
+                return None, "FAILURE is not allowed with $iteration", scope
             while parent is not None and parent.type not in (
                 FlowNodeType.LOOP,
                 FlowNodeType.REPEAT,
             ):
                 parent = self.parent[parent.id]
             if parent is None:
-                return None, "no enclosing LOOP or REPEAT", ExitScope.LOOP
-            return parent.id, None, ExitScope.LOOP
+                return None, "no enclosing LOOP or REPEAT", scope
+            return parent.id, None, scope
         withheld = False
         while parent is not None:
             label = parent.label
@@ -394,6 +564,9 @@ class _Analysis:
         node = self.nodes[exit_id]
         if (node.signal or "SUCCESS").strip().upper() != "FAILURE":
             return target
+        rules = self.reach_rules.setdefault(exit_id, set())
+        if self.exit_targets[exit_id][2] is ExitScope.FLOW:
+            return target  # the service fails; no CATCH or FINALLY runs (S33)
         current = self.nodes[target]
         while True:
             parent = self.parent[current.id]
@@ -402,7 +575,14 @@ class _Analysis:
             if parent.type is FlowNodeType.REPEAT:
                 return None  # a retry may take another path: where it ends is unknown
             if _handles_failure_of(parent, current):
+                if _catches_may_filter(parent, current):
+                    rules.add("S35")  # a CATCH filter may not select this failure
+                    return None
                 return current.id
+            if step_form(current) is not None:
+                rules.add("S35")  # a failure that no CATCH handles goes on after FINALLY
+            elif is_alternatives(parent):
+                rules.add("S32")  # every alternative failed, so the sequence fails
             current = parent
 
     # decisions -----------------------------------------------------------------------------
@@ -417,21 +597,39 @@ class _Analysis:
         cases = [child for child in node.children if child.type is FlowNodeType.BRANCH_CASE]
         seen: set[tuple[ConditionKind, str | None]] = set()
         default_seen = False
+        overlap = False  # a pattern came earlier, so labels may overlap (S37)
         for position, case in enumerate(cases):
             condition = _condition(case, mode)
             self.conditions[case.id] = condition
+            rules = list(case_rules(mode, condition.kind))
             if condition.kind is ConditionKind.DEFAULT:
                 if default_seen:
-                    self.unreachable_cases[case.id] = "S6"
+                    self.unreachable_cases[case.id] = "S37"
                 default_seen = True
                 if position != len(cases) - 1:
                     notes.append("DEFAULT_NOT_LAST")
-            elif mode is DecisionMode.SWITCH and condition.kind in _COMPARABLE:
+            elif mode is DecisionMode.EXPRESSIONS:
+                self.case_excludes_earlier.add(case.id)
+                if condition.kind is ConditionKind.UNLABELLED or (
+                    condition.kind is ConditionKind.EXPRESSION
+                    and (condition.text or "").strip() in ("", "$null")
+                ):
+                    self.unreachable_cases[case.id] = "S8"
+                    notes.append("LABELS_IGNORED")
+            elif condition.kind in _COMPARABLE:
                 key = (condition.kind, condition.text)
                 if key in seen:
-                    self.unreachable_cases[case.id] = "S2"
+                    self.unreachable_cases[case.id] = "S37"
                     notes.append("DUPLICATE_LABEL")
                 seen.add(key)
+                if condition.kind is ConditionKind.PATTERN:
+                    overlap = True
+                if overlap and position:
+                    # A pattern may match the same value as another label: the first in
+                    # document order is assumed to win.
+                    self.case_excludes_earlier.add(case.id)
+                    rules.append("S37")
+            self.case_rules[case.id] = sort_rules(rules)
             if condition.kind is ConditionKind.WITHHELD:
                 notes.append("LABELS_WITHHELD")
             if condition.kind is ConditionKind.EXPRESSION and not condition.refs_parsed:
@@ -451,7 +649,7 @@ class _Analysis:
             kind=GuardKind.IN_CASE,
             node_id=branch.id,
             certainty=certainty,
-            rules=case_rules(mode, condition.kind),
+            rules=self.case_rules[case.id],
             decision_id=self.decision_ids[branch.id],
             case_ids=(self.case_ids[case.id],),
         )
@@ -502,7 +700,9 @@ class _Analysis:
             finishes, leaving = self._lift(self.outcome(node.children[0]), node)
             return _Outcome(self.outcome(node.children[0]).completes or finishes, leaving)
         if kind is FlowNodeType.BRANCH:
-            completes = not self._has_default(node)  # "no case matched" finishes the BRANCH (S7)
+            # A value no case matches finishes the BRANCH (S7); a missing switch may fail it
+            # instead (S31), which a normal run does not include.
+            completes = not self._has_default(node)
             leaving_all: set[str] = set()
             for case in self._live_cases(node):
                 case_outcome = self.outcome(case)
@@ -512,24 +712,9 @@ class _Analysis:
             return _Outcome(completes, frozenset(leaving_all))
         if kind is FlowNodeType.LOOP:
             _completes, finishes, leaving = self._sequence_outcome(node)
-            return _Outcome(True, leaving)  # a LOOP may run zero times (S29)
+            return _Outcome(True, leaving)  # an existing empty array runs zero times (S29)
         if kind is FlowNodeType.SEQUENCE and is_alternatives(node):
-            completes = False
-            leaving_all = set()
-            finally_completes = True
-            finally_finishes = False
-            for child in node.children:
-                child_outcome = self.outcome(child)
-                finishes, leaving = self._lift(child_outcome, node)
-                leaving_all |= leaving
-                if step_form(child) == "FINALLY":
-                    finally_completes = child_outcome.completes or finishes
-                    finally_finishes = finishes  # it may replace a pending EXIT (S13)
-                else:
-                    completes = completes or child_outcome.completes or finishes
-            return _Outcome(
-                (completes and finally_completes) or finally_finishes, frozenset(leaving_all)
-            )
+            return self._alternatives_outcome(node)
         if kind in (FlowNodeType.FLOW, FlowNodeType.SEQUENCE, FlowNodeType.REPEAT):
             completes, finishes, leaving = self._sequence_outcome(node)
             return _Outcome(completes or finishes, leaving)
@@ -540,16 +725,86 @@ class _Analysis:
         done = sequence_exit_on(node) == "DONE"
         finishes = False
         leaving_all: set[str] = set()
-        for child in node.children:
-            child_outcome = self.outcome(child)
+        for unit in units(node.children):
+            if unit.is_try:
+                child_outcome = self._unit_outcome(unit, None)
+            else:
+                child_outcome = self.outcome(unit.first)
             child_finishes, leaving = self._lift(child_outcome, node)
             finishes = finishes or child_finishes
             leaving_all |= leaving
-            if step_form(child) == "CATCH":
-                continue  # skipped on a normal run
+            if step_form(unit.first) == "CATCH":
+                continue  # a CATCH without a TRY before it: skipped on a normal run
             if not child_outcome.completes and not done:
                 return False, finishes, frozenset(leaving_all)
         return True, finishes, frozenset(leaving_all)
+
+    def _alternatives_outcome(self, node: FlowNode) -> _Outcome:
+        """An EXIT-ON SUCCESS sequence: done when one alternative finishes (S10).
+
+        A TRY with its CATCH and FINALLY blocks is one alternative. A FINALLY without a TRY
+        before it runs after the alternatives. With no alternative at all the sequence does
+        nothing, so it finishes.
+        """
+        completes = False
+        alternatives = 0
+        leaving_all: set[str] = set()
+        finally_completes = True
+        finally_finishes = False
+        for unit in units(node.children):
+            if unit.is_try:
+                alternatives += 1
+                outcome = self._unit_outcome(unit, node)
+                completes = completes or outcome.completes
+                leaving_all |= outcome.leaves
+                continue
+            child_outcome = self.outcome(unit.first)
+            finishes, leaving = self._lift(child_outcome, node)
+            leaving_all |= leaving
+            if step_form(unit.first) == "FINALLY":
+                finally_completes = child_outcome.completes or finishes
+                finally_finishes = finishes  # it may replace a pending EXIT (S13)
+            else:
+                alternatives += 1
+                completes = completes or child_outcome.completes or finishes
+        if not alternatives:
+            completes = True
+        return _Outcome(
+            (completes and finally_completes) or finally_finishes, frozenset(leaving_all)
+        )
+
+    def _unit_outcome(self, unit: Unit, holder: FlowNode | None) -> _Outcome:
+        """A TRY with its CATCH and FINALLY blocks, as one step (S13, S33, S34, S35).
+
+        With `holder`, the EXIT-ON SUCCESS sequence that wraps them, EXITs ending at the holder
+        finish it and the result is the holder's outcome; otherwise EXITs are left to the
+        caller. A failure no CATCH handles leaves as a failure, so it never completes the unit.
+        """
+
+        def lifted(block: FlowNode) -> tuple[bool, frozenset[str]]:
+            outcome = self.outcome(block)
+            if holder is None:
+                return outcome.completes, outcome.leaves
+            finishes, leaving = self._lift(outcome, holder)
+            return outcome.completes or finishes, leaving
+
+        completes, leaves = lifted(unit.first)
+        leaving_all = set(leaves)
+        catches = self._live_catches(unit)
+        for catch in catches:
+            catch_completes, catch_leaves = lifted(catch)
+            completes = completes or catch_completes
+            leaving_all |= catch_leaves
+        if unit.final is None or not self._enters_finally((unit.first, *catches)):
+            return _Outcome(completes, frozenset(leaving_all))
+        final = self.outcome(unit.final)
+        if holder is None:
+            return _Outcome(completes and final.completes, frozenset(leaving_all | final.leaves))
+        # FINALLY may itself finish the holder, replacing a pending EXIT (S13).
+        finishes, final_leaves = self._lift(final, holder)
+        return _Outcome(
+            (completes and final.completes) or finishes, frozenset(leaving_all | final_leaves)
+        )
 
     def _always_leaves(self, node: FlowNode, owner: FlowNode, enclosing: FlowNode) -> bool:
         """True when every normal path through `node` leaves `owner` and also `enclosing`."""
@@ -592,12 +847,13 @@ class _Analysis:
         node: FlowNode,
         guard: Guard,
         depth: int,
-        blocked: tuple[tuple[str, ...], tuple[str, ...]] | None,
+        blocked: _Block | None,
         loop_id: str | None,
     ) -> None:
         """Record calls, EXITs and BRANCHes under `node`.
 
-        `blocked` is (EXIT ids, rules) when every normal path before `node` leaves first.
+        `blocked` says why, when every normal path before `node` leaves first or `node` can
+        never run.
         """
         if depth > MAX_DEPTH:
             self.too_deep = True
@@ -639,26 +895,48 @@ class _Analysis:
                 self._walk(child, guard, depth + 1, blocked, loop_id)
 
     def _loop_leavers(self, node: FlowNode) -> tuple[str, ...]:
-        """EXITs inside a LOOP or REPEAT that may end it early (or go somewhere unknown)."""
+        """EXITs inside a LOOP or REPEAT that may end it early (or go somewhere unknown).
+
+        EXIT $iteration ends only the current iteration of its own loop, so it is not one.
+        """
         found = []
         for inner in subtree(node):
             if inner.type is FlowNodeType.EXIT:
                 reach = self.reach[inner.id]
+                if reach == node.id and self.exit_targets[inner.id][2] is ExitScope.ITERATION:
+                    continue
                 if reach is None or reach == node.id or self._above(reach, node.id):
                     found.append(inner.id)
         return self._exit_names(found)
+
+    def _never(self, node: FlowNode, block: _Block) -> None:
+        """Note that `node` never runs, for the "Steps that never run" list."""
+        self.unreachable.append(
+            UnreachableStep(
+                node_id=node.id,
+                kind=node.type,
+                reason=block.reason,
+                exit_ids=block.exit_ids,
+                case_id=self.case_ids.get(node.id),
+                rules=block.rules,
+                source=node.source,
+            )
+        )
 
     def _record(
         self,
         node: FlowNode,
         guard: Guard,
-        blocked: tuple[tuple[str, ...], tuple[str, ...]] | None,
+        blocked: _Block | None,
         loop_id: str | None,
     ) -> None:
         self.node_guards.setdefault(node.id, guard)
         if node.id in self.call_ids and node.id not in self.call_contexts:
             occurrence = self.occurrences[node.call_occurrence_id or ""]
             target = node.target or occurrence.target
+            if blocked is None and node.id in self.unlinked:
+                blocked = _Block((), ("S18",), "no_linked_outputs")
+                self._never(node, blocked)
             self.call_contexts[node.id] = CallContext(
                 id=self.call_ids[node.id],
                 call_occurrence_id=occurrence.id,
@@ -669,25 +947,30 @@ class _Analysis:
                 index=int(self.call_ids[node.id][1:]),
                 guard=guard,
                 reach=_reach(guard, blocked is not None),
-                unreachable_rules=blocked[1] if blocked is not None else (),
+                unreachable_rules=blocked.rules if blocked is not None else (),
                 same_target_as=(),
                 same_target_count=0,
                 source=node.source,
+                unreachable_reason=blocked.reason if blocked is not None else None,
             )
         elif node.type is FlowNodeType.EXIT and node.id not in self.exit_effects:
             exit_target, note, scope = self.exit_targets[node.id]
             target_node = self.nodes.get(exit_target or "")
-            rules = ["S11"]
+            rules = {"S11", *self.reach_rules.get(node.id, ())}
             if scope is ExitScope.PARENT and _parent_is_case(self.parent[node.id]):
-                rules.append("S30")
+                rules.add("S30")
             if target_node is not None and target_node.type in (
                 FlowNodeType.LOOP,
                 FlowNodeType.REPEAT,
             ):
-                rules.append("S12")
-            signal = (node.signal or "SUCCESS").strip().upper()
+                rules.add("S12")
+            signal = self._exit_signal(node.id)
             if signal == "FAILURE":
-                rules.append("S10")
+                rules.add("S10")
+                if scope is ExitScope.FLOW and any(
+                    step_form(self.nodes[item]) for item in self.ancestors[node.id]
+                ):
+                    rules.add("S33")
             self.exit_effects[node.id] = ExitEffect(
                 id=self.exit_ids[node.id],
                 node_id=node.id,
@@ -711,7 +994,7 @@ class _Analysis:
         node: FlowNode,
         guard: Guard,
         depth: int,
-        blocked: tuple[tuple[str, ...], tuple[str, ...]] | None,
+        blocked: _Block | None,
         loop_id: str | None,
     ) -> None:
         for case in node.children:
@@ -721,18 +1004,10 @@ class _Analysis:
             case_blocked = blocked
             if case.id in self.unreachable_cases:
                 rule_id = self.unreachable_cases[case.id]
-                case_blocked = blocked or ((), (rule_id,))
-                self.unreachable.append(
-                    UnreachableStep(
-                        node_id=case.id,
-                        kind=FlowNodeType.BRANCH_CASE,
-                        reason="duplicate_case",
-                        exit_ids=(),
-                        case_id=self.case_ids[case.id],
-                        rules=(rule_id,),
-                        source=case.source,
-                    )
-                )
+                reason = "ignored_label" if rule_id == "S8" else "duplicate_case"
+                never = _Block((), (rule_id,), reason)
+                case_blocked = blocked or never
+                self._never(case, never)
             inner = guard.extend(self._case_term(node, case))
             for child in case.children:
                 self._walk(child, inner, depth + 1, case_blocked, loop_id)
@@ -742,18 +1017,38 @@ class _Analysis:
         node: FlowNode,
         guard: Guard,
         depth: int,
-        blocked: tuple[tuple[str, ...], tuple[str, ...]] | None,
+        blocked: _Block | None,
         loop_id: str | None,
     ) -> None:
-        """Children run in order; earlier EXITs may skip or block the later ones."""
+        """Children in order; earlier EXITs may skip or block the later ones."""
         done = sequence_exit_on(node) == "DONE"
         current = guard
         local_block = blocked
         tries: list[str] = []
-        for child in node.children:
+        for unit in units(node.children):
+            child = unit.first
+            members: tuple[FlowNode, ...] = (child, *unit.catches, *_optional(unit.final))
+            if local_block is not None and blocked is None:
+                for member in members:
+                    self._never(member, local_block)
+            if unit.is_try:
+                self._walk_unit(unit, current, depth, local_block, loop_id)
+                tries = [child.id]
+                if local_block is not None:
+                    continue
+                outcome = self._unit_outcome(unit, None)
+                if not outcome.completes and not done:
+                    local_block = _Block(
+                        self._exit_names(outcome.leaves), self._block_rules(members, outcome)
+                    )
+                elif done:
+                    current = current.extend(*self._skip_terms(child, outcome.leaves))
+                else:
+                    current = current.extend(*self._after_unit(unit, node, outcome))
+                continue
             form = step_form(child)
             child_guard = current
-            if form == "CATCH":
+            if form == "CATCH":  # a CATCH without a TRY right before it
                 child_guard = current.extend(
                     GuardTerm(
                         GuardKind.ON_FAILURE_OF,
@@ -767,46 +1062,84 @@ class _Analysis:
                 child_guard = current.extend(
                     GuardTerm(GuardKind.FINALLY, node.id, Certainty.DERIVED, ("S13", "S14"))
                 )
-            if local_block is not None and blocked is None:
-                self.unreachable.append(
-                    UnreachableStep(
-                        node_id=child.id,
-                        kind=child.type,
-                        reason="after_exit",
-                        exit_ids=local_block[0],
-                        case_id=None,
-                        rules=local_block[1],
-                        source=child.source,
-                    )
-                )
             self._walk(child, child_guard, depth + 1, local_block, loop_id)
-            if form == "TRY":
-                tries.append(child.id)
             if local_block is not None:
                 continue
             outcome = self.outcome(child)
+            if done:
+                current = current.extend(*self._skip_terms(child, outcome.leaves))
+                continue
             if form == "CATCH":
                 current = current.extend(*self._after_catch(child, node, tries))
                 continue
-            if not outcome.completes and not done:
-                local_block = (self._exit_names(outcome.leaves), self._block_rules(child))
-                continue
-            if not outcome.completes and done:
-                current = current.extend(self._skip_term(child, outcome.leaves))
+            if not outcome.completes:
+                local_block = _Block(
+                    self._exit_names(outcome.leaves), self._block_rules(members, outcome)
+                )
                 continue
             current = current.extend(*self._after_terms(child, node))
 
-    def _block_rules(self, child: FlowNode) -> tuple[str, ...]:
-        """Rules behind "everything after `child` never runs"."""
-        rules = ["S10", "S11"]
-        if any(
-            inner.type is FlowNodeType.BRANCH and self._has_default(inner)
-            for inner in subtree(child)
-        ):
-            rules.append("S6")  # the BRANCH cannot fall through only because of its $default
-        if any(_parent_is_case(self.parent[item]) for item in self.outcome(child).leaves):
-            rules.append("S30")
+    def _walk_unit(
+        self,
+        unit: Unit,
+        guard: Guard,
+        depth: int,
+        blocked: _Block | None,
+        loop_id: str | None,
+        holder: FlowNode | None = None,
+    ) -> None:
+        """A TRY, its CATCH blocks and its FINALLY (S13, S14, S33, S34, S35).
+
+        A CATCH runs after the TRY failed, and never when nothing in the TRY can fail. FINALLY
+        runs after them, whatever happened, unless every way out of them is EXIT $flow with
+        FAILURE. `holder` is the EXIT-ON SUCCESS sequence that wraps the blocks, if any.
+        """
+        owner = holder or unit.first
+        self._walk(unit.first, guard, depth + 1, blocked, loop_id)
+        catches = self._live_catches(unit)
+        for catch in unit.catches:
+            catch_blocked = blocked
+            if blocked is None and not catches:
+                flow_failures = self._flow_failures((unit.first,))
+                rules = ("S13", "S14", "S33") if flow_failures else ("S13", "S14")
+                catch_blocked = _Block(flow_failures, rules, "try_cannot_fail")
+                self._never(catch, catch_blocked)
+            term = GuardTerm(
+                GuardKind.ON_FAILURE_OF,
+                owner.id,
+                Certainty.DERIVED,
+                ("S13", "S14"),
+                step_ids=(unit.first.id,),
+            )
+            self._walk(catch, guard.extend(term), depth + 1, catch_blocked, loop_id)
+        if unit.final is None:
+            return
+        final_blocked = blocked
+        if blocked is None and not self._enters_finally((unit.first, *catches)):
+            final_blocked = _Block(
+                self._flow_failures((unit.first, *catches)), ("S14", "S33"), "flow_failure"
+            )
+            self._never(unit.final, final_blocked)
+        term = GuardTerm(GuardKind.FINALLY, owner.id, Certainty.DERIVED, ("S13", "S14", "S33"))
+        self._walk(unit.final, guard.extend(term), depth + 1, final_blocked, loop_id)
+
+    def _block_rules(self, members: Iterable[FlowNode], outcome: _Outcome) -> tuple[str, ...]:
+        """Rules behind "everything after `members` never runs"."""
+        rules = {"S10", "S11"}
+        for inner in (inner for member in members for inner in subtree(member)):
+            if inner.type is FlowNodeType.BRANCH and self._has_default(inner):
+                rules.add("S6")  # the BRANCH cannot fall through only because of its $default
+            if step_form(inner):
+                rules.update(("S13", "S14"))  # read through TRY, CATCH and FINALLY blocks
+        for item in outcome.leaves:
+            if _parent_is_case(self.parent[item]):
+                rules.add("S30")
+            rules.update(self.reach_rules.get(item, ()))
         return sort_rules(rules)
+
+    def _skip_terms(self, child: FlowNode, exits: Iterable[str]) -> list[GuardTerm]:
+        exits = tuple(exits)
+        return [self._skip_term(child, exits)] if exits else []
 
     def _skip_term(self, child: FlowNode, exits: Iterable[str]) -> GuardTerm:
         return GuardTerm(
@@ -832,6 +1165,29 @@ class _Analysis:
                 )
             ]
         return [self._skip_term(catch, outcome.leaves)] if outcome.leaves else []
+
+    def _after_unit(self, unit: Unit, parent: FlowNode, outcome: _Outcome) -> list[GuardTerm]:
+        """Conditions a later sibling gets from a TRY with its CATCH and FINALLY blocks."""
+        terms: list[GuardTerm] = []
+        explained: set[str] = set()
+        catches = self._live_catches(unit)
+        if catches and all(self._always_leaves(catch, catch, parent) for catch in catches):
+            for catch in catches:
+                explained |= self.outcome(catch).leaves
+            terms.append(
+                GuardTerm(
+                    GuardKind.ONLY_IF_SUCCEEDED,
+                    catches[-1].id,
+                    Certainty.DERIVED,
+                    ("S13", "S14"),
+                    step_ids=(unit.first.id,),
+                    exit_ids=self._exit_names(explained),
+                )
+            )
+        skipping = [item for item in outcome.leaves if item not in explained]
+        if skipping:
+            terms.append(self._skip_term(unit.first, skipping))
+        return terms
 
     def _after_terms(self, child: FlowNode, parent: FlowNode) -> list[GuardTerm]:
         """Conditions a later sibling of `child` gets because `child` may leave `parent`."""
@@ -882,16 +1238,19 @@ class _Analysis:
         node: FlowNode,
         guard: Guard,
         depth: int,
-        blocked: tuple[tuple[str, ...], tuple[str, ...]] | None,
+        blocked: _Block | None,
         loop_id: str | None,
     ) -> None:
         """EXIT-ON SUCCESS: a later child runs only when every earlier one failed (S10).
 
-        TRY/CATCH/FINALLY written as FORM sequences inside it are read the same way: CATCH runs
-        when TRY failed, FINALLY runs after them (S13, S14).
+        TRY/CATCH/FINALLY written as FORM sequences inside it are read as one TRY step (S13,
+        S14). A MAP that succeeds does not always end the sequence, so after one the later
+        children may also run when it succeeded.
         """
         earlier: list[str] = []
-        for child in node.children:
+        after_map = False
+        for unit in units(node.children):
+            child = unit.first
             form = step_form(child)
             if form == "FINALLY":
                 term = GuardTerm(GuardKind.FINALLY, node.id, Certainty.DERIVED, ("S13", "S14"))
@@ -903,13 +1262,17 @@ class _Analysis:
                     GuardTerm(
                         GuardKind.ON_FAILURE_OF,
                         node.id,
-                        Certainty.DERIVED,
+                        Certainty.POSSIBLE if after_map else Certainty.DERIVED,
                         ("S13", "S14") if form == "CATCH" else ("S10",),
                         step_ids=tuple(earlier),
                     )
                 )
-            self._walk(child, inner, depth + 1, blocked, loop_id)
+            if unit.is_try:
+                self._walk_unit(unit, inner, depth, blocked, loop_id, holder=node)
+            else:
+                self._walk(child, inner, depth + 1, blocked, loop_id)
             earlier.append(child.id)
+            after_map = after_map or child.type is FlowNodeType.MAP
 
     # results -------------------------------------------------------------------------------
 
@@ -918,18 +1281,15 @@ class _Analysis:
         cases = [child for child in node.children if child.type is FlowNodeType.BRANCH_CASE]
         built: list[DecisionCase] = []
         earlier: list[str] = []
-        after_pattern = False
         for position, case in enumerate(cases, 1):
             case_id = self.case_ids[case.id]
             condition = self.conditions[case.id]
             if condition.kind is ConditionKind.DEFAULT:
                 excludes = tuple(self.case_ids[other.id] for other in cases if other is not case)
-            elif mode is DecisionMode.EXPRESSIONS or after_pattern:
+            elif case.id in self.case_excludes_earlier:
                 excludes = tuple(earlier)
             else:
                 excludes = ()
-            if condition.kind is ConditionKind.PATTERN:
-                after_pattern = True
             outcome = self.outcome(case)
             ends = () if outcome.completes else self._exit_names(outcome.leaves)
             built.append(
@@ -941,6 +1301,7 @@ class _Analysis:
                     condition=condition,
                     excludes=excludes,
                     unreachable_rule=self.unreachable_cases.get(case.id),
+                    rules=self.case_rules[case.id],
                     ends_with=ends,
                     call_ids=tuple(
                         self.call_ids[inner.id]
@@ -952,6 +1313,11 @@ class _Analysis:
             )
             earlier.append(case_id)
         has_default = any(item.condition.kind is ConditionKind.DEFAULT for item in built)
+        takes_missing = any(
+            item.condition.kind in (ConditionKind.NULL, ConditionKind.DEFAULT)
+            for item in built
+            if item.unreachable_rule is None
+        )
         return Decision(
             id=self.decision_ids[node.id],
             node_id=node.id,
@@ -960,6 +1326,7 @@ class _Analysis:
             cases=tuple(built),
             has_default=has_default,
             falls_through=not has_default,
+            missing_fails=mode is DecisionMode.SWITCH and not takes_missing,
             guard=self.decision_guards.get(node.id, Guard()),
             loop_id=self.loop_of.get(node.id),
             notes=tuple(notes),
@@ -989,6 +1356,7 @@ class _Analysis:
                     same_target_as=tuple(others[:MAX_SAME_TARGET]),
                     same_target_count=len(others),
                     source=call.source,
+                    unreachable_reason=call.unreachable_reason,
                 )
             )
         return tuple(result)
@@ -1110,6 +1478,28 @@ def is_alternatives(node: FlowNode) -> bool:
     )
 
 
+def _optional(node: FlowNode | None) -> tuple[FlowNode, ...]:
+    return (node,) if node is not None else ()
+
+
+def _catches_may_filter(parent: FlowNode, child: FlowNode) -> bool:
+    """True when the CATCH blocks after the TRY `child` all carry settings wm-doc does not read.
+
+    Such a setting may be a failure filter, so a failure may pass every CATCH (S35); a CATCH
+    without one handles every failure.
+    """
+    if step_form(child) != "TRY":
+        return False
+    siblings = list(parent.children)
+    position = next(index for index, item in enumerate(siblings) if item is child)
+    catches = []
+    for item in siblings[position + 1 :]:
+        if step_form(item) != "CATCH":
+            break
+        catches.append(item)
+    return bool(catches) and all(item.unknown_attributes for item in catches)
+
+
 def _handles_failure_of(parent: FlowNode, child: FlowNode) -> bool:
     """True when `parent` keeps going after `child` fails (S10, S13).
 
@@ -1120,12 +1510,13 @@ def _handles_failure_of(parent: FlowNode, child: FlowNode) -> bool:
     siblings = list(parent.children)
     position = next(index for index, item in enumerate(siblings) if item is child)
     later = siblings[position + 1 :]
+    caught = step_form(child) == "TRY" and bool(later) and step_form(later[0]) == "CATCH"
     if parent.type is FlowNodeType.SEQUENCE and not step_form(parent):
         if sequence_exit_on(parent) == "DONE":
             return True
         if sequence_exit_on(parent) == "SUCCESS":
-            return any(step_form(item) != "FINALLY" for item in later)
-    return step_form(child) == "TRY" and bool(later) and step_form(later[0]) == "CATCH"
+            return caught or any(step_form(item) not in ("CATCH", "FINALLY") for item in later)
+    return caught
 
 
 def _parent_is_case(parent: FlowNode | None) -> bool:
@@ -1144,6 +1535,9 @@ def _reach(guard: Guard, blocked: bool) -> Reach:
     if blocked:
         return Reach.UNREACHABLE
     kinds = {term.kind for term in guard.terms}
-    if GuardKind.ON_FAILURE_OF in kinds:
+    if any(
+        term.kind is GuardKind.ON_FAILURE_OF and term.certainty is not Certainty.POSSIBLE
+        for term in guard.terms
+    ):
         return Reach.FAILURE_PATH
     return Reach.CONDITIONAL if kinds else Reach.NORMAL

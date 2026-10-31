@@ -2,7 +2,9 @@
 
 Conditions are shown as written in the FLOW and never evaluated. Every row says how certain it
 is; rows resting on an Integration Server rule not yet confirmed on 10.15 name the assumption.
-Label text only ever appears flattened inside code spans, so it cannot form Markdown structure.
+Rule citations come from the registry (`rule_label`, `assumption_label`) and are never written
+by hand, so a status change in `flow_semantics` reaches every page. Label text only ever appears
+flattened inside code spans, so it cannot form Markdown structure.
 """
 
 from __future__ import annotations
@@ -20,22 +22,23 @@ from wm_doc.flow_lineage import (
 )
 from wm_doc.flow_logic import (
     CallContext,
+    Certainty,
     ConditionKind,
     Decision,
     DecisionCase,
     DecisionMode,
     ExitEffect,
+    ExitScope,
     FlowLogic,
     Guard,
     GuardKind,
     GuardTerm,
     Reach,
-    case_rules,
     code_span,
     sort_rules,
     weakest,
 )
-from wm_doc.flow_semantics import RULES, assumption_label
+from wm_doc.flow_semantics import RULES, assumption_label, rule_label
 from wm_doc.ir import CallType, MappingOperationType
 
 MAX_DECISIONS_SHOWN = 40
@@ -54,17 +57,36 @@ INTRO = (
     "confirmed on IS 10.15."
 )
 
-NOTE_TEXT = {
-    "SWITCH_IGNORED": "It also names a switch, which label expressions are assumed to ignore.",
-    "NO_SWITCH": "It has no switch and its labels are not expressions; IS behaviour is unknown.",
-    "DEFAULT_NOT_LAST": (
-        "`$default` is not the last case; it is assumed to run only when no other case "
-        "matches (assumption S6)."
-    ),
-    "DUPLICATE_LABEL": "A case repeats an earlier label and never runs (S2).",
-    "LABELS_WITHHELD": "Some case labels are withheld by the free-text policy.",
-    "EXPRESSION_NOT_SPLIT": "Some label expressions could not be split into field references.",
-}
+
+def note_text(note: str) -> str:
+    """A decision note in words, citing its rules by their current status."""
+    if note == "SWITCH_IGNORED":
+        return (
+            "It also names a switch, which is not valid together with label expressions "
+            f"({rule_label(['S8'])}); the switch is not used here."
+        )
+    if note == "NO_SWITCH":
+        return "It has no switch and its labels are not expressions; IS behaviour is unknown."
+    if note == "DEFAULT_NOT_LAST":
+        return (
+            "`$default` is not the last case; it runs only when no other case matches "
+            f"({rule_label(['S6'])})."
+        )
+    if note == "DUPLICATE_LABEL":
+        return (
+            "A case repeats an earlier label, which Designer does not allow; the first one wins, "
+            f"so the repeat never runs ({rule_label(['S2', 'S37'])})."
+        )
+    if note == "LABELS_IGNORED":
+        return (
+            "Label expressions ignore a blank or `$null` label, so such a case never runs "
+            f"({rule_label(['S8'])})."
+        )
+    if note == "LABELS_WITHHELD":
+        return "Some case labels are withheld by the free-text policy."
+    if note == "EXPRESSION_NOT_SPLIT":
+        return "Some label expressions could not be split into field references."
+    return note
 
 MAX_VARIABLES_SHOWN = 5
 MAX_ORIGINS_SHOWN = 8
@@ -108,7 +130,8 @@ _NOTE_SUFFIX = {
     "list_element": "the line writes one list element",
     "conditional": "the line has attributes that are not interpreted, possibly a condition",
     "several_writes": (
-        "another line of the same map also writes it, and their order is an assumption"
+        "another line of the same map also writes it, and which one is applied last is not "
+        "documented"
     ),
     "source_may_be_absent": "when the source is absent the field keeps its earlier value",
     "not_followed": "the source is not followed further",
@@ -178,7 +201,7 @@ def _decision_block(logic: FlowLogic, decision: Decision, lineage: FlowLineage |
     if decision.loop_id is not None:
         lines += ["It is inside a loop, so each iteration may take a different case.", ""]
     for note in decision.notes:
-        lines += [NOTE_TEXT.get(note, note), ""]
+        lines += [note_text(note), ""]
     lines += [
         "| Case | Condition | Calls, in order | Ends with | Notes |",
         "| --- | --- | --- | --- | --- |",
@@ -193,9 +216,8 @@ def _decision_block(logic: FlowLogic, decision: Decision, lineage: FlowLineage |
             ends.append(f"and {len(case.ends_with) - MAX_IDS} more")
         notes = []
         if case.unreachable_rule:
-            label = assumption_label([case.unreachable_rule])
-            notes.append(f"never runs ({label or case.unreachable_rule})")
-        label = assumption_label(case_rules(decision.mode, case.condition.kind))
+            notes.append(f"never runs ({rule_label([case.unreachable_rule])})")
+        label = assumption_label(case.rules)
         if label:
             notes.append(label)
         lines.append(
@@ -204,13 +226,26 @@ def _decision_block(logic: FlowLogic, decision: Decision, lineage: FlowLineage |
             f"{_cell('; '.join(notes)) or '-'} |"
         )
     if decision.falls_through:
-        lines.append(
-            "| - | no case matches | - | - | nothing runs and the next step follows "
-            "(assumption S7) |"
-        )
+        lines.append(f"| - | no case matches | - | - | {_cell(no_match_text(decision))} |")
     if lineage is not None:
         lines += _origins_block(logic, lineage, decision)
     return "\n".join(lines)
+
+
+def no_match_text(decision: Decision) -> str:
+    """What happens when no case matches; never only "the next step follows" when it may fail."""
+    falls = f"nothing runs and the next step follows ({rule_label(['S7'])})"
+    if not decision.missing_fails:
+        return falls
+    field = code_span(decision.switch.text()) if decision.switch else "the switch value"
+    unless = (
+        ", unless a withheld label is `$null`" if "LABELS_WITHHELD" in decision.notes else ""
+    )
+    return (
+        f"nothing runs and the next step follows when {field} has a value no case matches "
+        f"({rule_label(['S7'])}); when {field} is missing the BRANCH fails instead{unless} "
+        f"({rule_label(['S31'])})"
+    )
 
 
 def condition_text(decision: Decision, case: DecisionCase) -> str:
@@ -331,7 +366,7 @@ def _not_followed(variable: VariableOrigins) -> str | None:
     if "scope" in variable.notes:
         return (
             "Not followed: the decision is inside a step that works on one document (a scope), "
-            "so its fields are relative to that document (assumption S24)."
+            f"so its fields are relative to that document ({rule_label(['S24'])})."
         )
     if "too_deep" in variable.notes:
         return "Not followed: the decision is nested too deeply."
@@ -462,6 +497,12 @@ def _origin_what(logic: FlowLogic, origin: Origin, *, brief: bool) -> str:
         }.get(origin.operation or MappingOperationType.SET, "writes")
         written = code_span(origin.written_path.text()) if origin.written_path else "a field in it"
         return f"partly changed: a line {verb} {written} in {where}"
+    if kind is OriginKind.LINKED:
+        written = code_span(origin.written_path.text()) if origin.written_path else "a field"
+        return (
+            f"may be changed in place when {where} writes {written}, the same field of a "
+            f"document linked to this one ({rule_label(['S38'])})"
+        )
     if kind is OriginKind.COLLECTED:
         return f"collected by {_step(logic, origin.node_id)} (OUT-ARRAY)"
     if kind is OriginKind.SERVICE_INPUT:
@@ -571,7 +612,11 @@ def render_decision_facts(logic: FlowLogic | None, lineage: FlowLineage | None) 
         if len(decision.cases) > MAX_FACT_CASES:
             lines.append(f"  - ... and {len(decision.cases) - MAX_FACT_CASES} more case(s)")
         if decision.falls_through:
-            lines.append("  - no case matches: nothing runs (assumption S7)")
+            text = "  - no case matches: nothing runs"
+            if decision.missing_fails:
+                field = code_span(decision.switch.text()) if decision.switch else "the switch"
+                text += f"; if {field} is missing, the BRANCH fails"
+            lines.append(text)
         if lineage is not None:
             for variable in lineage.for_decision(decision.id)[:MAX_VARIABLES_SHOWN]:
                 lines.append(
@@ -619,11 +664,17 @@ def term_text(logic: FlowLogic, term: GuardTerm) -> str:
         return f"{term.decision_id} did not take {named}, which always {verb}"
     steps = " and ".join(logic.step_text[step] for step in term.step_ids) or "an earlier step"
     if kind is GuardKind.ON_FAILURE_OF:
+        if term.certainty is Certainty.POSSIBLE:
+            # A MAP that succeeds does not always end an EXIT-ON SUCCESS sequence (S10).
+            return f"{steps} failed, or did not end the sequence"
         return f"{steps} failed"
     if kind is GuardKind.ONLY_IF_SUCCEEDED:
         return f"{steps} succeeded"
     if kind is GuardKind.FINALLY:
-        return "after TRY and CATCH, whatever happened"
+        return (
+            "after TRY and CATCH, whatever happened, unless EXIT `$flow` with failure left "
+            f"({rule_label(['S33'])})"
+        )
     if kind is GuardKind.PER_ITERATION:
         where = (
             f"once per element of {code_span(term.loop_path.text())}"
@@ -660,9 +711,24 @@ def _calls_block(logic: FlowLogic) -> str:
     return "\n".join(lines)
 
 
+_NEVER_TEXT = {
+    "duplicate_case": "never: its case repeats an earlier label",
+    "ignored_label": "never: label expressions ignore the label of its case",
+    "try_cannot_fail": "never: it is in a CATCH, and nothing in the TRY before it can fail",
+    "flow_failure": (
+        "never: it is in a FINALLY, and every way out of the blocks before it is EXIT `$flow` "
+        "with failure, which skips FINALLY"
+    ),
+    "no_linked_outputs": "never: no output is linked to the pipeline, so it does not run",
+}
+
+
 def _runs_when(logic: FlowLogic, call: CallContext) -> str:
     if call.reach is Reach.UNREACHABLE:
-        return "never: an earlier step always leaves first, or its case never runs"
+        return _NEVER_TEXT.get(
+            call.unreachable_reason or "",
+            "never: an earlier step always leaves first, or its case never runs",
+        )
     text = guard_text(logic, call.guard)
     if call.same_target_count:
         others = ", ".join(call.same_target_as)
@@ -697,7 +763,13 @@ def exit_text(logic: FlowLogic, item: ExitEffect) -> str:
     if item.target_id is None:
         reason = f" ({item.note})" if item.note else ""
         return f"{item.id} leaves a step that cannot be determined{reason}, with {signal}"
-    text = f"{item.id} leaves {logic.step_text[item.target_id]} with {signal}"
+    if item.scope is ExitScope.ITERATION:
+        text = (
+            f"{item.id} ends the current iteration of {logic.step_text[item.target_id]} with "
+            f"{signal}; the next iteration runs"
+        )
+    else:
+        text = f"{item.id} leaves {logic.step_text[item.target_id]} with {signal}"
     if item.reach_id is not None and item.reach_id != item.target_id:
         text += f"; the failure ends {logic.step_text[item.reach_id]}"
     label = assumption_label(item.rules)
@@ -709,10 +781,23 @@ def _unreachable_block(logic: FlowLogic) -> str:
     for item in logic.unreachable[:MAX_LIST_ROWS]:
         label = assumption_label(item.rules)
         suffix = f" ({label})" if label else ""
+        step = logic.step_text[item.node_id]
         if item.reason == "duplicate_case":
             lines.append(f"- {item.case_id}: an earlier case has the same label{suffix}.")
+        elif item.reason == "ignored_label":
+            lines.append(
+                f"- {item.case_id}: label expressions ignore a blank or `$null` label{suffix}."
+            )
+        elif item.reason == "try_cannot_fail":
+            lines.append(f"- {step}: nothing in the TRY before it can fail{suffix}.")
+        elif item.reason == "flow_failure":
+            lines.append(
+                f"- {step}: every way out of the blocks before it is EXIT `$flow` with failure "
+                f"({_ids(item.exit_ids)}), which skips it{suffix}."
+            )
+        elif item.reason == "no_linked_outputs":
+            lines.append(f"- {step}: no output is linked, so the transformer does not run{suffix}.")
         else:
-            step = logic.step_text[item.node_id]
             lines.append(f"- {step}: {_ids(item.exit_ids)} always leaves first{suffix}.")
     lines += _more(len(logic.unreachable), MAX_LIST_ROWS, "step", prefix="")
     return "\n".join(lines)
@@ -729,6 +814,8 @@ def _exit_ref(logic: FlowLogic, exit_id: str) -> str:
     item = logic.exit(exit_id)
     if item.target_id is None:
         return f"{exit_id} (target not determined)"
+    if item.scope is ExitScope.ITERATION:
+        return f"{exit_id} (ends the current iteration of {logic.step_text[item.target_id]})"
     return f"{exit_id} (leaves {logic.step_text[item.target_id]}, {_signal(item.signal)})"
 
 

@@ -148,6 +148,16 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   `analysis.json`. Every derived fact carries a certainty (observed, derived, possible,
   unknown), a basis, and the id of the IS rule it rests on (`flow_semantics.py`, documented in
   `docs/flow-semantics.md`); conclusions resting on an assumed rule are shown as assumptions.
+- Rule statuses follow the owner's audit of the IBM 10.15 documentation (2026-10-27):
+  documented rules are cited by id, assumed ones as "assumption S#"; no rule is verified until
+  the owner runs the checklist. Pages never write a status by hand: every citation comes from
+  `rule_label` / `assumption_label` (tested), and rule ids are never renumbered. A TRY is read
+  with its CATCH and FINALLY blocks as one step: a CATCH runs only when the TRY may fail,
+  FINALLY unless every way out is EXIT `$flow` FAILURE (S33); a missing switch without `$null`
+  or `$default` may fail the BRANCH (S31), so "no case matched" is never shown as only falling
+  through; first-level fields roll back after a failed EXIT-ON SUCCESS/DONE child or REPEAT on
+  FAILURE attempt (S36), but not for a CATCH (S15); linking a whole document shares it, so a
+  change inside one of two linked documents is a possible origin for the other (S38).
 - Owner decisions (2026-10-25): branch condition values are shown in pages, prompts and the
   Explorer, subject to the free-text policy and the secret guard (`explorer build
   --condition-values exclude` opts out; MAPSET literals stay unexported in the Explorer); a
@@ -163,7 +173,9 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   `preserve` list may come from the pipeline) and lines with uninterpreted attributes keep the
   earlier ones possible.
 - Description files show the decisions and their origins under `### Decisions` in the facts
-  block (refreshed on every run, not part of the facts hash).
+  block (refreshed on every run, not part of the facts hash). When stage 4 hashes the logic,
+  the hashed form carries behaviour only, never a rule status or an assumption label, so a
+  status change never makes approved descriptions stale.
 - The pseudo-code the model sees (every detail level, with notes and comments) and the facts
   hash of description files are frozen for the samples and a builder-made service by
   `tests/unit/test_flow_facts_golden.py`; change them only on purpose.

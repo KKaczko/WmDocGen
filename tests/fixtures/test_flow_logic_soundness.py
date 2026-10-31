@@ -146,7 +146,7 @@ def test_expression_cases_say_no_earlier_case_matched(tmp_path: Path) -> None:
     text = render_decisions_section(logic)
     assert "`%c% == 2 \\| 3`, and no earlier case matched" in text
     assert "(no condition written)" in text
-    assert "label expressions are assumed to ignore" in text
+    assert "not valid together with label expressions (S8)" in text
     assert "(and no earlier case)" in guard_text(logic, _call(logic, "x.api:two").guard)
     assert _call(logic, "x.api:blank").guard.certainty is Certainty.UNKNOWN
 
@@ -162,7 +162,7 @@ def test_null_and_empty_switch_cases(tmp_path: Path) -> None:
     text = render_decisions_section(logic)
     assert "`/s` is missing or null" in text
     assert "`/s` is an empty string" in text
-    assert "assumption S4" in text
+    assert "assumption S4" not in text  # documented
 
 
 def test_labels_with_newlines_cannot_add_headings(tmp_path: Path) -> None:

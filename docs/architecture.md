@@ -371,7 +371,12 @@ EXIT-ON SUCCESS alternatives, loops, repeats), where each EXIT goes and which st
 It models a normal run (no step fails on its own) plus the failure paths that TRY/CATCH and
 EXIT-ON SUCCESS or DONE make explicit; an EXIT whose target cannot be determined never proves
 anything. Every conclusion cites the Integration Server rules in `flow_semantics.py`
-(`docs/flow-semantics.md`); rules not yet confirmed on IS 10.15 are shown as assumptions.
+(`docs/flow-semantics.md`); rules not yet confirmed on IS 10.15 are shown as assumptions, and
+every citation is produced from the registry, so a status change reaches every page. A TRY is
+read together with its CATCH and FINALLY blocks, in the sibling form and in the older EXIT-ON
+SUCCESS form: a CATCH runs only when something in the TRY may fail, and FINALLY runs unless
+every way out of the TRY and its CATCHes is EXIT `$flow` with FAILURE. A transformer whose
+outputs are not linked never runs, and EXIT `$iteration` ends only the current iteration.
 `render/flow_markdown.py` writes the "Decisions" section of service pages (between Calls and
 Data and Systems Touched) and the rule table in `LIMITATIONS.md`. Case labels and step labels
 appear only when the free-text policy includes them, always inside code spans.
@@ -383,7 +388,11 @@ mapping lines of MAP steps and INVOKE maps (one MAP reads before it writes, S19)
 outputs (S18), a called service's declared outputs and the fields its own output map reads
 (possible only), `clearPipeline` and `restorePipeline*`, the service's declared inputs, or the
 caller's pipeline. BRANCH cases, EXITs, failure paths (CATCH, EXIT-ON SUCCESS and DONE,
-REPEAT) and LOOP iterations are joined. Any called service may change any field (S16), so the
+REPEAT) and LOOP iterations are joined; after a failed EXIT-ON SUCCESS or DONE child, or a
+failed attempt of a REPEAT on FAILURE, first-level fields roll back while nested ones keep both
+values as possible (S36). Linking a whole document shares it (S38): a line that changes a field
+inside one of two linked documents adds a possible origin to the same field of the other. Any
+called service may change any field (S16), so the
 calls between the last certain definition and the decision are listed as a caveat. Steps with
 a scope and loops nested too deeply are not followed; the fields they may change get an
 unknown origin. The page shows "Where `/x` comes from" under each decision; description files

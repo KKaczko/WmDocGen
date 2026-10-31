@@ -275,7 +275,7 @@ def test_set_and_copy_to_one_field_in_one_map(tmp_path: Path) -> None:  # F17
     assert [origin.kind for origin in origins] == [OriginKind.SET, OriginKind.COPY]
     assert all("S19" in origin.rules for origin in origins)
     assert all(origin.certainty is Certainty.POSSIBLE for origin in origins)
-    assert "their order is an assumption" in subject.text()
+    assert "which one is applied last is not documented" in subject.text()
 
 
 def test_overwrite_off_keeps_the_earlier_value(tmp_path: Path) -> None:  # F18
@@ -470,7 +470,7 @@ def test_a_scoped_step_is_not_followed(tmp_path: Path) -> None:  # F21
     )
 
     assert subject.variable("D1").notes == ("scope",)
-    assert "assumption S24" in subject.text().split("### D2")[0]
+    assert "relative to that document (S24)" in subject.text().split("### D2")[0]
     after = subject.origins("D2")
     assert [origin.kind for origin in after] == [OriginKind.SET, OriginKind.UNKNOWN]
     assert after[1].certainty is Certainty.UNKNOWN
@@ -564,19 +564,25 @@ def test_a_decision_on_one_list_element_is_never_certain(tmp_path: Path) -> None
     assert "The decision tests one list element" in subject.text()
 
 
-def test_a_failing_output_map_feeds_the_next_alternative(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("path", "rolled_back"), [("/doc/a", False), ("/a", True)])
+def test_a_failing_output_map_feeds_the_next_alternative(
+    tmp_path: Path, path: str, rolled_back: bool
+) -> None:
     subject = _subject(
         tmp_path,
-        map_(set_("/a", "first")),
+        map_(set_(path, "first")),
         seq(
-            invoke("ext.api:x", outputs=[copy("/q", "/a")]),
-            branch(case("first", invoke("x.api:b")), switch="/a"),
+            invoke("ext.api:x", outputs=[copy("/q", path)]),
+            branch(case("first", invoke("x.api:b")), switch=path),
             exit_on="SUCCESS",
         ),
     )
 
+    # The failed child is rolled back at the first level only (S36): a nested field may keep
+    # what the output map copied before the failure.
     kinds = subject.kinds("D1")
-    assert OriginKind.SET in kinds and OriginKind.COPY in kinds
+    assert OriginKind.SET in kinds
+    assert (OriginKind.COPY in kinds) is not rolled_back
 
 
 def test_the_facts_block_caps_the_cases(tmp_path: Path) -> None:
