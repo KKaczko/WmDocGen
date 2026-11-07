@@ -7,7 +7,7 @@ of the text, so a condition is never paraphrased or invented. Before an answer i
 the items are checked against the facts (`flow_logic`):
 
 - R1: every id exists, and a case belongs to the decision the item names.
-- R2: a call sits in an item about the innermost case it runs in (or about no case).
+- R2: a call or EXIT sits in an item about the innermost case it runs in (or about no case).
 - R3: every call that matters is listed by some item; one item does not mix calls that run
   only after a failure with calls that run otherwise.
 - R4: every decision that decides something (its cases call services or leave) has an item.
@@ -16,7 +16,8 @@ the items are checked against the facts (`flow_logic`):
 - R7: the text does not name a call that runs only in another case than the item's.
 
 Only calls and decisions whose ids the prompt shows are required (R3, R4). Ids the model
-writes are normalised (`[c3]` is `C3`) and echoed in corrections only in the shape of an id.
+writes are normalised (`[c3]` is `C3`), read by their shape (`flow_item`: small models put
+case and EXIT ids into `calls`) and echoed in corrections only in the shape of an id.
 
 `standard` enforces R1-R3; `thorough` and `deep` enforce all; rules not enforced are only
 counted. A failed check shares the one corrective retry of the answer.
@@ -40,6 +41,7 @@ from wm_doc.flow_logic import (
     Decision,
     DecisionCase,
     DecisionMode,
+    ExitEffect,
     FlowLogic,
     GuardKind,
     GuardTerm,
@@ -59,6 +61,9 @@ _ID_SHAPE_RE = re.compile(r"D\d{1,4}(?:\.c\d{1,4})?|C\d{1,5}|E\d{1,4}")
 _ID_LOOSE_RE = re.compile(
     r"\[?\s*([dce])\s*(\d{1,5})(?:\s*\.\s*c\s*(\d{1,4}))?\s*\]?\.?", re.IGNORECASE
 )
+_CASE_ID_RE = re.compile(r"D\d+\.c\d+")
+_DECISION_ID_RE = re.compile(r"D\d+")
+_EXIT_ID_RE = re.compile(r"E\d+")
 _SHOWN_ID_RE = re.compile(r"(?<![\w.])(D\d+(?:\.c\d+)?|C\d+|E\d+)(?!\w)")
 _QUOTED_RE = re.compile(r"\"([^\"\n]{1,80})\"|“([^”\n]{1,80})”")
 _CAPS_RE = re.compile(r"(?<![\w$/.:`])[A-Z][A-Z0-9_]+(?![\w$])")
@@ -112,6 +117,7 @@ class FlowItem:
     decision: str = ""
     case: str = ""
     calls: tuple[str, ...] = ()
+    exits: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +138,45 @@ def normalize_id(value: object) -> str:
     letter, number, case = match.groups()
     found = f"{letter.upper()}{int(number)}"
     return f"{found}.c{int(case)}" if case is not None else found
+
+
+def flow_item(text: str, decision: object, case: object, refs: Iterable[object]) -> FlowItem:
+    """An item from the model's fields, each id in `calls` read by its shape.
+
+    An EXIT id is an EXIT the item describes. A case or decision id fills an empty `case` or
+    `decision`, or is dropped when it repeats it; any other one stays and is reported (R1).
+    """
+    decision_id = normalize_id(decision)
+    case_id = normalize_id(case)
+    calls: list[str] = []
+    exits: list[str] = []
+    for ref in refs:
+        found = normalize_id(ref)
+        if not found:
+            continue
+        if _EXIT_ID_RE.fullmatch(found):
+            exits.append(found)
+        elif _CASE_ID_RE.fullmatch(found) and case_id in ("", found):
+            case_id = found
+        elif _DECISION_ID_RE.fullmatch(found) and decision_id in ("", found):
+            decision_id = found
+        else:
+            calls.append(found)
+    return FlowItem(
+        text,
+        decision_id,
+        case_id,
+        tuple(dict.fromkeys(calls))[:MAX_ITEM_CALLS],
+        tuple(dict.fromkeys(exits))[:MAX_ITEM_CALLS],
+    )
+
+
+def _not_a_call(value: str) -> str:
+    if _CASE_ID_RE.fullmatch(value):
+        return f"{value} is a case id, not a call id; one item describes one case, given in case"
+    if _DECISION_ID_RE.fullmatch(value):
+        return f"{value} is a decision id, not a call id; give it in decision"
+    return f"{_echo(value)} is not a call id"
 
 
 def _echo(value: str) -> str:
@@ -188,6 +233,13 @@ def _call(logic: FlowLogic, call_id: str) -> CallContext | None:
         return None
 
 
+def _exit(logic: FlowLogic, exit_id: str) -> ExitEffect | None:
+    try:
+        return logic.exit(exit_id)
+    except KeyError:
+        return None
+
+
 # --- checks --------------------------------------------------------------------------------
 
 
@@ -215,8 +267,9 @@ def check_items(
     for number, item in enumerate(items, 1):
         found += _references(logic, number, item)
         calls = [call for call_id in item.calls if (call := _call(logic, call_id)) is not None]
+        exits = [step for exit_id in item.exits if (step := _exit(logic, exit_id)) is not None]
         listed.update(call.id for call in calls)
-        found += _placement(logic, number, item, calls)
+        found += _placement(logic, number, item, calls, exits)
         found += _wording(logic, number, item, calls, facts)
     for call_id in coverage:
         if call_id not in listed and call_id in shown:
@@ -262,23 +315,29 @@ def _references(logic: FlowLogic, number: int, item: FlowItem) -> list[Violation
         )
     for call_id in item.calls:
         if _call(logic, call_id) is None:
-            found.append(
-                Violation(FlowRule.R1, f"item {number}: {_echo(call_id)} is not a call id")
-            )
+            found.append(Violation(FlowRule.R1, f"item {number}: {_not_a_call(call_id)}"))
+    for exit_id in item.exits:
+        if _exit(logic, exit_id) is None:
+            found.append(Violation(FlowRule.R1, f"item {number}: {exit_id} is not an EXIT id"))
     return found
 
 
-def _innermost_case(call: CallContext) -> GuardTerm | None:
-    terms = [term for term in call.guard.terms if term.kind is GuardKind.IN_CASE]
+def _innermost_case(step: CallContext | ExitEffect) -> GuardTerm | None:
+    terms = [term for term in step.guard.terms if term.kind is GuardKind.IN_CASE]
     return terms[-1] if terms else None
 
 
 def _placement(
-    logic: FlowLogic, number: int, item: FlowItem, calls: list[CallContext]
+    logic: FlowLogic,
+    number: int,
+    item: FlowItem,
+    calls: list[CallContext],
+    exits: list[ExitEffect],
 ) -> list[Violation]:
     found: list[Violation] = []
     case_text = _echo(item.case)
-    for call in calls:
+    steps: list[CallContext | ExitEffect] = [*calls, *exits]
+    for call in steps:
         term = _innermost_case(call)
         if term is None:
             if item.case:

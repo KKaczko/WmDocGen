@@ -419,6 +419,46 @@ def test_calls_and_decisions_cut_from_the_prompt_are_not_required(tmp_path: Path
     assert {item.rule for item in found} == {FlowRule.R3, FlowRule.R4}
 
 
+def test_case_and_exit_ids_in_calls_are_read_by_their_shape(tmp_path: Path) -> None:
+    # A small model put the case and the EXIT of an item into `calls` (qwen3.5:4b did).
+    setup = Setup(tmp_path, STOP)
+    items = [*GOOD, _item("Stops the service.", calls=("D3.c1", "E1"))]
+
+    provider, outcome = setup.describe(_always(items))
+
+    assert outcome is DescribeOutcome.GENERATED
+    assert len(provider.requests) == 1
+    assert "When `/stop` is `STOP` (D3): Stops the service." in setup.text()
+
+
+def test_an_exit_under_the_wrong_case_fails(tmp_path: Path) -> None:
+    logic = compute_flow_logic(Setup(tmp_path, STOP).analysis.services[0])
+    facts = "[D1] [D1.c1] [C1] [D3] [D3.c1] [E1]"
+
+    wrong = [FlowItem("Validates, then stops.", "D1", "D1.c1", ("C1",), ("E1",))]
+    placement = [
+        item for item in check_items(wrong, logic, ("C1",), facts) if item.rule is FlowRule.R2
+    ]
+    assert len(placement) == 1
+    assert "E1 runs only when D3 = `STOP`" in placement[0].message
+
+    right = [
+        FlowItem("Validates.", "D1", "D1.c1", ("C1",)),
+        FlowItem("Stops.", "D3", "D3.c1", (), ("E1",)),
+    ]
+    assert check_items(right, logic, ("C1",), facts) == []
+
+
+def test_an_id_of_the_wrong_kind_is_explained(tmp_path: Path) -> None:
+    logic = compute_flow_logic(Setup(tmp_path).analysis.services[0])
+    item = FlowItem("Validates.", "D1", "D1.c1", ("C1", "D2.c1", "E7"))
+
+    messages = [found.message for found in check_items([item], logic, (), "")]
+
+    assert "item 1: D2.c1 is a case id, not a call id" in messages[0]
+    assert "item 1: E7 is not a call id" in messages[1]
+
+
 def test_brief_descriptions_have_no_flow_and_no_flow_checks(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
 

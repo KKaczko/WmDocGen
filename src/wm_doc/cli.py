@@ -966,7 +966,8 @@ def _echo_generation_summary(
         f"- drafts kept (facts unchanged): {counts.get(DescribeOutcome.UNCHANGED, 0)}\n"
         f"- approved or edited, kept: {counts.get(DescribeOutcome.PROTECTED, 0)}\n"
         f"- rejected by validation: {counts.get(DescribeOutcome.REJECTED, 0)}\n"
-        f"- kept with unverified names: {counts.get(DescribeOutcome.UNVERIFIED, 0)}\n"
+        f"- kept unverified (names or detailed flow): "
+        f"{counts.get(DescribeOutcome.UNVERIFIED, 0)}\n"
         f"- generation failed: {counts.get(DescribeOutcome.FAILED, 0)}\n"
         f"- corrective retries: {stats.retried}\n"
         + (

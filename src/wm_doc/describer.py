@@ -39,7 +39,6 @@ from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
 from wm_doc.flow_answers import (
     ALL_RULES,
-    MAX_ITEM_CALLS,
     STANDARD_RULES,
     FlowItem,
     FlowRule,
@@ -47,9 +46,9 @@ from wm_doc.flow_answers import (
     correction_prompt,
     coverage_call_ids,
     decisions_block,
+    flow_item,
     item_text,
     logic_json,
-    normalize_id,
     strip_ids,
 )
 from wm_doc.flow_lineage import compute_flow_lineage
@@ -188,9 +187,9 @@ _DETAILED_STEPS_INSTRUCTION = (
     "the id of the BRANCH the item is about (`D1`), or an empty string. `case` is the id of "
     "the case whose steps the item describes (`D1.c2`), or an empty string; do not write "
     "the case's condition in `text`, the tool adds it from the facts. `calls` lists the ids "
-    "of the calls the item describes (`C3`, at most 12 per item); every call of the facts "
-    "that matters must be listed by some item, and calls of different cases go in different "
-    "items. Ids are the "
+    "of the calls and EXITs the item describes (`C3`, `E1`; at most 12), never a decision or "
+    "case id; every call of the facts that matters must be listed by some item, and calls of "
+    "different cases go in different items. Ids are the "
     "ones in [ ] in the facts and in `decisions`. Use field, service and system names "
     "exactly as they appear in the facts.\n"
 )
@@ -310,7 +309,7 @@ class DescribeOutcome(StrEnum):
     PROTECTED = "kept (approved or edited)"
     REJECTED = "rejected"
     FAILED = "failed"
-    UNVERIFIED = "kept with unverified names"
+    UNVERIFIED = "kept unverified"
 
 
 @dataclass(frozen=True)
@@ -1264,12 +1263,11 @@ def _flow_items(value: Any) -> tuple[FlowItem, ...]:
             item = FlowItem(raw)
         elif isinstance(raw, dict) and isinstance(raw.get("text"), str):
             calls = raw.get("calls")
-            ids = [normalize_id(call) for call in calls] if isinstance(calls, list) else []
-            item = FlowItem(
+            item = flow_item(
                 raw["text"],
-                normalize_id(raw.get("decision")),
-                normalize_id(raw.get("case")),
-                tuple(found for found in ids if found)[:MAX_ITEM_CALLS],
+                raw.get("decision"),
+                raw.get("case"),
+                calls if isinstance(calls, list) else [],
             )
         else:
             continue
@@ -1343,7 +1341,12 @@ def narrative_payload(narrative: Narrative) -> dict[str, Any]:
 def answer_payload(answer: DescribeAnswer) -> dict[str, Any]:
     payload = narrative_payload(answer.narrative)
     payload["detailed_steps"] = [
-        {"text": item.text, "decision": item.decision, "case": item.case, "calls": list(item.calls)}
+        {
+            "text": item.text,
+            "decision": item.decision,
+            "case": item.case,
+            "calls": [*item.calls, *item.exits],
+        }
         for item in answer.items
     ]
     return payload

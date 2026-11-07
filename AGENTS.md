@@ -187,7 +187,8 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   block (refreshed on every run, not part of the facts hash).
 - Stage 4 (`flow_answers.py`, describe prompt v4): for FLOW services the prompt carries ids in
   the pseudo-code (`render_pseudocode(..., logic=)`: `[D1]`, `[D1.c2]`, `[C3]`, `[E1]`) and a
-  decisions block; detailed-flow items are `{text, decision, case, calls}`; the tool writes the
+  decisions block; detailed-flow items are `{text, decision, case, calls}` (`calls` holds call
+  and EXIT ids; `flow_item` reads ids by shape, R2 also places EXITs); the tool writes the
   case condition in front of the text (stored as plain strings) and checks R1-R7 (`standard`
   R1-R3, `thorough`/`deep` all; the rest only counted) within the one corrective retry
   (`thorough` adds one request when only the flow is still wrong); `--keep-unverified` marks
