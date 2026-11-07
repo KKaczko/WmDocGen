@@ -63,7 +63,7 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
 
 ## Contracts
 
-- `analysis.json` is schema `analysis.v11`: each fact is stored once, on the service, package or
+- `analysis.json` is schema `analysis.v12`: each fact is stored once, on the service, package or
   document it belongs to. Server-wide lists (`AnalysisResult.call_occurrences`,
   `unique_dependencies`, `mapping_operations`, Java lists, `document_types`, ...) are derived
   properties, not serialized. Each package's `service_index` lists only its own services.
@@ -185,6 +185,17 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   trimmed when parsed), patterns, expressions, withheld labels or hidden literals.
 - Description files show the decisions and their origins under `### Decisions` in the facts
   block (refreshed on every run, not part of the facts hash).
+- Stage 5 (`analysis.v12`): BRANCH cases carry `case_kind` (default, null, blank, pattern,
+  text) and label expressions `condition_refs`, both read from the raw label before the
+  free-text policy, so `$null`, blank and withheld labels stay distinct in every mode (a
+  withheld label is `CaseCondition.withheld`, never compared, never read as blank or `$null`,
+  never used to rule out an outcome). `condition_refs` are field paths, kept in every mode
+  like SWITCH paths and mapping endpoints (the secret guard covers values, not field names).
+  EXIT `FROM` labels (`exit_label`) and `FAILURE-MESSAGE` (`failure_message`) go through the
+  policy with the secret guard first and are never kept raw (not in `attributes` either);
+  only `$flow`, `$parent`, `$loop` and `$iteration` stay raw in `exit_from`. The parser
+  resolves a label EXIT to `exit_target_id` from the raw labels. Include-mode output is
+  unchanged except for secret-like EXIT labels and messages, which are now withheld.
 - Stage 4 (`flow_answers.py`, describe prompt v4): for FLOW services the prompt carries ids in
   the pseudo-code (`render_pseudocode(..., logic=)`: `[D1]`, `[D1.c2]`, `[C3]`, `[E1]`) and a
   decisions block; detailed-flow items are `{text, decision, case, calls}` (`calls` holds call

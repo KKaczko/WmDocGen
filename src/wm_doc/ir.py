@@ -96,7 +96,7 @@ class DependencyKind(StrEnum):
     USES_TRANSFORMER = "USES_TRANSFORMER"
 
 
-ANALYSIS_SCHEMA_VERSION = "analysis.v11"
+ANALYSIS_SCHEMA_VERSION = "analysis.v12"
 
 
 class SignatureOrigin(StrEnum):
@@ -214,6 +214,20 @@ class FlowNodeType(StrEnum):
     INVOKE = "INVOKE"
     MAPINVOKE = "MAPINVOKE"
     EXIT = "EXIT"
+
+
+class CaseLabelKind(StrEnum):
+    """What a BRANCH case label is, read from the file before the free-text policy applies.
+
+    The kind is structure, not text: `$default` and `$null` are keywords, and that a label is
+    blank, a /pattern/ or other text says nothing about what it says.
+    """
+
+    DEFAULT = "default"
+    NULL = "null"
+    BLANK = "blank"
+    PATTERN = "pattern"
+    TEXT = "text"
 
 
 class InterpretationConfidence(StrEnum):
@@ -818,11 +832,17 @@ class FlowNode(BaseModel):
     switch: str | None = None
     evaluate_labels: bool | None = None
     is_default_case: bool | None = None
+    case_kind: CaseLabelKind | None = None  # BRANCH_CASE: the label's kind, in every mode
+    # BRANCH_CASE of a BRANCH with label expressions: the `%field%` references of its label as
+    # pipeline paths, in every mode; None when there is no expression or it cannot be split.
+    condition_refs: list[str] | None = None
     in_array: str | None = None
     out_array: str | None = None
-    exit_from: str | None = None
+    exit_from: str | None = None  # EXIT: a reserved scope ($flow, $parent, $loop, $iteration)
+    exit_label: TextValue | None = None  # EXIT FROM a step label, under the free-text policy
+    exit_target_id: str | None = None  # EXIT FROM a label: the enclosing step it names
     signal: str | None = None
-    failure_message: str | None = None
+    failure_message: TextValue | None = None  # under the free-text policy, secret guard first
     target: str | None = None
     call_occurrence_id: str | None = None
 

@@ -540,7 +540,12 @@ class _Scenarios:
         options: list[Outcome] = []
         for item in live:
             kind = item.condition.kind
-            if value is not None and kind is ConditionKind.VALUE and item.condition.text != value:
+            if (
+                value is not None
+                and kind is ConditionKind.VALUE
+                and not item.condition.withheld  # a withheld label never rules anything out
+                and item.condition.text != value
+            ):
                 rule_out(item.id)
                 continue
             options.append(Outcome(decision.id, OutcomeKind.CASE, (item.id,)))
@@ -683,6 +688,7 @@ class _Scenarios:
                 unresolved = True
             if any(
                 self.logic.case(case_id).condition.kind is ConditionKind.WITHHELD
+                or self.logic.case(case_id).condition.withheld
                 for case_id in outcome.case_ids
             ):
                 unresolved = True

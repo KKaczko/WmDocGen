@@ -20,6 +20,7 @@ from wm_doc.adapters import (
 from wm_doc.adapters import SERVICE_TYPE as ADAPTER_SERVICE_TYPE
 from wm_doc.config import AppConfig, ExtractionMode, classify_service
 from wm_doc.discovery import scan_path
+from wm_doc.flow_paths import expression_refs
 from wm_doc.ir import (
     AdapterDetails,
     AnalysisFinding,
@@ -32,6 +33,7 @@ from wm_doc.ir import (
     AttributeValue,
     CallOccurrence,
     CallType,
+    CaseLabelKind,
     ClassificationResult,
     DependencyKind,
     DocumentDependency,
@@ -137,6 +139,8 @@ MAPPING_OPERATION_TAGS = {"MAPCOPY", "MAPSET", "MAPDELETE"}
 MAP_METADATA_TAGS = {"MAPSOURCE", "MAPTARGET"}
 MAPPING_INTERNAL_TAGS = MAPPING_OPERATION_TAGS | MAP_METADATA_TAGS | {"DATA"}
 SUPPORTED_EXIT_ATTRIBUTES = {"FROM", "SIGNAL", "FAILURE-MESSAGE"}
+# EXIT FROM values kept as written; any other FROM names a step label (free text).
+EXIT_SCOPES = frozenset({"$flow", "$parent", "$loop", "$iteration"})
 UNRESOLVED_SOURCE_SAMPLE_LIMIT = 3
 SOURCE_SAMPLE_LIMIT = 3
 AGGREGATABLE_FINDINGS = {
@@ -186,8 +190,10 @@ FLOW_TECHNICAL_ATTRIBUTES: dict[str, set[str]] = {
     "MAP": {"MODE", "TIMEOUT"},
     "INVOKE": {"INVOKE-ORDER", "SERVICE", "TIMEOUT", "VALIDATE-IN", "VALIDATE-OUT"},
     "MAPINVOKE": {"INVOKE-ORDER", "SERVICE", "TIMEOUT", "VALIDATE-IN", "VALIDATE-OUT"},
-    "EXIT": SUPPORTED_EXIT_ATTRIBUTES,
+    "EXIT": {"SIGNAL"},
 }
+# Attributes read into their own fields under the free-text policy, never kept raw.
+FLOW_POLICY_ATTRIBUTES: dict[str, set[str]] = {"EXIT": {"FROM", "FAILURE-MESSAGE"}}
 FLOW_FREE_TEXT_ATTRIBUTES = {"NAME"}
 MAPPING_TECHNICAL_ATTRIBUTES: dict[str, set[str]] = {
     "MAPCOPY": {"FROM", "TO"},
@@ -1856,6 +1862,10 @@ def _parse_flow_xml(
         counters["node"] += 1
         return f"fn{counters['node']:04d}"
 
+    # Enclosing steps with their raw NAME, innermost last: EXIT FROM a label is resolved
+    # here, so it is found whatever the free-text policy keeps of the labels.
+    named: list[tuple[str, str | None]] = []
+
     def visit(
         element: etree._Element,
         parent_id: str | None,
@@ -2001,6 +2011,7 @@ def _parse_flow_xml(
             transformer_bindings.extend(parsed_bindings)
 
         children: list[FlowNode] = []
+        named.append((node_id, element.get("NAME")))
         for child in element:
             if (
                 node_type == FlowNodeType.MAP
@@ -2018,8 +2029,18 @@ def _parse_flow_xml(
                     continue
                 label_source = _element_source(flow_path, scan_root, child, "branch_case")
                 raw_label = child.get("NAME")
+                written = _blank_to_none(raw_label)
                 label = _apply_free_text_policy(
-                    _blank_to_none(raw_label), "branch_case_name", label_source, config, "NAME"
+                    written, "branch_case_name", label_source, config, "NAME"
+                )
+                case_kind = _case_label_kind(raw_label, written)
+                expressions = _parse_optional(element.get("LABELEXPRESSIONS")) is True
+                condition_refs = (
+                    _condition_refs(written)
+                    if expressions
+                    and written is not None
+                    and case_kind in (CaseLabelKind.TEXT, CaseLabelKind.PATTERN)
+                    else None
                 )
                 case_id = next_node_id()
                 case_path_parts = [*structural_path_parts, case_id]
@@ -2037,6 +2058,8 @@ def _parse_flow_xml(
                         type=FlowNodeType.BRANCH_CASE,
                         label=label,
                         is_default_case=raw_label == "$default",
+                        case_kind=case_kind,
+                        condition_refs=condition_refs,
                         attributes={"source_type": child.tag},
                         parent_id=node_id,
                         structural_path="/".join(case_path_parts),
@@ -2056,15 +2079,43 @@ def _parse_flow_xml(
                     )
             )
 
+        named.pop()
+        source = _element_source(flow_path, scan_root, element, tag.lower())
+        exit_from: str | None = None
+        exit_label: TextValue | None = None
+        exit_target_id: str | None = None
+        failure_message: TextValue | None = None
         if node_type == FlowNodeType.EXIT:
             _validate_exit(element, flow_path, scan_root, findings)
-        source = _element_source(flow_path, scan_root, element, tag.lower())
+            written_from = (element.get("FROM") or "").strip()
+            if written_from in EXIT_SCOPES:
+                exit_from = written_from
+            elif written_from:
+                exit_label = _apply_free_text_policy(
+                    written_from, "exit_label", source, config, "FROM"
+                )
+                exit_target_id = next(
+                    (
+                        step_id
+                        for step_id, name in reversed(named)
+                        if name is not None and name.strip() == written_from
+                    ),
+                    None,
+                )
+            failure_message = _apply_free_text_policy(
+                _blank_to_none(element.get("FAILURE-MESSAGE")),
+                "exit_failure_message",
+                source,
+                config,
+                "FAILURE-MESSAGE",
+            )
         technical_attrs, text_attrs, unknown_attrs = _classified_attributes(
             element=element,
             source=source,
             config=config,
             technical_names=FLOW_TECHNICAL_ATTRIBUTES.get(tag, set()),
             free_text_names=FLOW_FREE_TEXT_ATTRIBUTES,
+            handled_names=FLOW_POLICY_ATTRIBUTES.get(tag, set()),
         )
         node = FlowNode(
             id=node_id,
@@ -2084,11 +2135,11 @@ def _parse_flow_xml(
             else None,
             in_array=element.get("IN-ARRAY") if node_type == FlowNodeType.LOOP else None,
             out_array=element.get("OUT-ARRAY") if node_type == FlowNodeType.LOOP else None,
-            exit_from=element.get("FROM") if node_type == FlowNodeType.EXIT else None,
+            exit_from=exit_from,
+            exit_label=exit_label,
+            exit_target_id=exit_target_id,
             signal=element.get("SIGNAL") if node_type == FlowNodeType.EXIT else None,
-            failure_message=element.get("FAILURE-MESSAGE")
-            if node_type == FlowNodeType.EXIT
-            else None,
+            failure_message=failure_message,
             target=target,
             call_occurrence_id=call_occurrence_id,
             source=source,
@@ -3583,6 +3634,25 @@ def _parse_optional(value: str | None) -> bool | None:
     return value.casefold() == "true"
 
 
+def _case_label_kind(raw: str | None, written: str | None) -> CaseLabelKind:
+    """The kind of a BRANCH case label, from the label as written in the file."""
+    if raw == "$default":
+        return CaseLabelKind.DEFAULT
+    if written is None:
+        return CaseLabelKind.BLANK
+    if written == "$null":
+        return CaseLabelKind.NULL
+    if len(written) > 2 and written.startswith("/") and written.endswith("/"):
+        return CaseLabelKind.PATTERN
+    return CaseLabelKind.TEXT
+
+
+def _condition_refs(expression: str) -> list[str] | None:
+    """The `%field%` references of a label expression as paths; None when not splittable."""
+    refs = expression_refs(expression)
+    return [ref.text() for ref in refs] if refs is not None else None
+
+
 def _blank_to_none(value: str | None) -> str | None:
     if value is None:
         return None
@@ -3604,11 +3674,15 @@ def _classified_attributes(
     config: AppConfig,
     technical_names: set[str],
     free_text_names: set[str],
+    handled_names: set[str] | None = None,
 ) -> tuple[dict[str, str], dict[str, TextValue], list[AttributeValue]]:
+    """Technical, free-text and unknown attributes; `handled_names` are read elsewhere."""
     technical_attrs: dict[str, str] = {}
     text_attrs: dict[str, TextValue] = {}
     unknown_attrs: list[AttributeValue] = []
     for name, value in sorted(element.attrib.items()):
+        if handled_names and name in handled_names:
+            continue
         if name in technical_names:
             technical_attrs[name] = value
             continue

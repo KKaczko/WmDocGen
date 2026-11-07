@@ -22,6 +22,7 @@ from wm_doc.flow_lineage import (
 )
 from wm_doc.flow_logic import (
     CallContext,
+    CaseCondition,
     Certainty,
     ConditionKind,
     Decision,
@@ -254,9 +255,8 @@ def no_match_text(decision: Decision) -> str:
     if not decision.missing_fails:
         return falls
     field = code_span(decision.switch.text()) if decision.switch else "the switch value"
-    unless = (
-        ", unless a withheld label is `$null`" if "LABELS_WITHHELD" in decision.notes else ""
-    )
+    unknown = any(case.condition.kind is ConditionKind.WITHHELD for case in decision.cases)
+    unless = ", unless a withheld label is `$null`" if unknown else ""
     return (
         f"nothing runs and the next step follows when {field} has a value no case matches "
         f"({rule_label(['S7'])}); when {field} is missing the BRANCH fails instead{unless} "
@@ -270,15 +270,17 @@ def condition_text(decision: Decision, case: DecisionCase) -> str:
     condition = case.condition
     kind = condition.kind
     if kind is ConditionKind.VALUE:
-        text = f"{field} is {code_span(condition.text or '')}"
+        value = "a value (withheld)" if condition.withheld else code_span(condition.text or "")
+        text = f"{field} is {value}"
     elif kind is ConditionKind.NULL:
         text = f"{field} is missing or null"
     elif kind is ConditionKind.EMPTY:
         text = f"{field} is an empty string"
     elif kind is ConditionKind.PATTERN:
-        text = f"{field} matches the pattern {code_span(condition.text or '')}"
+        pattern = "(withheld)" if condition.withheld else code_span(condition.text or "")
+        text = f"{field} matches the pattern {pattern}"
     elif kind is ConditionKind.EXPRESSION:
-        text = code_span(condition.text or "")
+        text = _expression(condition)
     elif kind is ConditionKind.DEFAULT:
         return "no other case matches"
     elif kind is ConditionKind.UNLABELLED:
@@ -290,20 +292,32 @@ def condition_text(decision: Decision, case: DecisionCase) -> str:
     return text
 
 
+def _expression(condition: CaseCondition) -> str:
+    """A label expression in a code span, or the fields a withheld one refers to."""
+    if not condition.withheld:
+        return code_span(condition.text or "")
+    if condition.refs:
+        fields = ", ".join(code_span(ref.text()) for ref in condition.refs)
+        return f"(expression withheld; it tests {fields})"
+    return "(expression withheld)"
+
+
 def case_short(case: DecisionCase) -> str:
     """A compact case name for guard text: `ACTIVE`, missing or null, otherwise, ..."""
     condition = case.condition
     kind = condition.kind
     if kind is ConditionKind.VALUE:
-        return code_span(condition.text or "")
+        return "a withheld value" if condition.withheld else code_span(condition.text or "")
     if kind is ConditionKind.NULL:
         return "missing or null"
     if kind is ConditionKind.EMPTY:
         return "empty"
     if kind is ConditionKind.PATTERN:
+        if condition.withheld:
+            return "matches a withheld pattern"
         return f"matches {code_span(condition.text or '')}"
     if kind is ConditionKind.EXPRESSION:
-        text = code_span(condition.text or "")
+        text = _expression(condition)
         return f"{text} (and no earlier case)" if case.excludes else text
     if kind is ConditionKind.DEFAULT:
         return "otherwise"

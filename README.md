@@ -290,7 +290,16 @@ says so on every page. Details: `docs/explorer.md`.
 
 ## Output reference
 
-`wm-doc analyze` writes `analysis.json` (schema `analysis.v11`; each fact is stored once, on
+**`analysis.v12`.** BRANCH case labels keep their kind (`$null`, blank, a `/pattern/`, other
+text) and label expressions the fields they test, even when the free-text policy withholds the
+label, so decisions read the same in every mode. EXIT `FROM` labels and failure messages now go
+through the free-text policy and the secret guard; only `$flow`, `$parent`, `$loop` and
+`$iteration` are kept as written. What changes once after the upgrade: in `redact` and `omit`
+modes, the facts hash of FLOW services with withheld case labels, EXIT labels or failure
+messages; in `include` mode, only that of services whose EXIT label or failure message looks
+secret-like (now withheld). Their approved descriptions then show "approved, facts changed".
+
+`wm-doc analyze` writes `analysis.json` (schema `analysis.v12`; each fact is stored once, on
 the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,
 `entrypoints.md`, `artifacts.md`, `platform-services.md` (platform services the code calls,
 with their descriptions and callers), `packages/*.md`, `services/*.md`, `documents/*.md`,

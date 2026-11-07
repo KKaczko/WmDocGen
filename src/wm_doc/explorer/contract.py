@@ -1,7 +1,7 @@
 """The explorer data contract `wm-doc-explorer.v1`.
 
 These models describe every JSON file the explorer app reads. They are a projection of the
-analysis made for a browser, not a copy of `analysis.v11`: the vocabulary is lowercase and
+analysis made for a browser, not a copy of `analysis.json`: the vocabulary is lowercase and
 owned here, so renaming an analysis enum never reaches the app.
 
 Versioning: optional fields may be added within v1; removing or renaming anything is v2.

@@ -141,7 +141,9 @@ def test_label_expressions_do_not_fail_for_a_missing_field(tmp_path: Path) -> No
     assert not decision.missing_fails
 
 
-def test_withheld_labels_may_hide_a_null_case(tmp_path: Path) -> None:
+def test_a_withheld_label_is_known_not_to_be_null(tmp_path: Path) -> None:
+    # The parser records each label's kind before the policy (analysis.v12), so a withheld
+    # value label is known not to take a missing switch; no "unless" caveat is needed.
     subject = _subject(
         tmp_path,
         branch(case("A", invoke("x.api:a")), switch="/s"),
@@ -150,7 +152,18 @@ def test_withheld_labels_may_hide_a_null_case(tmp_path: Path) -> None:
 
     assert subject.logic.decision("D1").missing_fails
     row = subject.line("no case matches")
-    assert "fails instead, unless a withheld label is `$null`" in row
+    assert "when `/s` is missing the BRANCH fails instead (S31)" in row
+    assert "unless a withheld label" not in row
+
+
+def test_a_withheld_null_label_still_takes_a_missing_switch(tmp_path: Path) -> None:
+    subject = _subject(
+        tmp_path,
+        branch(case("$null", invoke("x.api:a")), case("A", invoke("x.api:b")), switch="/s"),
+        free_text=ExtractionMode.REDACT,
+    )
+
+    assert not subject.logic.decision("D1").missing_fails
 
 
 # --- S29: LOOP over a missing array ---------------------------------------------------------

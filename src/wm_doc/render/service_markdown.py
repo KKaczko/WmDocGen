@@ -976,6 +976,8 @@ def _flow_outline(flow_tree: FlowNode | None) -> str:
             detail_parts.append(f"in={node.in_array}")
         if node.exit_from:
             detail_parts.append(f"from={node.exit_from}")
+        elif node.exit_label is not None:
+            detail_parts.append(f"from={_text_display(node.exit_label) or '(label withheld)'}")
         detail = f" ({'; '.join(detail_parts)})" if detail_parts else ""
         lines.append(f"- {indent}`{node.id}` {node.type.value}{detail}")
         if depth >= MAX_OUTLINE_DEPTH:
