@@ -2,10 +2,12 @@
 
 The conditional-flow work adds new views of the FLOW, but the pseudo-code the model sees and the
 facts hash of a description file must not change by accident: a changed facts hash marks every
-approved description as "approved, facts changed". The snapshot covers every pseudo-code detail
-level (with callee notes, external-system notes, callee outputs and step comments, as prompts
-use them) for the samples and for a builder-made service with the rarer shapes. Regenerate on
-purpose with `WM_DOC_UPDATE_FIXTURES=1 uv run pytest tests/unit/test_flow_facts_golden.py`.
+approved description as "approved, facts changed". Stage 4 added the annotated prompt views,
+the decisions block and the basis-2 facts hash as new keys. The snapshot covers every
+pseudo-code detail level (with callee notes, external-system notes, callee outputs and step
+comments, as prompts use them) for the samples and for a builder-made service with the rarer
+shapes. Regenerate on purpose with
+`WM_DOC_UPDATE_FIXTURES=1 uv run pytest tests/unit/test_flow_facts_golden.py`.
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ from flowxml import (
 from wm_doc.analysis import analyze_path
 from wm_doc.config import load_config
 from wm_doc.describer import current_facts_hashes
+from wm_doc.flow_answers import decisions_block
+from wm_doc.flow_logic import compute_flow_logic
 from wm_doc.ir import AnalysisResult
 from wm_doc.pseudocode import (
     DETAIL_LADDER,
@@ -80,6 +84,7 @@ def _snapshot(analysis: AnalysisResult, root: Path) -> dict[str, dict[str, str]]
     config = load_config(None)
     facts = current_facts_hashes(analysis, root, config)
     services = {item.identity.full_name: item for item in analysis.services}
+    basis_two = current_facts_hashes(analysis, root, config, bases=dict.fromkeys(services, 2))
     outputs = callee_outputs_lookup(services)
 
     def external(target: str) -> str | None:
@@ -90,9 +95,11 @@ def _snapshot(analysis: AnalysisResult, root: Path) -> dict[str, dict[str, str]]
         service = services[name]
         entry = {
             "facts": facts[name],
+            "facts_basis_2": basis_two[name],
             "pseudocode": _digest(render_pseudocode(service, lambda _: None)),
         }
         comments = load_flow_comments(root, service, config)
+        logic = compute_flow_logic(service)
         for level, detail in enumerate(DETAIL_LADDER):
             text = render_pseudocode(
                 service,
@@ -103,6 +110,20 @@ def _snapshot(analysis: AnalysisResult, root: Path) -> dict[str, dict[str, str]]
                 callee_outputs=outputs,
             )
             entry[f"prompt_level_{level}"] = _digest(text)
+            if logic is not None:
+                # What describe sends since stage 4: ids in the pseudo-code.
+                annotated = render_pseudocode(
+                    service,
+                    lambda target: f"note for {target}",
+                    comments=comments,
+                    detail=detail,
+                    external_note=external,
+                    callee_outputs=outputs,
+                    logic=logic,
+                )
+                entry[f"prompt_level_{level}_annotated"] = _digest(annotated)
+        if logic is not None:
+            entry["decisions_block"] = _digest(decisions_block(logic))
         snapshot[name] = entry
     return snapshot
 

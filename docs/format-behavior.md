@@ -94,10 +94,12 @@ Observed from current fixtures:
 - The M8b/M8c business-context and business-result artifacts were removed in M12. Per-service
   description files (`wm-doc describe`) replace them; their format is described in the README.
 - Description files are Markdown with YAML front matter (`service`, `package`, `status`, `model`,
-  `facts_hash`, `text_hash`), a narrative written by the model and owned by people once approved
-  or edited, a `## Notes` section the tool never writes, and a facts block between
-  `<!-- wm-doc:facts:start hash=... -->` and `<!-- wm-doc:facts:end -->` that is refreshed on every
-  run. Files carry no timestamps and are written only when their content changes.
+  `facts_hash`, `text_hash`, and since stage 4 `facts_basis: 2`), a narrative written by the
+  model and owned by people once approved or edited, a `## Notes` section the tool never writes,
+  and a facts block between `<!-- wm-doc:facts:start hash=... -->` and
+  `<!-- wm-doc:facts:end -->` that is refreshed on every run; for a file without `facts_basis`
+  the marker also carries `next=...`, the current-basis hash `approve --upgrade-basis` copies.
+  Files carry no timestamps and are written only when their content changes.
 - Model text is accepted only when every identifier-shaped name in it occurs in the facts sent with
   the prompt and it passes the disclosure scan (no secret-like key/values, authorization values,
   connection strings, absolute paths, Markdown links, raw HTML or raw package code). Raw prompts,

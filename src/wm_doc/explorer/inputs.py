@@ -30,7 +30,13 @@ def explorer_inputs(
         return ExplorerInputs(analysis=analysis, facts=facts, external_systems=external_systems)
     docs = load_service_docs(docs_dir, analysis.services)
     hashes = current_facts_hashes(
-        analysis, packages_root, config, external_systems, facts=facts, only=set(docs)
+        analysis,
+        packages_root,
+        config,
+        external_systems,
+        facts=facts,
+        only=set(docs),
+        bases={name: doc.facts_basis for name, doc in docs.items()},
     )
     return ExplorerInputs(
         analysis=analysis,

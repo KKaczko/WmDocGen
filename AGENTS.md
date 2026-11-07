@@ -184,9 +184,18 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   literal (no surrounding blanks) differs from a value label; never by a match (labels are
   trimmed when parsed), patterns, expressions, withheld labels or hidden literals.
 - Description files show the decisions and their origins under `### Decisions` in the facts
-  block (refreshed on every run, not part of the facts hash). When stage 4 hashes the logic,
-  the hashed form carries behaviour only, never a rule status or an assumption label, so a
-  status change never makes approved descriptions stale.
+  block (refreshed on every run, not part of the facts hash).
+- Stage 4 (`flow_answers.py`, describe prompt v4): for FLOW services the prompt carries ids in
+  the pseudo-code (`render_pseudocode(..., logic=)`: `[D1]`, `[D1.c2]`, `[C3]`, `[E1]`) and a
+  decisions block; detailed-flow items are `{text, decision, case, calls}`; the tool writes the
+  case condition in front of the text (stored as plain strings) and checks R1-R7 (`standard`
+  R1-R3, `thorough`/`deep` all; the rest only counted) within the one corrective retry
+  (`thorough` adds one request when only the flow is still wrong); `--keep-unverified` marks
+  `unverified_flow`. New drafts use `facts_basis: 2` (pseudo-code facts plus `logic_json`,
+  behaviour only, never a rule status); files without the key stay on basis 1 and carry
+  `next=` in their facts marker for `approve --upgrade-basis`, which never moves an approved
+  file whose facts changed (`upgrade_blocker`); nothing moves silently. Model-written ids are
+  normalised and echoed in corrections or `unverified_flow` only in the shape of an id.
 - The pseudo-code the model sees (every detail level, with notes and comments) and the facts
   hash of description files are frozen for the samples and a builder-made service by
   `tests/unit/test_flow_facts_golden.py`; change them only on purpose.

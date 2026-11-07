@@ -91,13 +91,23 @@ Point the commands at the server's `packages` directory, or a copy of it.
    systems behind other namespaces in `external-systems.yml` makes this flow say which
    application each call goes to.
 
+   For FLOW services the model sees the BRANCH decisions, their cases and the calls with ids
+   (`D1`, `D1.c2`, `C3`), and returns each detailed-flow item with the ids it is about. The
+   tool writes the condition in front of the item ("When `/request/status` is `ACTIVE` (D1):
+   ..."), so a condition is never paraphrased, and checks the items against the facts before
+   the answer is accepted: every id exists, each call sits in the case it runs in, and every
+   call that matters is listed (all levels with a detailed flow). `thorough` and `deep` also
+   reject values that are not in the facts, "always" for a call that runs only under a
+   condition, a decision that chooses calls but has no item, and an item that names a call
+   which runs only in another case. A failed check shares the one corrective retry.
+
    How much is written, and how long it takes:
 
    | `--detail` | What you get | Time per service |
    | --- | --- | --- |
    | `brief` | purpose, usage, data, main steps, error handling | shortest (about half) |
    | `standard` (default) | the above plus the detailed flow | baseline |
-   | `thorough` | standard, then the tool checks the detailed flow names every call that matters (services, database, HTTP, JMS, files) and asks once more to add the missing ones | 1-1.6x standard |
+   | `thorough` | standard, with all detailed-flow checks; when only the detailed flow is still wrong after the retry, the model is asked once more | 1-1.6x standard |
    | `deep` | the detailed flow, written after the model reasons about the facts | several times longer; thinking-capable models only; use `--num-ctx 32768` |
 
    The model's reasoning is never stored; only its final answer is checked and kept. Each
@@ -173,6 +183,7 @@ status: draft            # draft | approved
 model: qwen3.8:27b
 facts_hash: 3f9c...      # facts the text was written from or approved against
 text_hash: a81b...       # the text as generated; a different hash means you edited it
+facts_basis: 2           # the hash also covers the FLOW's decisions and call conditions
 ---
 # createOrder
 ## Purpose / ## Usage / ## What it does to data / ## Main steps
@@ -190,11 +201,19 @@ sections Purpose, Main capabilities, Entry points, Systems and data) and `servic
 (`service: server`, with Business areas instead of Main capabilities). Their facts block holds
 the package or server facts the draft was written from.
 
-- An answer that names something the facts do not contain is rejected after one retry. With
-  `describe --keep-unverified` it is written anyway as a draft marked with those names
-  (`unverified_names` in the front matter and a notice at the top); it is asked again on the
-  next run until it passes, and approving it removes the mark. Answers that fail the
+- An answer that names something the facts do not contain, or whose detailed flow does not
+  match the facts, is rejected after one retry. With `describe --keep-unverified` it is
+  written anyway as a draft marked with what is wrong (`unverified_names` and
+  `unverified_flow` in the front matter and a notice at the top); it is asked again on the
+  next run until it passes, and approving it removes the marks. Answers that fail the
   disclosure scan are never kept.
+- Description files written before decision-aware describe have no `facts_basis` key: their
+  hash covers the pseudo-code facts only, so they stay approved. After the next `describe`
+  run their facts marker also carries the current hash (`next=...`); once you have checked
+  that the text still fits the decisions, move them with
+  `wm-doc approve --service <name> --upgrade-basis` (or `--package`, `--all-drafts`). An
+  approved file whose facts changed after it was approved is not moved: set `status: draft`
+  and review it first. Nothing is moved silently.
 - A draft you edited, or an approved file, is never regenerated. To get a fresh draft, set
   `status: draft` and restore or delete the text, or delete the file.
 - `--redo-drafts` regenerates unedited drafts even when their facts did not change.

@@ -22,7 +22,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import threading
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
@@ -38,8 +37,23 @@ from wm_doc.config import AppConfig
 from wm_doc.disclosure import unsafe_disclosure_label
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
+from wm_doc.flow_answers import (
+    ALL_RULES,
+    MAX_ITEM_CALLS,
+    STANDARD_RULES,
+    FlowItem,
+    FlowRule,
+    check_items,
+    correction_prompt,
+    coverage_call_ids,
+    decisions_block,
+    item_text,
+    logic_json,
+    normalize_id,
+    strip_ids,
+)
 from wm_doc.flow_lineage import compute_flow_lineage
-from wm_doc.flow_logic import compute_flow_logic
+from wm_doc.flow_logic import FlowLogic, compute_flow_logic
 from wm_doc.ir import (
     AnalysisResult,
     FlowService,
@@ -65,8 +79,11 @@ from wm_doc.render.flow_markdown import render_decision_facts
 from wm_doc.render.service_markdown import render_effects_table, render_entry_points_table
 from wm_doc.render.service_summary import adapter_sentence
 from wm_doc.service_docs import (
+    BASIS_KEY,
+    CURRENT_BASIS,
     DETAIL_KEY,
     MAX_DESIGNER_COMMENT_CHARS,
+    UNVERIFIED_FLOW_KEY,
     UNVERIFIED_KEY,
     DocState,
     DocStatus,
@@ -81,7 +98,7 @@ from wm_doc.service_docs import (
 )
 from wm_doc.summarizer import DEFAULT_NUM_CTX, fit_facts, unknown_names
 
-DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v3"
+DESCRIBE_PROMPT_VERSION = "service-describe-prompt.v4"
 # Room for the detailed flow: up to MAX_DETAILED_STEPS items of a few sentences each.
 DESCRIBE_NUM_PREDICT = 4096
 BRIEF_NUM_PREDICT = 1536
@@ -98,6 +115,20 @@ FIELD_LIMITS = {
     "error_handling": 300,
 }
 
+# One detailed-flow item: what happens, and the ids of the decision, case and calls it is
+# about (see `flow_answers`); the tool writes the case's condition in front of the text.
+FLOW_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "decision": {"type": "string"},
+        "case": {"type": "string"},
+        "calls": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["text", "decision", "case", "calls"],
+    "additionalProperties": False,
+}
+
 DESCRIBE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -105,7 +136,7 @@ DESCRIBE_SCHEMA: dict[str, Any] = {
         "usage": {"type": "string"},
         "data_effects": {"type": "string"},
         "steps": {"type": "array", "items": {"type": "string"}},
-        "detailed_steps": {"type": "array", "items": {"type": "string"}},
+        "detailed_steps": {"type": "array", "items": FLOW_ITEM_SCHEMA},
         "error_handling": {"type": "string"},
         "designer_comment": {"type": "string"},
     },
@@ -148,14 +179,20 @@ _PROMPT_HEAD = (
 )
 _DETAILED_STEPS_INSTRUCTION = (
     "- detailed_steps: the whole flow in execution order, one item per call or decision "
-    "that matters (as many as needed, at most 30). For each call: which service it calls "
-    "and which system, application, database table, queue or endpoint is behind it when "
-    "the facts name one (the `#` note, `data and systems touched`); which inputs it gets "
-    "and where they come from (a service input, a literal, or what an earlier call "
-    "returned); what it returns (`returns:` and `out:` lines) and which later step uses "
-    "it. Describe BRANCH and LOOP in words, for example 'For each entry in /links: ...' "
-    "or 'If /returnFullContracts is true: ...', and say what the CATCH block does. Use "
-    "field, service and system names exactly as they appear in the facts.\n"
+    "that matters (as many as needed, at most 30). Each item is an object. `text` says what "
+    "happens: which service a call invokes and which system, application, database table, "
+    "queue or endpoint is behind it when the facts name one (the `#` note, `data and "
+    "systems touched`); which inputs it gets and where they come from (a service input, a "
+    "literal, or what an earlier call returned); what it returns (`returns:` and `out:` "
+    "lines) and which later step uses it; what a LOOP or a CATCH block does. `decision` is "
+    "the id of the BRANCH the item is about (`D1`), or an empty string. `case` is the id of "
+    "the case whose steps the item describes (`D1.c2`), or an empty string; do not write "
+    "the case's condition in `text`, the tool adds it from the facts. `calls` lists the ids "
+    "of the calls the item describes (`C3`, at most 12 per item); every call of the facts "
+    "that matters must be listed by some item, and calls of different cases go in different "
+    "items. Ids are the "
+    "ones in [ ] in the facts and in `decisions`. Use field, service and system names "
+    "exactly as they appear in the facts.\n"
 )
 _PROMPT_TAIL = (
     "- error_handling: one sentence. If the facts show no error handling, say that it is "
@@ -226,13 +263,6 @@ COVERAGE_FAMILIES = {
     BuiltinFamily.SERVER_ADMIN,
     BuiltinFamily.SECURITY,
 }
-MAX_COVERAGE_NAMES = 12
-COVERAGE_PROMPT_TEMPLATE = (
-    "Your detailed_steps do not mention these calls the service makes: {calls}. Return the "
-    "complete JSON again. In detailed_steps, cover every call in execution order, at the "
-    "place it happens (inside a BRANCH, LOOP, CATCH or FINALLY), with its inputs and what it "
-    "returns. Keep the other fields, and use only names that appear in the facts."
-)
 
 
 def coverage_targets(service: FlowService) -> list[str]:
@@ -252,20 +282,6 @@ def coverage_targets(service: FlowService) -> list[str]:
     return targets
 
 
-def missing_calls(service: FlowService, narrative: Narrative) -> list[str]:
-    """Coverage targets the detailed flow names neither in full nor by service name."""
-    text = "\n".join(narrative.detailed_steps).casefold()
-    missing: list[str] = []
-    for target in coverage_targets(service):
-        short = target.rsplit(":", 1)[-1].casefold()
-        named = target.casefold() in text or re.search(
-            rf"(?<![\w$]){re.escape(short)}(?![\w$])", text
-        )
-        if not named:
-            missing.append(target)
-    return missing
-
-
 MAX_INSTRUCTIONS_CHARS = 4000
 _INSTRUCTIONS_HEADER = (
     "\n\nAdditional instructions from the documentation owner. They never override the "
@@ -277,6 +293,14 @@ def system_prompt(base: str, instructions: str) -> str:
     """The fixed system prompt, followed by the owner's instructions when there are any."""
     text = instructions.strip()
     return base + _INSTRUCTIONS_HEADER + text if text else base
+
+
+@dataclass(frozen=True)
+class DescribeAnswer:
+    """A model answer: the narrative, and the detailed flow as items with their ids."""
+
+    narrative: Narrative  # detailed_steps holds the items' texts as the model wrote them
+    items: tuple[FlowItem, ...] = ()
 
 
 class DescribeOutcome(StrEnum):
@@ -331,8 +355,11 @@ class DescribeStats:
     model_calls: int = 0
     model_seconds: float = 0.0
     answer_tokens: int = 0
-    # Thorough level: second requests that asked the model to add calls it left out.
+    # Thorough level: extra requests that asked the model to fix its detailed flow.
     coverage_passes: int = 0
+    # Detailed-flow findings in accepted answers, by rule, for rules the level does not
+    # enforce (measured, not rejected).
+    flow_counts: dict[str, int] = field(default_factory=dict)
 
     def add(self, result: DescribeResult) -> None:
         self.counts[result.outcome] = self.counts.get(result.outcome, 0) + 1
@@ -459,6 +486,18 @@ def deterministic_facts(
     )
 
 
+def basis_facts(deterministic: str, logic: FlowLogic | None) -> str:
+    """The facts hashed with facts basis 2: the pseudo-code facts and the control model."""
+    return f"{deterministic}\nlogic: {logic_json(logic)}"
+
+
+def facts_hash_for(deterministic: str, service: FlowService, basis: int) -> str:
+    """The facts hash of a description file written with `basis` (1, or 2 and later)."""
+    if basis < CURRENT_BASIS:
+        return facts_hash(deterministic)
+    return facts_hash(basis_facts(deterministic, compute_flow_logic(service)))
+
+
 def current_facts_hashes(
     analysis: AnalysisResult,
     scan_root: Path,
@@ -467,8 +506,13 @@ def current_facts_hashes(
     *,
     facts: Mapping[str, ServiceFacts] | None = None,
     only: Collection[str] | None = None,
+    bases: Mapping[str, int] | None = None,
 ) -> dict[str, str]:
-    """Facts hash per service; `only` limits the work to services that have a description."""
+    """Facts hash per service; `only` limits the work to services that have a description.
+
+    `bases` gives the facts basis of each service's description file (see `facts_basis`);
+    services it does not name use basis 1.
+    """
     if facts is None:
         facts = compute_service_facts(analysis, external_systems)
 
@@ -484,10 +528,24 @@ def current_facts_hashes(
             if only is not None and name not in only:
                 continue
             comments = load_flow_comments(scan_root, service, config)
-            hashes[name] = facts_hash(
-                deterministic_facts(service, facts[name], comments, external_note, outputs)
+            deterministic = deterministic_facts(
+                service, facts[name], comments, external_note, outputs
             )
+            basis = bases.get(name, 1) if bases is not None else 1
+            hashes[name] = facts_hash_for(deterministic, service, basis)
     return hashes
+
+
+def doc_bases(analysis: AnalysisResult, docs_dir: Path) -> dict[str, int]:
+    """The facts basis of every service's description file, for `current_facts_hashes`."""
+    bases: dict[str, int] = {}
+    for package in analysis.packages:
+        for service in package.services:
+            name = service.identity.full_name
+            doc = read_doc(doc_path(docs_dir, package.name, name))
+            if doc is not None:
+                bases[name] = doc.facts_basis
+    return bases
 
 
 STATE_ORDER = (
@@ -596,16 +654,35 @@ def export_designer_comments(
     return written
 
 
+def upgrade_blocker(doc: ServiceDoc) -> str | None:
+    """Why `approve --upgrade-basis` leaves a basis-1 description as it is, or None.
+
+    An approved description moves only while it is fresh: approved against the facts its
+    marker shows, so the current-basis hash next to them describes the same service.
+    """
+    if not doc.next_facts_hash:
+        return "run describe first"
+    if doc.status is DocStatus.APPROVED and (
+        not doc.current_facts_hash or doc.facts_hash != doc.current_facts_hash
+    ):
+        return "its facts changed after it was approved; set status: draft and review it first"
+    return None
+
+
 def approve_docs(
     docs_dir: Path,
     *,
     services: Iterable[str] = (),
     package: str | None = None,
     all_drafts: bool = False,
+    upgrade_basis: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Mark matching drafts approved against the facts shown in their files.
 
-    Returns (approved services, requested services that have no description file).
+    With `upgrade_basis`, matching files written with facts basis 1 are approved against
+    the current basis instead (the `next=` hash their facts marker carries), approved ones
+    included while their facts are unchanged; `upgrade_blocker` says why any other is left
+    as it is. Returns (approved services, requested services that have no description file).
     """
     wanted = set(services)
     found: set[str] = set()
@@ -619,12 +696,21 @@ def approve_docs(
         if not matches:
             continue
         found.add(doc.service)
-        if doc.status is DocStatus.APPROVED:
+        if upgrade_basis and doc.facts_basis < CURRENT_BASIS:
+            if upgrade_blocker(doc) is not None:
+                continue
+            doc.facts_hash = doc.next_facts_hash
+            doc.current_facts_hash = doc.next_facts_hash
+            doc.next_facts_hash = ""
+            doc.extra_front_matter[BASIS_KEY] = CURRENT_BASIS
+        elif doc.status is DocStatus.APPROVED:
             continue
+        else:
+            doc.facts_hash = doc.current_facts_hash or doc.facts_hash
         doc.status = DocStatus.APPROVED
-        doc.facts_hash = doc.current_facts_hash or doc.facts_hash
-        # A person approved it, so the unverified mark of a kept draft is cleared.
+        # A person approved it, so the unverified marks of a kept draft are cleared.
         doc.extra_front_matter.pop(UNVERIFIED_KEY, None)
+        doc.extra_front_matter.pop(UNVERIFIED_FLOW_KEY, None)
         write_doc(path, doc)
         approved.append(doc.service)
     return sorted(approved, key=str.casefold), sorted(wanted - found, key=str.casefold)
@@ -709,11 +795,17 @@ class AnswerSpec[T]:
         prompt_facts: str,
         *,
         keep_unverified: bool = False,
+        check: Callable[[T], list[str]] | None = None,
+        flow_retries: int = 0,
     ) -> tuple[T | None, bool, tuple[DescribeOutcome, str]]:
         """Return (answer or None, whether it came from the cache, outcome and note).
 
-        With `keep_unverified`, an answer that passes the disclosure scan but still names
-        things outside the facts after the retry is returned as UNVERIFIED (never cached).
+        `check` lists what else is wrong with an answer that passes the disclosure scan and
+        the name check (the detailed flow, see `flow_answers`); it shares the one corrective
+        retry, and `flow_retries` allows that many more requests when it is the only
+        problem left. With `keep_unverified`, an answer that passes the disclosure scan but
+        still names things outside the facts or fails `check` after the retries is returned
+        as UNVERIFIED (never cached).
         """
         key = session.cache_key(messages, self.prompt_version, self.schema, self.num_predict)
         if session.cache_dir is not None and not session.refresh:
@@ -722,7 +814,9 @@ class AnswerSpec[T]:
             if cached is not None:
                 return cached, True, (DescribeOutcome.CACHED, "")
         conversation = list(messages)
-        for attempt in range(2):
+        attempts = 2
+        attempt = 0
+        while attempt < attempts:
             content, failure = session.complete(conversation, self.schema, self.num_predict)
             if content is None:
                 return None, False, failure
@@ -735,24 +829,40 @@ class AnswerSpec[T]:
                 return None, False, (DescribeOutcome.FAILED, note)
             answer_text = self.text_of(value)
             label = unsafe_disclosure_label(answer_text)
+            flow_only = False
             if label is not None:
                 note = f"the answer failed the disclosure scan: {label}"
                 correction = DISCLOSURE_RETRY_PROMPT_TEMPLATE.format(label=label)
             else:
                 unknown = unknown_names(answer_text, prompt_facts)
-                if not unknown:
+                problems = check(value) if check is not None else []
+                if not unknown and not problems:
                     if session.cache_dir is not None:
                         _write_cached_payload(
                             session.cache_dir, key, self.prompt_version, self.to_payload(value)
                         )
                     return value, False, (DescribeOutcome.GENERATED, "")
-                names = ", ".join(f"`{name}`" for name in unknown[:6])
-                note = f"the model's answer named things that are not in the facts: {names}"
-                correction = RETRY_PROMPT_TEMPLATE.format(names=names)
-            if attempt == 1:
-                if keep_unverified and label is None:
-                    return value, False, (DescribeOutcome.UNVERIFIED, note)
-                return None, False, (DescribeOutcome.REJECTED, note)
+                if unknown:
+                    names = ", ".join(f"`{name}`" for name in unknown[:6])
+                    note = f"the model's answer named things that are not in the facts: {names}"
+                    correction = RETRY_PROMPT_TEMPLATE.format(names=names)
+                    if problems:  # one retry, so both corrections go together
+                        correction += "\n\n" + correction_prompt(problems)
+                else:
+                    flow_only = True
+                    more = f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""
+                    note = f"the detailed flow does not match the facts: {problems[0]}{more}"
+                    correction = correction_prompt(problems)
+            if attempt == attempts - 1:
+                if flow_only and flow_retries > 0:
+                    flow_retries -= 1
+                    attempts += 1
+                    with session.lock:
+                        session.stats.coverage_passes += 1
+                else:
+                    if keep_unverified and label is None:
+                        return value, False, (DescribeOutcome.UNVERIFIED, note)
+                    return None, False, (DescribeOutcome.REJECTED, note)
             with session.lock:
                 session.stats.retried += 1
             conversation = [
@@ -760,6 +870,7 @@ class AnswerSpec[T]:
                 {"role": "assistant", "content": content},
                 {"role": "user", "content": correction},
             ]
+            attempt += 1
         raise AssertionError("unreachable")
 
 
@@ -967,10 +1078,15 @@ class _Run:
         deterministic = deterministic_facts(
             service, facts, comments, self.external_note, self.callee_outputs
         )
-        current_hash = facts_hash(deterministic)
+        logic = compute_flow_logic(service)
+        hashed = basis_facts(deterministic, logic)
+        hashes = {1: facts_hash(deterministic), CURRENT_BASIS: facts_hash(hashed)}
         facts_markdown = render_facts_block(service, facts, self.signatures)
         path = self.path(name)
         existing = self.doc(name)
+        basis = min(existing.facts_basis, CURRENT_BASIS) if existing is not None else 1
+        current_hash = hashes[CURRENT_BASIS if basis >= CURRENT_BASIS else 1]
+        upgrade_hash = hashes[CURRENT_BASIS] if basis < CURRENT_BASIS else ""
 
         # An unverified draft is asked again on every run until it passes or is edited.
         if existing is not None and (
@@ -979,10 +1095,12 @@ class _Run:
                 existing.facts_hash == current_hash
                 and not self.options.redo_drafts
                 and not existing.unverified_names
+                and not existing.unverified_flow
             )
         ):
             existing.facts_markdown = facts_markdown
             existing.current_facts_hash = current_hash
+            existing.next_facts_hash = upgrade_hash
             write_doc(path, existing)
             outcome = (
                 DescribeOutcome.PROTECTED if existing.protected else DescribeOutcome.UNCHANGED
@@ -1004,6 +1122,10 @@ class _Run:
         else:
             template = USER_PROMPT_TEMPLATE
         system = system_prompt(SYSTEM_PROMPT, self.options.instructions)
+        # The detailed flow refers to the control model: ids in the pseudo-code and a
+        # decisions block, and checked items in the answer.
+        use_flow = logic is not None and not opaque and detail is not DetailLevel.BRIEF
+        flow = logic if use_flow else None
         prompt_facts, shortened = fit_facts(
             service,
             self.callee_notes_for(name),
@@ -1014,28 +1136,49 @@ class _Run:
             overhead_chars=len(system) + len(template),
             num_predict=spec.num_predict,
             callee_outputs=self.callee_outputs,
+            flow=flow,
+            flow_block=decisions_block(flow) if flow is not None else "",
         )
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": template.format(facts=prompt_facts)},
         ]
+        enforced = STANDARD_RULES if detail is DetailLevel.STANDARD else ALL_RULES
+        coverage = coverage_call_ids(flow, coverage_targets(service)) if flow is not None else ()
+
+        def flow_problems(answer: DescribeAnswer, rules: Collection[FlowRule]) -> list[str]:
+            if flow is None:
+                return []
+            found = check_items(answer.items, flow, coverage, prompt_facts)
+            return [item.message for item in found if item.rule in rules]
+
         started = time.perf_counter()
-        narrative, from_cache, failure = spec.ask(
-            self.session, messages, prompt_facts, keep_unverified=self.options.keep_unverified
+        answer, from_cache, failure = spec.ask(
+            self.session,
+            messages,
+            prompt_facts,
+            keep_unverified=self.options.keep_unverified,
+            check=lambda answer: flow_problems(answer, enforced),
+            flow_retries=1 if detail is DetailLevel.THOROUGH else 0,
         )
-        if (
-            detail is DetailLevel.THOROUGH
-            and narrative is not None
-            and not opaque
-            and failure[0] is not DescribeOutcome.UNVERIFIED
-        ):
-            narrative, from_cache = self.complete_flow(
-                service, spec, messages, prompt_facts, narrative, from_cache
-            )
         seconds = None if from_cache else time.perf_counter() - started
         unverified: list[str] = []
-        if narrative is not None and failure[0] is DescribeOutcome.UNVERIFIED:
-            unverified = unknown_names(narrative_text(narrative), prompt_facts)
+        unverified_flow: list[str] = []
+        narrative: Narrative | None = None
+        if answer is not None:
+            if failure[0] is DescribeOutcome.UNVERIFIED:
+                unverified = unknown_names(narrative_text(answer.narrative), prompt_facts)
+                unverified_flow = flow_problems(answer, enforced)[:8]
+            if flow is not None:
+                for item in check_items(answer.items, flow, coverage, prompt_facts):
+                    if item.rule not in enforced:
+                        with self.lock:
+                            counts = self.stats.flow_counts
+                            counts[item.rule.value] = counts.get(item.rule.value, 0) + 1
+            narrative = replace(
+                answer.narrative,
+                detailed_steps=tuple(item_text(item, flow) for item in answer.items),
+            )
         if narrative is not None and detail is DetailLevel.BRIEF and narrative.detailed_steps:
             narrative = replace(narrative, detailed_steps=())
         if narrative is not None and opaque:
@@ -1050,6 +1193,7 @@ class _Run:
             if existing is not None:
                 existing.facts_markdown = facts_markdown
                 existing.current_facts_hash = current_hash
+                existing.next_facts_hash = upgrade_hash
                 write_doc(path, existing)
             return DescribeResult(
                 name, outcome, path if existing else None, note, shortened, seconds
@@ -1060,19 +1204,23 @@ class _Run:
             service.identity.package,
             narrative,
             model=self.options.model,
-            facts=deterministic,
+            facts=hashed,
             facts_markdown=facts_markdown,
         )
         extra = dict(existing.extra_front_matter) if existing is not None else {}
         extra.pop(UNVERIFIED_KEY, None)
+        extra.pop(UNVERIFIED_FLOW_KEY, None)
         if unverified:
             extra[UNVERIFIED_KEY] = unverified
+        if unverified_flow:
+            extra[UNVERIFIED_FLOW_KEY] = unverified_flow
         extra[DETAIL_KEY] = detail.value
+        extra[BASIS_KEY] = CURRENT_BASIS
         if existing is not None:
             doc.notes = existing.notes
         doc.extra_front_matter = extra
         write_doc(path, doc)
-        if unverified:
+        if unverified or unverified_flow:
             # Callers' prompts do not use an unverified purpose line as context.
             return DescribeResult(
                 name, DescribeOutcome.UNVERIFIED, path, failure[1], shortened, seconds
@@ -1083,34 +1231,6 @@ class _Run:
                 self.generated[name] = line
         outcome = DescribeOutcome.CACHED if from_cache else DescribeOutcome.GENERATED
         return DescribeResult(name, outcome, path, None, shortened, seconds)
-
-
-    def complete_flow(
-        self,
-        service: FlowService,
-        spec: AnswerSpec[Narrative],
-        messages: list[dict[str, str]],
-        prompt_facts: str,
-        narrative: Narrative,
-        from_cache: bool,
-    ) -> tuple[Narrative, bool]:
-        """Thorough level: ask once more when the detailed flow leaves out calls."""
-        missing = missing_calls(service, narrative)
-        if not missing:
-            return narrative, from_cache
-        with self.lock:
-            self.stats.coverage_passes += 1
-        calls = ", ".join(f"`{name}`" for name in missing[:MAX_COVERAGE_NAMES])
-        follow_up = [
-            *messages,
-            {"role": "assistant", "content": json.dumps(narrative_payload(narrative))},
-            {"role": "user", "content": COVERAGE_PROMPT_TEMPLATE.format(calls=calls)},
-        ]
-        better, better_cached, _failure = spec.ask(self.session, follow_up, prompt_facts)
-        # Keep the second answer only when it is valid and leaves out fewer calls.
-        if better is not None and len(missing_calls(service, better)) < len(missing):
-            return better, from_cache and better_cached
-        return narrative, from_cache
 
 
 def opaque_steps(service: FlowService) -> tuple[str, ...]:
@@ -1132,6 +1252,34 @@ def parse_narrative(content: str) -> Narrative | None:
 
 
 def narrative_from_payload(payload: Any) -> Narrative | None:
+    answer = answer_from_payload(payload)
+    return answer.narrative if answer is not None else None
+
+
+def _flow_items(value: Any) -> tuple[FlowItem, ...]:
+    """Detailed-flow items from an answer: objects with ids, or plain strings."""
+    items: list[FlowItem] = []
+    for raw in value[:MAX_DETAILED_STEPS] if isinstance(value, list) else []:
+        if isinstance(raw, str):
+            item = FlowItem(raw)
+        elif isinstance(raw, dict) and isinstance(raw.get("text"), str):
+            calls = raw.get("calls")
+            ids = [normalize_id(call) for call in calls] if isinstance(calls, list) else []
+            item = FlowItem(
+                raw["text"],
+                normalize_id(raw.get("decision")),
+                normalize_id(raw.get("case")),
+                tuple(found for found in ids if found)[:MAX_ITEM_CALLS],
+            )
+        else:
+            continue
+        text = clean_text(strip_ids(item.text), MAX_DETAILED_STEP_CHARS)
+        if sum(char.isalpha() for char in text) >= 3:  # punctuation-only items are dropped
+            items.append(replace(item, text=text))
+    return tuple(items)
+
+
+def answer_from_payload(payload: Any) -> DescribeAnswer | None:
     if not isinstance(payload, dict):
         return None
     texts: dict[str, str] = {}
@@ -1151,26 +1299,19 @@ def narrative_from_payload(payload: Any) -> Narrative | None:
     )
     # Small models sometimes emit punctuation-only items such as ",".
     steps = tuple(step for step in steps if sum(char.isalpha() for char in step) >= 3)
-    detailed_value = payload.get("detailed_steps")
-    detailed = tuple(
-        clean_text(step, MAX_DETAILED_STEP_CHARS)
-        for step in (detailed_value if isinstance(detailed_value, list) else [])[
-            :MAX_DETAILED_STEPS
-        ]
-        if isinstance(step, str)
-    )
-    detailed = tuple(step for step in detailed if sum(char.isalpha() for char in step) >= 3)
+    items = _flow_items(payload.get("detailed_steps"))
     if not texts["purpose"]:
         return None
-    return Narrative(
+    narrative = Narrative(
         purpose=texts["purpose"],
         usage=texts["usage"],
         data_effects=texts["data_effects"],
         steps=steps,
         error_handling=texts["error_handling"],
         designer_comment=clean_text(comment.replace("`", ""), MAX_DESIGNER_COMMENT_CHARS),
-        detailed_steps=detailed,
+        detailed_steps=tuple(item.text for item in items),
     )
+    return DescribeAnswer(narrative, items)
 
 
 def narrative_text(narrative: Narrative) -> str:
@@ -1199,13 +1340,22 @@ def narrative_payload(narrative: Narrative) -> dict[str, Any]:
     }
 
 
-DESCRIBE_SPEC: AnswerSpec[Narrative] = AnswerSpec(
+def answer_payload(answer: DescribeAnswer) -> dict[str, Any]:
+    payload = narrative_payload(answer.narrative)
+    payload["detailed_steps"] = [
+        {"text": item.text, "decision": item.decision, "case": item.case, "calls": list(item.calls)}
+        for item in answer.items
+    ]
+    return payload
+
+
+DESCRIBE_SPEC: AnswerSpec[DescribeAnswer] = AnswerSpec(
     prompt_version=DESCRIBE_PROMPT_VERSION,
     schema=DESCRIBE_SCHEMA,
     num_predict=DESCRIBE_NUM_PREDICT,
-    from_payload=lambda payload: narrative_from_payload(payload),
-    to_payload=lambda narrative: narrative_payload(narrative),
-    text_of=lambda narrative: narrative_text(narrative),
+    from_payload=lambda payload: answer_from_payload(payload),
+    to_payload=lambda answer: answer_payload(answer),
+    text_of=lambda answer: narrative_text(answer.narrative),
 )
 BRIEF_SCHEMA: dict[str, Any] = {
     **DESCRIBE_SCHEMA,
@@ -1216,7 +1366,7 @@ BRIEF_SCHEMA: dict[str, Any] = {
     },
     "required": [key for key in DESCRIBE_SCHEMA["required"] if key != "detailed_steps"],
 }
-DESCRIBE_SPECS: dict[DetailLevel, AnswerSpec[Narrative]] = {
+DESCRIBE_SPECS: dict[DetailLevel, AnswerSpec[DescribeAnswer]] = {
     DetailLevel.BRIEF: replace(
         DESCRIBE_SPEC,
         prompt_version=f"{DESCRIBE_PROMPT_VERSION}-brief",

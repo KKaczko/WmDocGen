@@ -14,6 +14,7 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from wm_doc.ir import FlowService
 from wm_doc.pseudocode import (
@@ -22,6 +23,9 @@ from wm_doc.pseudocode import (
     MINIMAL_DETAIL,
     render_pseudocode,
 )
+
+if TYPE_CHECKING:
+    from wm_doc.flow_logic import FlowLogic
 
 DEFAULT_NUM_CTX = 16384
 DEFAULT_NUM_PREDICT = 1024
@@ -57,15 +61,20 @@ def fit_facts(
     overhead_chars: int = DEFAULT_OVERHEAD_CHARS,
     num_predict: int = DEFAULT_NUM_PREDICT,
     callee_outputs: Callable[[str], str | None] | None = None,
+    flow: FlowLogic | None = None,
+    flow_block: str = "",
 ) -> tuple[str, bool]:
     """Render the richest pseudo-code that fits the context window.
 
     `overhead_chars` is the size of the instructions sent around the facts and
-    `num_predict` the tokens reserved for the answer. Returns the facts and whether
-    anything was left out to make them fit.
+    `num_predict` the tokens reserved for the answer. With `flow` (the control model) the
+    pseudo-code carries decision, case and call ids at every detail level, and `flow_block`
+    (the decisions it describes) follows it in full. Returns the facts and whether anything
+    was left out to make them fit.
     """
     budget_tokens = num_ctx - num_predict - PROMPT_MARGIN_TOKENS
-    budget_chars = max(budget_tokens * CHARS_PER_TOKEN - overhead_chars, 1000)
+    tail = f"\n{flow_block}" if flow_block else ""
+    budget_chars = max(budget_tokens * CHARS_PER_TOKEN - overhead_chars - len(tail), 1000)
     for detail in DETAIL_LADDER:
         facts = render_pseudocode(
             service,
@@ -75,9 +84,10 @@ def fit_facts(
             facts_text=facts_text,
             external_note=external_note,
             callee_outputs=callee_outputs,
+            logic=flow,
         )
         if len(facts) <= budget_chars:
-            return facts, detail is not FULL_DETAIL
+            return facts + tail, detail is not FULL_DETAIL
     facts = render_pseudocode(
         service,
         callee_note,
@@ -86,6 +96,7 @@ def fit_facts(
         facts_text=facts_text,
         external_note=external_note,
         callee_outputs=callee_outputs,
+        logic=flow,
     )
     lines = facts.splitlines()
     kept: list[str] = []
@@ -98,7 +109,7 @@ def fit_facts(
         used += len(line) + 1
     omitted = len(lines) - len(kept)
     kept.append(f"... ({omitted} more lines omitted to fit the model's context window)")
-    return "\n".join(kept), True
+    return "\n".join(kept) + tail, True
 
 
 def unknown_names(text: str, facts: str) -> list[str]:

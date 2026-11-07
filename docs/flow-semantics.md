@@ -118,11 +118,12 @@ The IBM webMethods documentation the audit used (10.15 unless noted):
 ### Rule status and the facts hash
 
 The `### Decisions` part of a description file's facts block is refreshed on every run but is
-not part of its facts hash, so a status change never marks a description stale. Stage 4 will
-hash the conditional logic: that hashed form must carry only behaviour (which calls run under
-which conditions, which origins reach a decision), never a rule's status or an "assumption"
-label, so that changing a rule from assumed to verified never makes approved descriptions
-stale. Only a change of what the analysis concludes may.
+not part of its facts hash. Description files written since stage 4 (`facts_basis: 2`) hash the
+pseudo-code facts together with the control model as canonical JSON (`flow_answers.logic_json`):
+decisions, cases with their conditions, calls with the conditions they run under, and exits.
+That form carries behaviour only, never a rule id, a rule status or an "assumption" label
+(tested), so changing a rule from assumed to verified never makes approved descriptions stale;
+only a change of what the control model concludes may. Origins and scenarios are not hashed.
 
 ## Owner checklist (IS 10.15, Designer)
 
