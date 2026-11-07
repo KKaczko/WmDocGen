@@ -14,13 +14,17 @@ the items are checked against the facts (`flow_logic`):
 - R5: a quoted or all-capitals value in the text occurs in the facts.
 - R6: an item about a call that runs only under a condition does not say it always runs.
 - R7: the text does not name a call that runs only in another case than the item's.
+- R8: the items follow the order the steps run: a later item does not list a call that runs
+  before one an earlier item lists. Cases of one decision are alternatives, and the
+  transformers of one MAP run in no guaranteed order (S18), so neither is compared.
 
 Only calls and decisions whose ids the prompt shows are required (R3, R4). Ids the model
 writes are normalised (`[c3]` is `C3`), read by their shape (`flow_item`: small models put
 case and EXIT ids into `calls`) and echoed in corrections only in the shape of an id.
 
 `standard` enforces R1-R3; `thorough` and `deep` enforce all; rules not enforced are only
-counted. A failed check shares the one corrective retry of the answer.
+counted. A failed check shares the one corrective retry of the answer, and a cached answer
+is checked again before it is used, so a rule added later never lets an old answer through.
 
 `logic_json` is the canonical form of the control model hashed into description files with
 facts basis 2. It carries behaviour only (decisions, cases, calls, exits and the conditions
@@ -103,6 +107,7 @@ class FlowRule(StrEnum):
     R5 = "R5"
     R6 = "R6"
     R7 = "R7"
+    R8 = "R8"
 
 
 STANDARD_RULES = frozenset({FlowRule.R1, FlowRule.R2, FlowRule.R3})
@@ -264,6 +269,7 @@ def check_items(
     shown = set(_SHOWN_ID_RE.findall(facts))  # a call cut from the prompt cannot be required
     found: list[Violation] = []
     listed: set[str] = set()
+    earlier: list[tuple[int, CallContext]] = []
     for number, item in enumerate(items, 1):
         found += _references(logic, number, item)
         calls = [call for call_id in item.calls if (call := _call(logic, call_id)) is not None]
@@ -271,6 +277,8 @@ def check_items(
         listed.update(call.id for call in calls)
         found += _placement(logic, number, item, calls, exits)
         found += _wording(logic, number, item, calls, facts)
+        found += _sequence(number, calls, earlier)
+        earlier += [(number, call) for call in calls]
     for call_id in coverage:
         if call_id not in listed and call_id in shown:
             target = logic.call(call_id).target
@@ -430,6 +438,39 @@ def _wording(
             )
             listed.add(call.target)
     return found
+
+
+def _alternatives(first: CallContext, second: CallContext) -> bool:
+    """Whether the two calls run in different cases of one decision."""
+    cases = {
+        term.decision_id: set(term.case_ids)
+        for term in first.guard.terms
+        if term.kind is GuardKind.IN_CASE
+    }
+    return any(
+        term.kind is GuardKind.IN_CASE
+        and term.decision_id in cases
+        and not cases[term.decision_id] & set(term.case_ids)
+        for term in second.guard.terms
+    )
+
+
+def _sequence(
+    number: int, calls: list[CallContext], earlier: list[tuple[int, CallContext]]
+) -> list[Violation]:
+    """R8: the first call of this item that runs before a call an earlier item lists."""
+    for call in calls:
+        for before_number, before in earlier:
+            if call.order < before.order and not _alternatives(call, before):
+                return [
+                    Violation(
+                        FlowRule.R8,
+                        f"item {number} lists {call.id} ({code_span(call.target)}), which runs "
+                        f"before {before.id} that item {before_number} lists; put the items in "
+                        "the order the steps run",
+                    )
+                ]
+    return []
 
 
 def significant_decisions(logic: FlowLogic) -> list[Decision]:

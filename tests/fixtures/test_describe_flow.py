@@ -10,8 +10,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from flowxml import FlowPackage, branch, case, copy, exit_, invoke, loop, record, string
+from flowxml import (
+    FlowPackage,
+    branch,
+    case,
+    copy,
+    exit_,
+    invoke,
+    loop,
+    map_,
+    record,
+    string,
+    transform,
+)
 
+import wm_doc.describer as describer
 from wm_doc.config import load_config
 from wm_doc.describer import (
     DescribeOptions,
@@ -23,8 +36,8 @@ from wm_doc.describer import (
     describe_services,
     upgrade_blocker,
 )
-from wm_doc.flow_answers import FlowItem, FlowRule, check_items
-from wm_doc.flow_logic import compute_flow_logic
+from wm_doc.flow_answers import FlowItem, FlowRule, Violation, check_items
+from wm_doc.flow_logic import FlowLogic, compute_flow_logic
 from wm_doc.flow_semantics import RULES_BY_ID, RuleStatus
 from wm_doc.ir import AnalysisResult
 from wm_doc.ollama_provider import (
@@ -457,6 +470,77 @@ def test_an_id_of_the_wrong_kind_is_explained(tmp_path: Path) -> None:
 
     assert "item 1: D2.c1 is a case id, not a call id" in messages[0]
     assert "item 1: E7 is not a call id" in messages[1]
+
+
+def _order(logic: FlowLogic, items: list[FlowItem]) -> list[str]:
+    found = check_items(items, logic, (), "")
+    return [item.message for item in found if item.rule is FlowRule.R8]
+
+
+def test_items_out_of_the_order_the_steps_run_fail_thorough(tmp_path: Path) -> None:
+    reordered = [GOOD[2], GOOD[3], GOOD[0], GOOD[1]]
+
+    standard = Setup(tmp_path / "standard")
+    _provider, outcome = standard.describe(_always(reordered))
+    assert outcome is DescribeOutcome.GENERATED  # counted, not enforced, at standard
+
+    thorough = Setup(tmp_path / "thorough")
+    provider, outcome = thorough.describe(_always(reordered), detail=DetailLevel.THOROUGH)
+    assert outcome is DescribeOutcome.REJECTED
+    assert (
+        "item 3 lists C1 (`systemA:validateOrder`), which runs before C3 that item 1 lists"
+    ) in provider.last_user_message(1)
+
+
+def test_cases_of_one_decision_may_come_in_any_order(tmp_path: Path) -> None:
+    logic = compute_flow_logic(Setup(tmp_path).analysis.services[0])
+    swapped = [
+        FlowItem("Finalizes.", "D1", "D1.c2", ("C2",)),
+        FlowItem("Validates.", "D1", "D1.c1", ("C1",)),
+        FlowItem("Activates.", "D2", "D2.c1", ("C3",)),
+    ]
+    assert _order(logic, swapped) == []
+
+    later_first = [FlowItem("Activates.", "D2", "D2.c1", ("C3",)), *swapped[:2]]
+    assert _order(logic, later_first) == [
+        "item 2 lists C2 (`systemB:finalizeOrder`), which runs before C3 that item 1 lists; "
+        "put the items in the order the steps run",
+        "item 3 lists C1 (`systemA:validateOrder`), which runs before C3 that item 1 lists; "
+        "put the items in the order the steps run",
+    ]
+
+
+def test_transformers_of_one_map_have_no_order(tmp_path: Path) -> None:
+    two = map_(
+        transform("pub.string:toUpper", outputs=[copy("/value", "/upper")]),
+        transform("pub.string:toLower", outputs=[copy("/value", "/lower")]),
+    )
+    logic = compute_flow_logic(Setup(tmp_path / "map", two).analysis.services[0])
+    lower_first = [FlowItem("Lower.", calls=("C6",)), FlowItem("Upper.", calls=("C5",))]
+    assert _order(logic, lower_first) == []
+
+    # A transformer in an INVOKE's input map runs before the call, though it comes after it.
+    feeding = invoke(
+        "orders.audit:record",
+        inputs=[transform("pub.string:toUpper", outputs=[copy("/value", "/text")])],
+    )
+    logic = compute_flow_logic(Setup(tmp_path / "invoke", feeding).analysis.services[0])
+    upper_first = [FlowItem("Upper.", calls=("C6",)), FlowItem("Calls.", calls=("C5",))]
+    assert _order(logic, upper_first) == []
+
+
+def test_a_cached_answer_that_fails_the_checks_of_today_is_asked_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup = Setup(tmp_path)
+    setup.describe(_always(GOOD))
+    newer = [Violation(FlowRule.R1, "a rule added since the answer was cached")]
+    monkeypatch.setattr(describer, "check_items", lambda *_args: newer)
+
+    provider, outcome = setup.describe(_always(GOOD), redo_drafts=True)
+
+    assert provider.requests  # the cached answer was not used
+    assert outcome is DescribeOutcome.REJECTED
 
 
 def test_brief_descriptions_have_no_flow_and_no_flow_checks(tmp_path: Path) -> None:

@@ -810,7 +810,8 @@ class AnswerSpec[T]:
         if session.cache_dir is not None and not session.refresh:
             payload = _read_cached_payload(session.cache_dir, key, self.prompt_version)
             cached = self.from_payload(payload) if payload is not None else None
-            if cached is not None:
+            # Checked again: a rule added since it was cached must not let it through.
+            if cached is not None and (check is None or not check(cached)):
                 return cached, True, (DescribeOutcome.CACHED, "")
         conversation = list(messages)
         attempts = 2

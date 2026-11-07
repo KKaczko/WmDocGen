@@ -189,8 +189,9 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   the pseudo-code (`render_pseudocode(..., logic=)`: `[D1]`, `[D1.c2]`, `[C3]`, `[E1]`) and a
   decisions block; detailed-flow items are `{text, decision, case, calls}` (`calls` holds call
   and EXIT ids; `flow_item` reads ids by shape, R2 also places EXITs); the tool writes the
-  case condition in front of the text (stored as plain strings) and checks R1-R7 (`standard`
-  R1-R3, `thorough`/`deep` all; the rest only counted) within the one corrective retry
+  case condition in front of the text (stored as plain strings) and checks R1-R8 (`standard`
+  R1-R3, `thorough`/`deep` all; the rest only counted; R8 is the order of the steps, using
+  `CallContext.order`; cached answers are checked again) within the one corrective retry
   (`thorough` adds one request when only the flow is still wrong); `--keep-unverified` marks
   `unverified_flow`. New drafts use `facts_basis: 2` (pseudo-code facts plus `logic_json`,
   behaviour only, never a rule status); files without the key stay on basis 1 and carry

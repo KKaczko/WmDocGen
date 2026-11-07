@@ -214,6 +214,10 @@ class CallContext:
     same_target_count: int  # how many other calls go to the same service
     source: SourceReference
     unreachable_reason: str | None = None  # an UnreachableStep reason, when it never runs
+    # Where the call runs in the flow, as the index of the first call of its step: the
+    # transformers of one MAP share one place (S18), and those of an INVOKE's maps share the
+    # INVOKE's. Calls with a lower order run earlier unless they are alternatives.
+    order: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1348,11 +1352,26 @@ class _Analysis:
             source=node.source,
         )
 
+    def _order_step(self, node_id: str) -> str:
+        """The step whose place in the flow a call takes (see `CallContext.order`)."""
+        node = self.nodes[node_id]
+        parent = self.parent.get(node_id)
+        if node.type is not FlowNodeType.MAPINVOKE or parent is None:
+            return node_id
+        if parent.type is not FlowNodeType.MAP:
+            return node_id
+        owner = self.parent.get(parent.id)
+        if owner is not None and owner.type is FlowNodeType.INVOKE:
+            return owner.id
+        return parent.id
+
     def _finish_calls(self) -> tuple[CallContext, ...]:
         ordered = sorted(self.call_contexts.values(), key=lambda item: item.index)
         by_target: dict[str, list[str]] = {}
+        first: dict[str, int] = {}
         for call in ordered:
             by_target.setdefault(call.target, []).append(call.id)
+            first.setdefault(self._order_step(call.node_id), call.index)
         result = []
         for call in ordered:
             others = [item for item in by_target[call.target] if item != call.id]
@@ -1372,6 +1391,7 @@ class _Analysis:
                     same_target_count=len(others),
                     source=call.source,
                     unreachable_reason=call.unreachable_reason,
+                    order=first[self._order_step(call.node_id)],
                 )
             )
         return tuple(result)

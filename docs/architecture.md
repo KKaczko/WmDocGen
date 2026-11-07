@@ -419,9 +419,10 @@ independent decisions are never combined. The service page shows the tables unde
 describe prompt shows the pseudo-code with decision, case, call and EXIT ids and a block that
 lists each decision's cases with the calls in them. Each detailed-flow item comes back as text
 plus the ids it is about; the tool writes the case's condition in front of the text and checks
-the items (R1-R7: ids exist, a call or EXIT sits in the case it runs in, every call that
+the items (R1-R8: ids exist, a call or EXIT sits in the case it runs in, every call that
 matters and that the prompt shows is listed, decisions that choose calls have an item, values
 come from the facts, no "always" for a call that runs only under a condition, no item names a
-call of another case) as part of the answer's single corrective retry. Drafts
+call of another case, items in the order the steps run) as part of the answer's single
+corrective retry; a cached answer is checked again before it is reused. Drafts
 record `facts_basis: 2`: their hash covers the pseudo-code facts and the control model as
 canonical JSON without rule ids or statuses.

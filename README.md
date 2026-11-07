@@ -98,8 +98,10 @@ Point the commands at the server's `packages` directory, or a copy of it.
    the answer is accepted: every id exists, each call sits in the case it runs in, and every
    call that matters is listed (all levels with a detailed flow). `thorough` and `deep` also
    reject values that are not in the facts, "always" for a call that runs only under a
-   condition, a decision that chooses calls but has no item, and an item that names a call
-   which runs only in another case. A failed check shares the one corrective retry.
+   condition, a decision that chooses calls but has no item, an item that names a call which
+   runs only in another case, and items out of the order the steps run (cases of one BRANCH
+   and the transformers of one MAP may come in any order). A failed check shares the one
+   corrective retry; a cached answer is checked again before it is reused.
 
    How much is written, and how long it takes:
 
