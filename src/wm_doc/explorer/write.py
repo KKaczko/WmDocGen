@@ -8,6 +8,7 @@ Layout under the output folder:
     data/search.json           search index
     data/graph.json            every call, as edges between services and other targets
     data/services/<id>.json    one file per service
+    data/flows/<id>.json       the conditional flow of a FLOW service that has one
     data/packages/<id>.json    one file per package
     data/overview.json         server overview description and skipped packages
 
@@ -26,6 +27,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from wm_doc.explorer.build import ExplorerBundle
+from wm_doc.explorer.contract import dump_json
 from wm_doc.output_cleanup import remove_managed_path
 
 APP_DIR = Path(__file__).with_name("app")
@@ -66,9 +68,7 @@ def check_output_location(output: Path, packages_root: Path) -> None:
 
 
 def dump(model: BaseModel) -> bytes:
-    payload = model.model_dump(mode="json", by_alias=True)
-    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return (text + "\n").encode("utf-8")
+    return dump_json(model)
 
 
 def render_data_files(bundle: ExplorerBundle) -> dict[str, bytes]:
@@ -80,6 +80,8 @@ def render_data_files(bundle: ExplorerBundle) -> dict[str, bytes]:
     }
     for identifier, detail in bundle.services.items():
         files[f"services/{identifier}.json"] = dump(detail)
+    for identifier, content in bundle.flows.items():
+        files[f"flows/{identifier}.json"] = content
     for identifier, package in bundle.packages.items():
         files[f"packages/{identifier}.json"] = dump(package)
     lines = "".join(f"{path} {hashlib.sha256(files[path]).hexdigest()}\n" for path in sorted(files))

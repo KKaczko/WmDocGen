@@ -7,7 +7,8 @@ pipeline, so a demo shows real analysis output without any real data.
 
 The core set is a small order-handling server:
 
-- OrdersApi: REST v1 handlers, FLOW services with TRY/CATCH, a JMS trigger, document types,
+- OrdersApi: REST v1 handlers, FLOW services with TRY/CATCH, a FLOW service with BRANCH
+  decisions (`orders.api:processOrder`), a JMS trigger, document types,
   a Java router with a static and a dynamic `Service.doInvoke`, and calls to a billing
   service that is not among the packages.
 - OrdersDb: a JDBC connection and three JDBC adapter services.
@@ -251,6 +252,29 @@ def _try_catch(try_steps: list[str], catch_steps: list[str]) -> str:
     )
 
 
+def _branch(switch: str, cases: list[tuple[str, list[str]]]) -> str:
+    """A BRANCH on `switch`, each case a SEQUENCE named after its label."""
+    body = "".join(
+        f'  <SEQUENCE TIMEOUT="" EXIT-ON="FAILURE" NAME={quoteattr(label)}>\n    '
+        + "\n    ".join(steps)
+        + "\n  </SEQUENCE>\n"
+        for label, steps in cases
+    )
+    return f'<BRANCH TIMEOUT="" SWITCH={quoteattr(switch)}>\n{body}</BRANCH>'
+
+
+def _copy_map(mode: str, source: str, target: str) -> str:
+    return (
+        f'<MAP MODE="{mode}">\n'
+        f"  <MAPCOPY FROM={quoteattr(f'{source};1;0')} TO={quoteattr(f'{target};1;0')}>"
+        "</MAPCOPY>\n</MAP>"
+    )
+
+
+def _exit_failure(message: str) -> str:
+    return f'<EXIT FROM="$flow" SIGNAL="FAILURE" FAILURE-MESSAGE={quoteattr(message)}></EXIT>'
+
+
 def _mapset(field: str, value: str) -> str:
     return _map("STANDALONE", {field: value})
 
@@ -393,6 +417,45 @@ def _orders_api(writer: _Writer) -> None:
         _invoke("pub.date:getCurrentDate") + "\n" + _invoke("common.util:transformOrder"),
         inputs=(ORDER,),
         outputs=(_Field("valid"),),
+    )
+    writer.flow(
+        package,
+        "orders.api:processOrder",
+        # The literal never reaches the explorer; the failure message holds a fake secret.
+        _mapset("validationStatus", "UNCHECKED")
+        + "\n"
+        + _branch(
+            "/order/status",
+            [
+                (
+                    "ACTIVE",
+                    [
+                        _invoke(
+                            "orders.api:validateOrder",
+                            input_map=_copy_map("OUTPUT", "/valid", "/validationStatus"),
+                        )
+                    ],
+                ),
+                ("CANCELLED", [_invoke("orders.api:cancelOrder")]),
+                ("$default", [_invoke("common.log:logEvent")]),
+            ],
+        )
+        + "\n"
+        + _branch(
+            "/validationStatus",
+            [
+                ("true", [_invoke("orders.db:insertOrder")]),
+                (
+                    "false",
+                    [
+                        _invoke("common.error:handleError"),
+                        _exit_failure(f"Rejected; password={FAKE_SECRETS[0]}"),
+                    ],
+                ),
+            ],
+        ),
+        inputs=(ORDER,),
+        outputs=(_Field("orderId"),),
     )
     writer.flow(
         package,

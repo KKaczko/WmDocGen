@@ -9,6 +9,7 @@ import { useResource } from "../data/use-resource";
 import { AnalysisSection } from "./AnalysisSection";
 import { CallersSection } from "./CallersSection";
 import { CallsSection } from "./CallsSection";
+import { ConditionalFlowSection } from "./ConditionalFlowSection";
 import { CopyButton } from "./CopyButton";
 import { DescriptionDetails, DescriptionSection } from "./DescriptionSection";
 import {
@@ -125,6 +126,7 @@ function ServiceDetails({
       <AdapterSection adapter={detail.adapter} />
       <SignatureSection signature={detail.signature} />
       <CallsSection calls={detail.calls} total={detail.callsTotal} />
+      <ConditionalFlowSection serviceId={detail.id} flow={detail.flow} />
       <CallersSection callers={detail.callers} total={detail.callersTotal} />
       <EntryPointsSection
         entryPoints={detail.entryPoints}

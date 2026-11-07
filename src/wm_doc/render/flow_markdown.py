@@ -224,11 +224,11 @@ def _decision_block(logic: FlowLogic, decision: Decision, lineage: FlowLineage |
         "| --- | --- | --- | --- | --- |",
     ]
     for case in decision.cases:
-        calls = [_call_ref(logic, call_id) for call_id in case.call_ids[:MAX_CASE_CALLS]]
+        calls = [call_ref(logic, call_id) for call_id in case.call_ids[:MAX_CASE_CALLS]]
         hidden = len(case.call_ids) - min(len(case.call_ids), MAX_CASE_CALLS)
         if hidden:
             calls.append(f"and {hidden} more")
-        ends = [_exit_ref(logic, exit_id) for exit_id in case.ends_with[:MAX_IDS]]
+        ends = [exit_ref(logic, exit_id) for exit_id in case.ends_with[:MAX_IDS]]
         if len(case.ends_with) > MAX_IDS:
             ends.append(f"and {len(case.ends_with) - MAX_IDS} more")
         notes = []
@@ -345,7 +345,7 @@ def _origins_block(logic: FlowLogic, lineage: FlowLineage, decision: Decision) -
 
 def variable_lines(logic: FlowLogic, lineage: FlowLineage, variable: VariableOrigins) -> list[str]:
     """Markdown list lines saying where one decision field may come from."""
-    blocked = _not_followed(variable)
+    blocked = not_followed(variable)
     if blocked is not None:
         return [f"- {blocked}"]
     lines: list[str] = []
@@ -382,17 +382,17 @@ def variable_lines(logic: FlowLogic, lineage: FlowLineage, variable: VariableOri
         lines.append(
             "- Calls that run before the decision may also change it, because a called service "
             "shares the pipeline (S16): "
-            f"{_calls_text(logic, variable.calls_in_between, variable.more_calls_in_between)}."
+            f"{calls_text(logic, variable.calls_in_between, variable.more_calls_in_between)}."
         )
     if variable.depends_on_calls:
         lines.append(
             "- It may carry what these calls return: "
-            f"{_calls_text(logic, variable.depends_on_calls, False)}."
+            f"{calls_text(logic, variable.depends_on_calls, False)}."
         )
     return lines
 
 
-def _not_followed(variable: VariableOrigins) -> str | None:
+def not_followed(variable: VariableOrigins) -> str | None:
     if "scope" in variable.notes:
         return (
             "Not followed: the decision is inside a step that works on one document (a scope), "
@@ -441,23 +441,45 @@ def _source_lines(
     return lines
 
 
-def origin_text(logic: FlowLogic, origin: Origin, *, brief: bool = False) -> str:
-    """One origin in words: what, where, when it runs and how certain it is."""
-    text = _origin_what(logic, origin, brief=brief)
+def origin_text(
+    logic: FlowLogic,
+    origin: Origin,
+    *,
+    brief: bool = False,
+    literals: bool = True,
+    certainty: bool = True,
+) -> str:
+    """One origin in words: what, where, when it runs and how certain it is.
+
+    `literals=False` never names a mapping literal (the explorer); `certainty=False` leaves
+    out the closing "(certainty; assumption)" for callers that show it apart.
+    """
+    text = _origin_what(logic, origin, brief=brief, literals=literals)
     if not brief:
         extras = [_NOTE_SUFFIX[note] for note in origin.notes if note in _NOTE_SUFFIX]
         if extras:
             text += f" ({'; '.join(extras)})"
     if origin.guard.terms:
         text += f", only when {guard_text(logic, origin.guard)}"
-    if brief:
+    if brief or not certainty:
         return text
-    certainty = weakest((origin.certainty, origin.guard.certainty))
-    label = assumption_label(sort_rules((*origin.rules, *origin.guard.rules)))
-    return f"{text} ({certainty.value}; {label})" if label else f"{text} ({certainty.value})"
+    level = origin_certainty(origin)
+    label = origin_assumptions(origin)
+    return f"{text} ({level.value}; {label})" if label else f"{text} ({level.value})"
 
 
-def _origin_what(logic: FlowLogic, origin: Origin, *, brief: bool) -> str:
+def origin_certainty(origin: Origin) -> Certainty:
+    return weakest((origin.certainty, origin.guard.certainty))
+
+
+def origin_assumptions(origin: Origin) -> str | None:
+    return assumption_label(sort_rules((*origin.rules, *origin.guard.rules)))
+
+
+LITERAL_NOT_EXPORTED = "(literal, not exported)"
+
+
+def _origin_what(logic: FlowLogic, origin: Origin, *, brief: bool, literals: bool = True) -> str:
     kind = origin.kind
     where = _where(logic, origin)
     call = _call_name(logic, origin.call_id)
@@ -469,6 +491,10 @@ def _origin_what(logic: FlowLogic, origin: Origin, *, brief: bool) -> str:
             )
         elif origin.value is None:
             what = "set to a value the literal policy does not show"
+        elif not literals:
+            what = f"set to a literal {LITERAL_NOT_EXPORTED}"
+            if origin.template:
+                what = f"set from a template {LITERAL_NOT_EXPORTED}"
         elif origin.template:
             what = f"set from the template {code_span(origin.value)}"
         else:
@@ -585,14 +611,14 @@ def _call_status(logic: FlowLogic, call_id: str | None) -> str | None:
     return _TARGET_TEXT.get(status, "a target that is not resolved")
 
 
-def _calls_text(logic: FlowLogic, call_ids: tuple[str, ...], more: bool) -> str:
+def calls_text(logic: FlowLogic, call_ids: tuple[str, ...], more: bool) -> str:
     text = ", ".join(_call_name(logic, call_id) for call_id in call_ids)
     return f"{text} and more" if more else text
 
 
 def origin_summary(logic: FlowLogic, lineage: FlowLineage, variable: VariableOrigins) -> str:
     """One line for the facts block of a description file."""
-    blocked = _not_followed(variable)
+    blocked = not_followed(variable)
     if blocked is not None:
         return blocked[0].lower() + blocked[1:].rstrip(".")
     origins = [lineage.origin(origin_id) for origin_id in variable.origins]
@@ -630,7 +656,7 @@ def render_decision_facts(logic: FlowLogic | None, lineage: FlowLineage | None) 
             head += f", evaluated only when {guard_text(logic, decision.guard)}"
         lines.append(head)
         for case in decision.cases[:MAX_FACT_CASES]:
-            calls = [_call_ref(logic, call_id) for call_id in case.call_ids[:MAX_CASE_CALLS]]
+            calls = [call_ref(logic, call_id) for call_id in case.call_ids[:MAX_CASE_CALLS]]
             hidden = len(case.call_ids) - min(len(case.call_ids), MAX_CASE_CALLS)
             if hidden:
                 calls.append(f"and {hidden} more")
@@ -735,7 +761,7 @@ def _calls_block(logic: FlowLogic) -> str:
     for call in logic.calls[:MAX_CALL_ROWS]:
         lines.append(
             f"| {call.id} | {code_span(call.target)} | {_how(call)} | "
-            f"{_cell(_runs_when(logic, call))} | {_cell(_call_certainty(call))} |"
+            f"{_cell(runs_when(logic, call))} | {_cell(call_certainty(call))} |"
         )
     lines += _more(len(logic.calls), MAX_CALL_ROWS, "call", prefix="")
     return "\n".join(lines)
@@ -753,7 +779,7 @@ _NEVER_TEXT = {
 }
 
 
-def _runs_when(logic: FlowLogic, call: CallContext) -> str:
+def runs_when(logic: FlowLogic, call: CallContext) -> str:
     if call.reach is Reach.UNREACHABLE:
         return _NEVER_TEXT.get(
             call.unreachable_reason or "",
@@ -769,7 +795,7 @@ def _runs_when(logic: FlowLogic, call: CallContext) -> str:
     return text
 
 
-def _call_certainty(call: CallContext) -> str:
+def call_certainty(call: CallContext) -> str:
     if call.reach is Reach.UNREACHABLE:
         label = assumption_label(call.unreachable_rules)
         return f"derived ({label})" if label else "derived"
@@ -782,10 +808,17 @@ def _how(call: CallContext) -> str:
 
 def _exits_block(logic: FlowLogic) -> str:
     lines = ["### Exits", ""]
-    for item in logic.exits[:MAX_LIST_ROWS]:
-        lines.append(f"- {exit_text(logic, item)}; runs when: {guard_text(logic, item.guard)}.")
+    lines += [f"- {line}" for line in exit_lines(logic)]
     lines += _more(len(logic.exits), MAX_LIST_ROWS, "EXIT", prefix="")
     return "\n".join(lines)
+
+
+def exit_lines(logic: FlowLogic) -> list[str]:
+    """One line per EXIT (the first MAX_LIST_ROWS): what it leaves and when it runs."""
+    return [
+        f"{exit_text(logic, item)}; runs when: {guard_text(logic, item.guard)}."
+        for item in logic.exits[:MAX_LIST_ROWS]
+    ]
 
 
 def exit_text(logic: FlowLogic, item: ExitEffect) -> str:
@@ -808,35 +841,42 @@ def exit_text(logic: FlowLogic, item: ExitEffect) -> str:
 
 def _unreachable_block(logic: FlowLogic) -> str:
     lines = ["### Steps that never run", ""]
+    lines += [f"- {line}" for line in unreachable_lines(logic)]
+    lines += _more(len(logic.unreachable), MAX_LIST_ROWS, "step", prefix="")
+    return "\n".join(lines)
+
+
+def unreachable_lines(logic: FlowLogic) -> list[str]:
+    """One line per step that never runs (the first MAX_LIST_ROWS), with the reason."""
+    lines: list[str] = []
     for item in logic.unreachable[:MAX_LIST_ROWS]:
         label = assumption_label(item.rules)
         suffix = f" ({label})" if label else ""
         step = logic.step_text[item.node_id]
         if item.reason == "duplicate_case":
-            lines.append(f"- {item.case_id}: an earlier case has the same label{suffix}.")
+            lines.append(f"{item.case_id}: an earlier case has the same label{suffix}.")
         elif item.reason == "ignored_label":
             lines.append(
-                f"- {item.case_id}: label expressions ignore a blank or `$null` label{suffix}."
+                f"{item.case_id}: label expressions ignore a blank or `$null` label{suffix}."
             )
         elif item.reason == "try_cannot_fail":
-            lines.append(f"- {step}: nothing in the TRY before it can fail{suffix}.")
+            lines.append(f"{step}: nothing in the TRY before it can fail{suffix}.")
         elif item.reason == "flow_failure":
             lines.append(
-                f"- {step}: every way out of the blocks before it is EXIT `$flow` with failure "
+                f"{step}: every way out of the blocks before it is EXIT `$flow` with failure "
                 f"({_ids(item.exit_ids)}), which skips it{suffix}."
             )
         elif item.reason == "no_linked_outputs":
-            lines.append(f"- {step}: no output is linked, so the transformer does not run{suffix}.")
+            lines.append(f"{step}: no output is linked, so the transformer does not run{suffix}.")
         else:
-            lines.append(f"- {step}: {_ids(item.exit_ids)} always leaves first{suffix}.")
-    lines += _more(len(logic.unreachable), MAX_LIST_ROWS, "step", prefix="")
-    return "\n".join(lines)
+            lines.append(f"{step}: {_ids(item.exit_ids)} always leaves first{suffix}.")
+    return lines
 
 
 # --- helpers -------------------------------------------------------------------------------
 
 
-def _call_ref(logic: FlowLogic, call_id: str) -> str:
+def call_ref(logic: FlowLogic, call_id: str) -> str:
     return f"{call_id} {code_span(logic.call(call_id).target)}"
 
 
@@ -890,13 +930,13 @@ def _scenario_table(logic: FlowLogic, table: ScenarioTable) -> list[str]:
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for scenario in table.scenarios:
-        calls = [_scenario_call(logic, table, scenario, call_id) for call_id in scenario.call_ids]
-        depends = ", ".join(_call_ref(logic, call_id) for call_id in scenario.depends_on_calls)
+        calls = [scenario_call(logic, table, scenario, call_id) for call_id in scenario.call_ids]
+        depends = ", ".join(call_ref(logic, call_id) for call_id in scenario.depends_on_calls)
         label = assumption_label(scenario.rules)
         feasibility = scenario.feasibility.value + (f" ({label})" if label else "")
         lines.append(
-            f"| {scenario.id} | {_cell(_conditions(logic, scenario.outcomes))} | "
-            f"{_cell(', '.join(calls)) or '-'} | {_cell(_scenario_end(logic, scenario))} | "
+            f"| {scenario.id} | {_cell(outcomes_text(logic, scenario.outcomes))} | "
+            f"{_cell(', '.join(calls)) or '-'} | {_cell(scenario_end(logic, scenario))} | "
             f"{_cell(depends) or '-'} | {_cell(feasibility)} |"
         )
     if table.walk_limit:
@@ -919,7 +959,7 @@ def _scenario_table(logic: FlowLogic, table: ScenarioTable) -> list[str]:
         ]
     if table.ruled_out:
         lines += ["", "Ruled out:", ""]
-        lines += [f"- {_ruled_text(logic, item)}" for item in table.ruled_out[:MAX_RULED_SHOWN]]
+        lines += [f"- {ruled_text(logic, item)}" for item in table.ruled_out[:MAX_RULED_SHOWN]]
         hidden = len(table.ruled_out) - min(len(table.ruled_out), MAX_RULED_SHOWN)
         if hidden:
             lines.append(f"- and {hidden} more")
@@ -940,17 +980,17 @@ def outcome_text(logic: FlowLogic, outcome: Outcome) -> str:
     return f"{text} or no case matches" if outcome.no_match else text
 
 
-def _conditions(logic: FlowLogic, outcomes: tuple[Outcome, ...]) -> str:
+def outcomes_text(logic: FlowLogic, outcomes: tuple[Outcome, ...]) -> str:
     return "; ".join(outcome_text(logic, item) for item in outcomes)
 
 
-def _scenario_call(
+def scenario_call(
     logic: FlowLogic, table: ScenarioTable, scenario: Scenario, call_id: str
 ) -> str:
     """A call of a scenario, with what else it needs: cases of a grouped outcome, decisions
     outside the table, loops, failures."""
     call = logic.call(call_id)
-    return _call_ref(logic, call_id) + _qualifiers(logic, table, scenario, call.guard, call.reach)
+    return call_ref(logic, call_id) + _qualifiers(logic, table, scenario, call.guard, call.reach)
 
 
 def _qualifiers(
@@ -984,7 +1024,7 @@ def _qualifiers(
     return text
 
 
-def _scenario_end(logic: FlowLogic, scenario: Scenario) -> str:
+def scenario_end(logic: FlowLogic, scenario: Scenario) -> str:
     if scenario.fails_at is not None:
         text = f"{scenario.fails_at} fails ({rule_label(['S31'])}); "
         if scenario.service_fails:
@@ -998,7 +1038,7 @@ def _scenario_end(logic: FlowLogic, scenario: Scenario) -> str:
                 "sequence)"
             )
     elif scenario.ends:
-        text = ", ".join(_exit_ref(logic, exit_id) for exit_id in scenario.ends)
+        text = ", ".join(exit_ref(logic, exit_id) for exit_id in scenario.ends)
         if any("S33" in logic.exit(exit_id).rules for exit_id in scenario.ends):
             text += f"; no CATCH or FINALLY runs ({rule_label(['S33'])})"
     elif scenario.after is not None:
@@ -1014,22 +1054,23 @@ def _scenario_end(logic: FlowLogic, scenario: Scenario) -> str:
     return text
 
 
-def _ruled_text(logic: FlowLogic, item: RuledOut) -> str:
+def ruled_text(logic: FlowLogic, item: RuledOut, *, literals: bool = True) -> str:
     decision = logic.decision(item.decision_id)
     if item.case_id is None:
         what = f"no case of {decision.id} matches"
     else:
         what = f"{decision.id} = {case_short(logic.case(item.case_id))}"
-    before = _conditions(logic, item.prefix)
+    before = outcomes_text(logic, item.prefix)
     when = f"{before}; {what}" if before else what
     where = logic.step_text.get(item.node_id or "", "a step")
+    value = code_span(item.value) if literals else f"one literal {LITERAL_NOT_EXPORTED}"
     return (
-        f"{when}: {code_span(item.path)} is always {code_span(item.value)} there (set in "
+        f"{when}: {code_span(item.path)} is always {value} there (set in "
         f"{where}) ({rule_label(['S2'])})"
     )
 
 
-def _exit_ref(logic: FlowLogic, exit_id: str) -> str:
+def exit_ref(logic: FlowLogic, exit_id: str) -> str:
     item = logic.exit(exit_id)
     if item.target_id is None:
         return f"{exit_id} (target not determined)"

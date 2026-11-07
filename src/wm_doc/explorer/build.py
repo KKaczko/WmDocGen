@@ -29,6 +29,7 @@ from wm_doc.explorer.contract import (
     AnalysisInfo,
     AnalysisLevel,
     Call,
+    ConditionValues,
     Counts,
     Dataset,
     DatasetKind,
@@ -70,7 +71,9 @@ from wm_doc.explorer.contract import (
     SkippedPackage,
     SourceRef,
     TextSegment,
+    dump_json,
 )
+from wm_doc.explorer.flow import flow_view
 from wm_doc.explorer.ids import IdRegistry, package_id, service_id
 from wm_doc.explorer.text import (
     OVERVIEW_SECTION_KEYS,
@@ -145,6 +148,8 @@ class ExplorerOptions:
     dataset_kind: DatasetKind = "private"
     dataset_label: str | None = None
     descriptions: DescriptionsShown = "approved"
+    # Branch condition values in flows/ (owner decision, M14); "excluded" withholds them.
+    condition_values: ConditionValues = "included"
 
 
 @dataclass(frozen=True)
@@ -169,6 +174,9 @@ class ExplorerBundle:
     graph: GraphData
     packages: dict[str, PackageDetail]
     overview: ServerOverview
+    # flows/<id>.json, already serialized: thousands of FlowView trees would not fit the
+    # memory budget of a production-size export.
+    flows: dict[str, bytes] = field(default_factory=dict)
 
 
 def service_kind(service: FlowService) -> ServiceKind:
@@ -216,6 +224,8 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         return state if state in shown else "none"
 
     details: dict[str, ServiceDetail] = {}
+    flows: dict[str, bytes] = {}
+    signatures = {item.identity.full_name: item.signature for item in services}
     search_services: list[SearchService] = []
     call_count = 0
     ordered = sorted(services, key=_service_key)
@@ -257,6 +267,20 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         entry_points = list(facts.entry_points) if facts is not None else []
         effects = list(facts.effects) if facts is not None else []
         hidden_effects = facts.hidden_effects if facts is not None else 0
+        flow = (
+            flow_view(
+                service,
+                identifier,
+                refs,
+                guard,
+                signatures,
+                condition_values=options.condition_values,
+            )
+            if service.service_type is ServiceType.FLOW
+            else None
+        )
+        if flow is not None:
+            flows[identifier] = dump_json(flow[1])
         details[identifier] = ServiceDetail(
             id=identifier,
             name=guard.name(name),
@@ -311,6 +335,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
                 if doc is not None and state != "none"
                 else None
             ),
+            flow=flow[0] if flow is not None else None,
         )
 
     search_packages = []
@@ -378,7 +403,11 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
             label=guard.free_text(options.dataset_label, 120)
             or ("Synthetic demo data" if options.dataset_kind == "synthetic" else "Internal data"),
         ),
-        disclosure=Disclosure(descriptions=options.descriptions, withheld_strings=0),
+        disclosure=Disclosure(
+            descriptions=options.descriptions,
+            withheld_strings=0,
+            condition_values=options.condition_values,
+        ),
         counts=Counts(
             packages=len(analysis.packages),
             services=len(services),
@@ -401,6 +430,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
         graph=graph.data(),
         packages=package_details,
         overview=server,
+        flows=flows,
     )
 
 

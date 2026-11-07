@@ -82,6 +82,7 @@ descriptions are untrusted; existing outputs stay unchanged; demos must not use 
   `THIRD-PARTY.txt` next to the app.
 - No CI workflow was added; the checks run locally (`uv run pytest`, `npm run check`,
   `npm run e2e`, and the slow scale checks `uv run pytest -m slow` and `npm run e2e:scale`).
-- Deferred: document type pages, a FLOW outline view, `processes.yml` process views, a
+- Deferred: document type pages, a FLOW outline view (added in M14 stage 6 as the
+  conditional flow, `flows/<id>.json`), `processes.yml` process views, a
   package-level graph, full-text search over whole descriptions, editing or approving in the
   app, a REST backend, authentication, Firefox and WebKit browser tests.

@@ -47,6 +47,9 @@ wm-doc explorer serve out/explorer
 - `--descriptions approved` (default) shows reviewed descriptions, warning when the facts
   changed since approval; `all` also shows unreviewed drafts; `none` shows none. Designer
   comments and Notes are never shown.
+- `--condition-values include` (default) shows branch condition values (case labels, under the
+  free-text policy) in the conditional flow, as the service pages do; `exclude` shows every
+  condition as withheld (the facts stay the same) and drops case labels from step names.
 - The output folder must be outside the packages folder; analysed packages are never written.
 - Browsers do not load the app from `file://`, so serve the folder: `wm-doc explorer serve`
   (loopback only by default) or any static web server.
@@ -62,7 +65,8 @@ The app reads only these files, never `analysis.json`:
 | `data/graph.json` | every call as `[from, to, relation, count]` between services (indexes into `services`, in `search.json` order) and other targets (built-in, outside, unresolved, dynamic); loaded on the first graph view |
 | `data/overview.json` | the server overview description and the packages left out of the analysis |
 | `data/packages/<id>.json` | one package: services, entry points, calls into and from other packages, own data effects, overview |
-| `data/services/<id>.json` | one service: identity, analysis coverage and findings, source path, signature, calls with status and evidence, callers, entry points, data effects (with how each is known), document types used, adapter configuration, description |
+| `data/services/<id>.json` | one service: identity, analysis coverage and findings, source path, signature, calls with status and evidence, callers, entry points, data effects (with how each is known), document types used, adapter configuration, description, and `flow` (counts) when a conditional flow exists |
+| `data/flows/<id>.json` | the conditional flow of a FLOW service with decisions, EXITs or TRY/CATCH: an outline with ids (D1, D1.c2, C3, E1), the decisions with their cases and where the fields they test come from (each origin with certainty, basis and evidence), calls by condition, EXITs, steps that never run and scenarios; loaded when the reader opens the section |
 
 - Models: `src/wm_doc/explorer/contract.py`. JSON Schema:
   `docs/contracts/explorer.v1.schema.json` (`uv run python -m wm_doc.explorer.contract`).
@@ -83,9 +87,17 @@ The app reads only these files, never `analysis.json`:
   Dynamic and unsupported calls get one target node per calling service, so they never
   look like a hub.
 - Excluded: literal values, designer comments, Notes, the facts block, headings people added
-  to a description, SQL, connection properties, absolute paths. A data effect known from a
-  literal (for example the URL of an HTTP call) shows `(literal, not exported)` in place of
-  the value; mapped pipeline paths are kept.
+  to a description, SQL, connection properties, absolute paths, EXIT failure messages. A data
+  effect known from a literal (for example the URL of an HTTP call) shows `(literal, not
+  exported)` in place of the value; mapped pipeline paths are kept. In the conditional flow a
+  field set by a MAPSET reads "set to a literal (literal, not exported)" and a scenario ruled
+  out by a literal never names it. Branch condition values are the one exception to the
+  literal rule (owner decision): shown unless `--condition-values exclude`.
+- The conditional flow (`src/wm_doc/explorer/flow.py`) is computed in Python like the
+  Decisions section of a service page (`flow_logic`, `flow_lineage`, `flow_scenarios`) and
+  uses its wording (`render/flow_markdown.py`); the app only shows it. Limits: 1,500 outline
+  steps, 40 decisions, 100 calls, then "and N more"; a slow test keeps a flow file under
+  200 KB.
 - Text is a list of plain segments (`text`, or `code` with the ID of the analysed service it
   names exactly); it is never HTML or Markdown. Model and human text (descriptions, finding
   messages, purpose lines) passes the disclosure scan; text that fails it is withheld and
@@ -99,13 +111,16 @@ The app reads only these files, never `analysis.json`:
 ## Scale
 
 Measured on synthetic packages of about 7,300 services and 9,600 document types (the size
-of the production server), after analysis:
+of the production server), after analysis. The budgets are checks for developers (`uv run
+pytest -m slow`), never limits on an export: the size budget is an average per service, so a
+larger server is not over it, and every synthetic service has a TRY/CATCH, so each gets a flow
+file (a near worst case). A single flow file stays under 200 KB.
 
 | What | Measured | Budget |
 | --- | --- | --- |
-| Export (facts, build, write) | about 12 s | 30 s |
-| Memory for the export | about 270 MB | 300 MB |
-| All data files | 27 MB | 30 MB |
+| Export (facts, build, write, conditional flows) | about 22 s | 30 s |
+| Memory for the export | about 290 MB | 300 MB |
+| All data files | 42 MB, 5.7 KB per service (flow files about 17 MB of it) | 8 KB per service on average |
 | `search.json` / `graph.json` | 1.1 MB / 0.7 MB | 2 MB each |
 | JavaScript (compressed) | 110 KB, plus 77 KB for the graph on service pages | 250 KB |
 

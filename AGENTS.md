@@ -185,6 +185,16 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   trimmed when parsed), patterns, expressions, withheld labels or hidden literals.
 - Description files show the decisions and their origins under `### Decisions` in the facts
   block (refreshed on every run, not part of the facts hash).
+- Stage 6 (Explorer, `explorer/flow.py`): a FLOW service with decisions, EXITs or TRY/CATCH
+  gets `ServiceDetail.flow` (counts) and a lazy `flows/<id>.json` (`FlowView`): outline (at most
+  1,500 steps), decisions with cases and field origins (certainty, basis, evidence), calls by
+  condition, EXITs, steps that never run, scenarios. Python computes and words everything
+  through `render.flow_markdown` (`origin_text`/`ruled_text` with `literals=False`: MAPSET
+  literals are never exported); every text passes `TextGuard` as prose.
+  `explorer build --condition-values exclude` (`Disclosure.conditionValues`) shows every case
+  label as withheld from the same facts and strips case labels from step names. The app
+  (`ConditionalFlowSection`) renders nested lists and `<details>`, never links inside a
+  `<summary>`, and fetches the file only when opened.
 - Stage 5 (`analysis.v12`): BRANCH cases carry `case_kind` (default, null, blank, pattern,
   text) and label expressions `condition_refs`, both read from the raw label before the
   free-text policy, so `$null`, blank and withheld labels stay distinct in every mode (a

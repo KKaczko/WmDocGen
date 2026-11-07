@@ -261,7 +261,7 @@ operation, or "Not analysed") and the error handling ("not analysed").
 | `provider-probe` | Check how a model server can be reached |
 | `probe-shapes` | Key layout of triggers, descriptors and adapter services (no values) |
 | `scan` | Package and artifact inventory only |
-| `explorer build` / `demo` / `serve` | Interactive explorer: search services, open one, follow its calls (`docs/explorer.md`) |
+| `explorer build` / `demo` / `serve` | Interactive explorer: search services, open one, follow its calls, see when each step runs (`docs/explorer.md`) |
 
 ## Explorer (preview)
 

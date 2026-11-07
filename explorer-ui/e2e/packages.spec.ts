@@ -80,11 +80,11 @@ test("the services of a package can be filtered", async ({ page }) => {
   await page.goto("/#/p/OrdersApi");
   await expect(heading(page)).toHaveText("OrdersApi");
   const services = page.getByRole("region", { name: "Services" });
-  await expect(services.getByText("7 of 7 shown")).toBeVisible();
+  await expect(services.getByText("8 of 8 shown")).toBeVisible();
   await services.getByLabel("Filter").fill("rest");
-  await expect(services.getByText("2 of 7 shown")).toBeVisible();
+  await expect(services.getByText("2 of 8 shown")).toBeVisible();
   await services.getByLabel("Type").selectOption("java");
-  await expect(services.getByText("0 of 7 shown")).toBeVisible();
+  await expect(services.getByText("0 of 8 shown")).toBeVisible();
 });
 
 test("an unknown package says it is not in this export", async ({ page }) => {

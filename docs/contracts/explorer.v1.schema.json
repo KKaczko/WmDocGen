@@ -498,6 +498,15 @@
     "Disclosure": {
       "additionalProperties": false,
       "properties": {
+        "conditionValues": {
+          "default": "included",
+          "enum": [
+            "included",
+            "excluded"
+          ],
+          "title": "Conditionvalues",
+          "type": "string"
+        },
         "descriptions": {
           "enum": [
             "approved",
@@ -535,7 +544,8 @@
         "designerComments",
         "notes",
         "descriptions",
-        "withheldStrings"
+        "withheldStrings",
+        "conditionValues"
       ],
       "title": "Disclosure",
       "type": "object"
@@ -747,6 +757,1031 @@
         "source"
       ],
       "title": "Finding",
+      "type": "object"
+    },
+    "FlowCall": {
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assumptions"
+        },
+        "certainty": {
+          "enum": [
+            "observed",
+            "derived",
+            "possible",
+            "unknown"
+          ],
+          "title": "Certainty",
+          "type": "string"
+        },
+        "how": {
+          "enum": [
+            "step",
+            "transformer"
+          ],
+          "title": "How",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "reach": {
+          "enum": [
+            "normal",
+            "conditional",
+            "failure-path",
+            "unreachable"
+          ],
+          "title": "Reach",
+          "type": "string"
+        },
+        "runsWhen": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Runswhen",
+          "type": "array"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "targetId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetid"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "targetId",
+        "how",
+        "runsWhen",
+        "certainty",
+        "assumptions",
+        "reach"
+      ],
+      "title": "FlowCall",
+      "type": "object"
+    },
+    "FlowCase": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Calls",
+          "type": "array"
+        },
+        "condition": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Condition",
+          "type": "array"
+        },
+        "ends": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Ends",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "never": {
+          "title": "Never",
+          "type": "boolean"
+        },
+        "notes": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "condition",
+        "calls",
+        "ends",
+        "notes",
+        "never"
+      ],
+      "title": "FlowCase",
+      "type": "object"
+    },
+    "FlowDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/FlowCase"
+          },
+          "title": "Cases",
+          "type": "array"
+        },
+        "casesHidden": {
+          "title": "Caseshidden",
+          "type": "integer"
+        },
+        "evaluatedWhen": {
+          "anyOf": [
+            {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "code": "#/$defs/CodeSegment",
+                    "text": "#/$defs/TextSegment"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/TextSegment"
+                  },
+                  {
+                    "$ref": "#/$defs/CodeSegment"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evaluatedwhen"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/FlowField"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "fieldsHidden": {
+          "title": "Fieldshidden",
+          "type": "integer"
+        },
+        "heading": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Heading",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "inLoop": {
+          "title": "Inloop",
+          "type": "boolean"
+        },
+        "noMatch": {
+          "anyOf": [
+            {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "code": "#/$defs/CodeSegment",
+                    "text": "#/$defs/TextSegment"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/TextSegment"
+                  },
+                  {
+                    "$ref": "#/$defs/CodeSegment"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nomatch"
+        },
+        "notes": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "unfollowed": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Unfollowed",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "heading",
+        "evaluatedWhen",
+        "inLoop",
+        "notes",
+        "cases",
+        "casesHidden",
+        "noMatch",
+        "fields",
+        "fieldsHidden",
+        "unfollowed"
+      ],
+      "title": "FlowDecision",
+      "type": "object"
+    },
+    "FlowField": {
+      "additionalProperties": false,
+      "description": "Where one field a decision tests may come from.",
+      "properties": {
+        "notes": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "origins": {
+          "items": {
+            "$ref": "#/$defs/FlowOrigin"
+          },
+          "title": "Origins",
+          "type": "array"
+        },
+        "originsHidden": {
+          "title": "Originshidden",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "summary": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Summary",
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "summary",
+        "origins",
+        "originsHidden",
+        "notes"
+      ],
+      "title": "FlowField",
+      "type": "object"
+    },
+    "FlowOrigin": {
+      "additionalProperties": false,
+      "description": "One way a decision field may have got its value, as a chip: what, how sure, why.",
+      "properties": {
+        "assumptions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assumptions"
+        },
+        "basis": {
+          "enum": [
+            "flow-xml",
+            "is-rule",
+            "callee-signature",
+            "service-signature",
+            "caller-pipeline",
+            "limit"
+          ],
+          "title": "Basis",
+          "type": "string"
+        },
+        "certainty": {
+          "enum": [
+            "observed",
+            "derived",
+            "possible",
+            "unknown"
+          ],
+          "title": "Certainty",
+          "type": "string"
+        },
+        "copied": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Copied"
+        },
+        "depth": {
+          "default": 0,
+          "title": "Depth",
+          "type": "integer"
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Text",
+          "type": "array"
+        }
+      },
+      "required": [
+        "text",
+        "certainty",
+        "basis",
+        "assumptions",
+        "evidence",
+        "depth",
+        "copied"
+      ],
+      "title": "FlowOrigin",
+      "type": "object"
+    },
+    "FlowRef": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "title": "Calls",
+          "type": "integer"
+        },
+        "decisions": {
+          "title": "Decisions",
+          "type": "integer"
+        },
+        "exits": {
+          "title": "Exits",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "decisions",
+        "calls",
+        "exits"
+      ],
+      "title": "FlowRef",
+      "type": "object"
+    },
+    "FlowScenarioRow": {
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assumptions"
+        },
+        "calls": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Calls",
+          "type": "array"
+        },
+        "conditions": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Conditions",
+          "type": "array"
+        },
+        "dependsOn": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Dependson",
+          "type": "array"
+        },
+        "ends": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Ends",
+          "type": "array"
+        },
+        "feasibility": {
+          "enum": [
+            "possible",
+            "conditional",
+            "unresolved"
+          ],
+          "title": "Feasibility",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "conditions",
+        "calls",
+        "ends",
+        "dependsOn",
+        "feasibility",
+        "assumptions"
+      ],
+      "title": "FlowScenarioRow",
+      "type": "object"
+    },
+    "FlowScenarioTable": {
+      "additionalProperties": false,
+      "properties": {
+        "decisions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Decisions",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/FlowScenarioRow"
+          },
+          "title": "Rows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decisions",
+        "rows",
+        "notes"
+      ],
+      "title": "FlowScenarioTable",
+      "type": "object"
+    },
+    "FlowStep": {
+      "additionalProperties": false,
+      "description": "One step of the FLOW outline.",
+      "properties": {
+        "children": {
+          "items": {
+            "$ref": "#/$defs/FlowStep"
+          },
+          "title": "Children",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "sequence",
+            "try",
+            "catch",
+            "finally",
+            "branch",
+            "case",
+            "loop",
+            "repeat",
+            "map",
+            "call",
+            "transformer",
+            "exit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "never": {
+          "default": false,
+          "title": "Never",
+          "type": "boolean"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "targetId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetid"
+        },
+        "text": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Text",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "ref",
+        "text",
+        "targetId",
+        "never",
+        "children"
+      ],
+      "title": "FlowStep",
+      "type": "object"
+    },
+    "FlowView": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/FlowCall"
+          },
+          "title": "Calls",
+          "type": "array"
+        },
+        "callsHidden": {
+          "title": "Callshidden",
+          "type": "integer"
+        },
+        "contract": {
+          "const": "wm-doc-explorer.v1",
+          "default": "wm-doc-explorer.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/FlowDecision"
+          },
+          "title": "Decisions",
+          "type": "array"
+        },
+        "decisionsHidden": {
+          "title": "Decisionshidden",
+          "type": "integer"
+        },
+        "exits": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Exits",
+          "type": "array"
+        },
+        "exitsHidden": {
+          "title": "Exitshidden",
+          "type": "integer"
+        },
+        "limits": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Limits",
+          "type": "array"
+        },
+        "neverRun": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Neverrun",
+          "type": "array"
+        },
+        "neverRunHidden": {
+          "title": "Neverrunhidden",
+          "type": "integer"
+        },
+        "outline": {
+          "items": {
+            "$ref": "#/$defs/FlowStep"
+          },
+          "title": "Outline",
+          "type": "array"
+        },
+        "outlineHidden": {
+          "title": "Outlinehidden",
+          "type": "integer"
+        },
+        "scenarioNotes": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/$defs/CodeSegment",
+                  "text": "#/$defs/TextSegment"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextSegment"
+                },
+                {
+                  "$ref": "#/$defs/CodeSegment"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Scenarionotes",
+          "type": "array"
+        },
+        "scenarios": {
+          "items": {
+            "$ref": "#/$defs/FlowScenarioTable"
+          },
+          "title": "Scenarios",
+          "type": "array"
+        },
+        "serviceId": {
+          "title": "Serviceid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "serviceId",
+        "outline",
+        "outlineHidden",
+        "decisions",
+        "decisionsHidden",
+        "calls",
+        "callsHidden",
+        "exits",
+        "exitsHidden",
+        "neverRun",
+        "neverRunHidden",
+        "scenarios",
+        "scenarioNotes",
+        "limits"
+      ],
+      "title": "FlowView",
       "type": "object"
     },
     "Generator": {
@@ -1536,6 +2571,17 @@
           "title": "Entrypointstotal",
           "type": "integer"
         },
+        "flow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlowRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "title": "Id",
           "type": "string"
@@ -1593,7 +2639,8 @@
         "effectsHidden",
         "documents",
         "adapter",
-        "description"
+        "description",
+        "flow"
       ],
       "title": "ServiceDetail",
       "type": "object"
