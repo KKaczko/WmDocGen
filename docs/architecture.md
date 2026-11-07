@@ -361,3 +361,67 @@ Later milestones may add broad Java external-effect classification, fuller FLOW 
 parsers for JDBC adapter services, triggers and REST/SOAP descriptors (from real `probe-shapes`
 output), scheduler entries, native BPM process-model parsing, package dependency graphs and snapshot
 diffing. Those require a separate approval.
+
+## Conditional FLOW logic (M14)
+
+`flow_logic.py` derives, on demand and without storing anything in `analysis.json`, when each
+step of a FLOW service runs: decisions (BRANCH steps) with their case conditions as written,
+the guard of every call (cases it sits in, earlier cases that always leave, TRY/CATCH and
+EXIT-ON SUCCESS alternatives, loops, repeats), where each EXIT goes and which steps never run.
+It models a normal run (no step fails on its own) plus the failure paths that TRY/CATCH and
+EXIT-ON SUCCESS or DONE make explicit; an EXIT whose target cannot be determined never proves
+anything. Every conclusion cites the Integration Server rules in `flow_semantics.py`
+(`docs/flow-semantics.md`); rules not yet confirmed on IS 10.15 are shown as assumptions, and
+every citation is produced from the registry, so a status change reaches every page. A TRY is
+read together with its CATCH and FINALLY blocks, in the sibling form and in the older EXIT-ON
+SUCCESS form: a CATCH runs only when something in the TRY may fail, and FINALLY runs unless
+every way out of the TRY and its CATCHes is EXIT `$flow` with FAILURE. A transformer whose
+outputs are not linked never runs, and EXIT `$iteration` ends only the current iteration.
+`render/flow_markdown.py` writes the "Decisions" section of service pages (between Calls and
+Data and Systems Touched) and the rule table in `LIMITATIONS.md`. Case labels and step labels
+appear only when the free-text policy includes them, always inside code spans.
+
+`flow_lineage.py` adds, for every field a decision tests, where it may come from. It follows
+MAPCOPY sources back a bounded number of steps (demand-driven, at most 200 fields per service),
+then walks the FLOW once and keeps, per field, the definitions that may reach each point:
+mapping lines of MAP steps and INVOKE maps (one MAP reads before it writes, S19), transformer
+outputs (S18), a called service's declared outputs and the fields its own output map reads
+(possible only), `clearPipeline` and `restorePipeline*`, the service's declared inputs, or the
+caller's pipeline. BRANCH cases, EXITs, failure paths (CATCH, EXIT-ON SUCCESS and DONE,
+REPEAT) and LOOP iterations are joined; after a failed EXIT-ON SUCCESS or DONE child, or a
+failed attempt of a REPEAT on FAILURE, first-level fields roll back while nested ones keep both
+values as possible (S36). Linking a whole document shares it (S38): a line that changes a field
+inside one of two linked documents adds a possible origin to the same field of the other. Any
+called service may change any field (S16), so the
+calls between the last certain definition and the decision are listed as a caveat. Steps with
+a scope and loops nested too deeply are not followed; the fields they may change get an
+unknown origin. The page shows "Where `/x` comes from" under each decision; description files
+show a one-line summary per field in the facts block.
+
+`flow_scenarios.py` combines decisions into scenarios, but only along data dependencies: a
+decision depends on an earlier one when an origin of a field it tests (or of a field copied into
+it) runs only in some cases of the earlier decision, or when the field may carry what a call in
+such a case returns. Each chain (at most 4 decisions, at most 32 scenarios per table) is
+enumerated depth-first; for every outcome chosen so far the lineage is walked again with those
+outcomes fixed and only the chain's fields followed, so later decisions see exactly the origins
+of those paths (cases of enclosing decisions that a chosen outcome implies are fixed too).
+A decision that some paths may skip (its guard has conditions the chosen outcomes do not settle,
+or an earlier LOOP or BRANCH may fail on a missing value) also gets "not reached". Outcomes
+leaving the same origins further on are grouped; an outcome is ruled out only when the field
+holds one observed, included literal on every path and a value label differs from it. Each
+scenario lists its calls, how it ends (an EXIT, a missing switch failing the BRANCH, a LOOP that
+may fail on a missing array), the calls whose responses it depends on, a feasibility (possible,
+conditional, unresolved) and the assumed rules it rests on. Decisions inside loops and
+independent decisions are never combined. The service page shows the tables under
+`### Scenarios` in the Decisions section.
+
+`flow_answers.py` (stage 4) ties model answers to the control model. For FLOW services the
+describe prompt shows the pseudo-code with decision, case, call and EXIT ids and a block that
+lists each decision's cases with the calls in them. Each detailed-flow item comes back as text
+plus the ids it is about; the tool writes the case's condition in front of the text and checks
+the items (R1-R7: ids exist, a call or EXIT sits in the case it runs in, every call that
+matters and that the prompt shows is listed, decisions that choose calls have an item, values
+come from the facts, no "always" for a call that runs only under a condition, no item names a
+call of another case) as part of the answer's single corrective retry. Drafts
+record `facts_basis: 2`: their hash covers the pseudo-code facts and the control model as
+canonical JSON without rule ids or statuses.

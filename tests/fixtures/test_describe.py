@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from describe_answers import flow_items, item
 from typer.testing import CliRunner
 
 from wm_doc.analysis import analyze_path
@@ -50,6 +51,7 @@ def grounded(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
         "usage": "Used by the callers listed in the facts.",
         "data_effects": "Returns the documents in its signature.",
         "steps": ["Reads the input.", "Calls the listed services."],
+        "detailed_steps": flow_items(request.messages[1]["content"]) if request else [],
         "error_handling": "Not shown in the facts.",
         "designer_comment": f"Service {name}: performs its documented steps.",
     }
@@ -546,7 +548,7 @@ def test_cli_workflow_describe_approve_status_and_publish(
 
 def _flow_answer(name: str, request: ProviderGenerationRequest) -> dict[str, Any]:
     answer = grounded(name, request)
-    answer["detailed_steps"] = [f"Runs `{name}` step by step."]
+    answer["detailed_steps"] = [*answer["detailed_steps"], item(f"Runs `{name}` step by step.")]
     return answer
 
 

@@ -107,6 +107,7 @@ def write_scoped_service_markdown(
     incoming = _incoming_dependencies_by_target(analysis.unique_dependencies)
     process_definitions = _scoped_process_definitions(analysis, scope)
     process_memberships_by_service = _scoped_process_memberships_by_service(analysis, scope)
+    signatures = {item.identity.full_name: item.signature for item in analysis.services}
     written: list[Path] = []
     for service in sorted(services, key=lambda item: item.identity.full_name.casefold()):
         path = service_dir / service_markdown_filename(service.identity.full_name)
@@ -116,6 +117,7 @@ def write_scoped_service_markdown(
             process_memberships_by_service.get(service.identity.full_name, []),
             process_definitions,
             verbose=verbose,
+            signatures=signatures,
         )
         markdown = _insert_scope_section(
             markdown,
@@ -526,9 +528,14 @@ def _replace_called_by_section(
 ) -> str:
     start_marker = "## Called By"
     end_marker = "\n## Processes"
-    start = markdown.find(start_marker)
+    # Anchor on headings at the start of a line: page text (labels in tables) may contain the
+    # same words.
+    start = markdown.find(f"\n{start_marker}\n")
+    if start == -1:
+        return markdown
+    start += 1
     end = markdown.find(end_marker, start)
-    if start == -1 or end == -1:
+    if end == -1:
         return markdown
     called_by = _render_scoped_called_by(incoming_dependencies, included_names)
     replacement = f"{start_marker}\n\n{called_by}"

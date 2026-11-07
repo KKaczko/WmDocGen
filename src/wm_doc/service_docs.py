@@ -22,6 +22,12 @@ overwritten. The facts block always shows the current facts; its marker carries 
 hash, which `approve` copies into `facts_hash` so later changes are reported as
 "approved, facts changed". Files contain no timestamps, so unchanged inputs give
 byte-identical files.
+
+Facts basis: `facts_basis: 2` (drafts written since the conditional-flow stage 4) hashes the
+pseudo-code facts together with the control model of the FLOW; files without the key keep
+basis 1 (the pseudo-code facts alone), so descriptions approved earlier stay approved. For a
+basis-1 file the marker also carries `next=`, the basis-2 hash, which
+`approve --upgrade-basis` copies; nothing moves a file to basis 2 silently.
 """
 
 from __future__ import annotations
@@ -39,7 +45,9 @@ import yaml
 if TYPE_CHECKING:
     from wm_doc.ir import FlowService
 
-FACTS_START_RE = re.compile(r"<!-- wm-doc:facts:start(?: hash=([0-9a-f]+))? -->")
+FACTS_START_RE = re.compile(
+    r"<!-- wm-doc:facts:start(?: hash=([0-9a-f]+))?(?: next=([0-9a-f]+))? -->"
+)
 FACTS_END = "<!-- wm-doc:facts:end -->"
 NOTES_HEADING = "## Notes"
 NOTES_PLACEHOLDER = "<!-- Your notes. wm-doc never changes this section. -->"
@@ -55,6 +63,12 @@ HASH_LENGTH = 16
 UNVERIFIED_KEY = "unverified_names"
 # Front-matter key recording the `describe --detail` level a draft was written with.
 DETAIL_KEY = "detail"
+# Front-matter key of the facts basis a file's hash uses; absent means basis 1.
+BASIS_KEY = "facts_basis"
+CURRENT_BASIS = 2
+# Front-matter key of a draft kept with `describe --keep-unverified` whose detailed flow still
+# disagrees with the facts after the retry: what disagrees. Approving the file removes it.
+UNVERIFIED_FLOW_KEY = "unverified_flow"
 
 
 class DocStatus(StrEnum):
@@ -115,6 +129,8 @@ class ServiceDoc:
     facts_markdown: str = ""
     current_facts_hash: str = ""
     extra_front_matter: dict[str, Any] = field(default_factory=dict)
+    # For a basis-1 file: the facts hash under the current basis (see `approve --upgrade-basis`).
+    next_facts_hash: str = ""
 
     @property
     def edited(self) -> bool:
@@ -126,6 +142,18 @@ class ServiceDoc:
         if not isinstance(value, list):
             return []
         return [str(item) for item in value if str(item).strip()]
+
+    @property
+    def unverified_flow(self) -> list[str]:
+        value = self.extra_front_matter.get(UNVERIFIED_FLOW_KEY)
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    @property
+    def facts_basis(self) -> int:
+        value = self.extra_front_matter.get(BASIS_KEY, 1)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 1
 
     @property
     def protected(self) -> bool:
@@ -170,7 +198,8 @@ class ServiceDoc:
             title = "Server overview"
         else:
             title = self.service.rsplit(":", 1)[-1]
-        start = f"<!-- wm-doc:facts:start hash={self.current_facts_hash} -->"
+        upgrade = f" next={self.next_facts_hash}" if self.next_facts_hash else ""
+        start = f"<!-- wm-doc:facts:start hash={self.current_facts_hash}{upgrade} -->"
         unverified = self.unverified_names
         notice = (
             "> **Unverified draft:** the model used names that are not in the facts: "
@@ -179,6 +208,13 @@ class ServiceDoc:
             if unverified
             else ""
         )
+        flow = self.unverified_flow
+        if flow:
+            notice += (
+                "> **Unverified flow:** the detailed flow does not match the facts: "
+                + "; ".join(flow)
+                + ". Check it before approving.\n\n"
+            )
         return (
             f"---\n{header}\n---\n# {title}\n\n`{self.service}`\n\n"
             f"{notice}"
@@ -266,9 +302,11 @@ def parse_doc(text: str) -> ServiceDoc | None:
     body = text[end + len("\n---\n") :]
     facts_markdown = ""
     current = ""
+    upgrade = ""
     start = FACTS_START_RE.search(body)
     if start is not None:
         current = start.group(1) or ""
+        upgrade = start.group(2) or ""
         stop = body.find(FACTS_END, start.end())
         facts_markdown = body[start.end() : stop if stop >= 0 else len(body)].strip()
         body = body[: start.start()]
@@ -296,6 +334,7 @@ def parse_doc(text: str) -> ServiceDoc | None:
         facts_markdown=facts_markdown,
         current_facts_hash=current,
         extra_front_matter={k: v for k, v in front.items() if k not in known},
+        next_facts_hash=upgrade,
     )
 
 

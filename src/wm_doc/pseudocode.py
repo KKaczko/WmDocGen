@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from wm_doc.adapters import operation_phrase
 from wm_doc.analysis import _apply_free_text_policy, _xml_path
@@ -37,6 +38,9 @@ from wm_doc.ir import (
     TextValue,
 )
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
+
+if TYPE_CHECKING:
+    from wm_doc.flow_logic import FlowLogic
 
 MAX_LITERAL_CHARS = 80
 MAX_COMMENT_CHARS = 160
@@ -75,13 +79,17 @@ def render_pseudocode(
     facts_text: str | None = None,
     external_note: CalleeNotes | None = None,
     callee_outputs: CalleeOutputs | None = None,
+    logic: FlowLogic | None = None,
 ) -> str:
     """Render one service as indented pseudo-code lines.
 
     `facts_text` is the deterministic usage and data-effects block (see
     :mod:`wm_doc.effects`); `external_note` names the declared external system of a call
     target outside the analysed packages; `callee_outputs` gives the declared outputs of a
-    called service, shown as a `returns:` line because they land in the pipeline.
+    called service, shown as a `returns:` line because they land in the pipeline. With
+    `logic` (the control model, `flow_logic`), BRANCHes, cases, calls and EXITs carry their
+    ids (`[D1]`, `[D1.c2]`, `[C3]`, `[E1]`) and named LOOP and TRY blocks show their names,
+    so a model can refer to them; without it the view is unchanged.
     """
     comments = comments if detail.include_comments and comments else {}
     lines = [f"service {service.identity.full_name}  [{service.service_type.value}]"]
@@ -101,7 +109,7 @@ def render_pseudocode(
             )
         lines.append("steps:")
         renderer = _FlowRenderer(
-            service, callee_note, comments, detail, external_note, callee_outputs
+            service, callee_note, comments, detail, external_note, callee_outputs, logic
         )
         for child in service.flow_tree.children:
             renderer.visit(child, 1, None)
@@ -199,8 +207,18 @@ class _FlowRenderer:
         detail: PseudocodeDetail,
         external_note: CalleeNotes | None = None,
         callee_outputs: CalleeOutputs | None = None,
+        logic: FlowLogic | None = None,
     ) -> None:
         self.service = service
+        self.annotate = logic is not None
+        self.ids: dict[str, str] = {}
+        if logic is not None:
+            for decision in logic.decisions:
+                self.ids[decision.node_id] = decision.id
+                for item in decision.cases:
+                    self.ids[item.node_id] = item.id
+            self.ids.update({call.node_id: call.id for call in logic.calls})
+            self.ids.update({item.node_id: item.id for item in logic.exits})
         self.callee_note = callee_note
         self.external_note = external_note
         self.callee_outputs = callee_outputs
@@ -219,6 +237,10 @@ class _FlowRenderer:
             items.sort(key=lambda item: item.map_operation_order)
         self.operations = operations
 
+    def tag(self, node: FlowNode) -> str:
+        found = self.ids.get(node.id)
+        return f"[{found}] " if found else ""
+
     def emit(self, depth: int, text: str, node: FlowNode | None = None) -> None:
         comment = self.comments.get(node.source.xml_path or "") if node is not None else None
         suffix = f"  // {comment}" if comment else ""
@@ -231,7 +253,9 @@ class _FlowRenderer:
         elif kind is FlowNodeType.BRANCH:
             self._branch(node, depth)
         elif kind is FlowNodeType.LOOP:
-            text = f"LOOP over {_path(node.in_array) or '?'}"
+            label = _text(node.label) if self.annotate else None
+            named = f"LOOP {_quote(label)}" if label else "LOOP"
+            text = f"{named} over {_path(node.in_array) or '?'}"
             if node.out_array:
                 text += f" collecting {_path(node.out_array)}"
             self.emit(depth, text, node)
@@ -240,7 +264,7 @@ class _FlowRenderer:
             self.emit(depth, _repeat_text(node), node)
             self._children(node, depth + 1)
         elif kind is FlowNodeType.EXIT:
-            self.emit(depth, _exit_text(node), node)
+            self.emit(depth, self.tag(node) + _exit_text(node), node)
         elif kind in (FlowNodeType.INVOKE, FlowNodeType.MAPINVOKE):
             self._call(node, depth)
         elif kind is FlowNodeType.MAP:
@@ -256,7 +280,8 @@ class _FlowRenderer:
         label = _text(node.label)
         form = (node.form or "").upper()
         if form in {"TRY", "CATCH", "FINALLY"}:
-            self.emit(depth, f"{form}:", node)
+            block = f"{form} {_quote(label)}" if self.annotate and label else form
+            self.emit(depth, f"{block}:", node)
             self._children(node, depth + 1)
             return
         exit_on = (node.exit_on or "FAILURE").upper()
@@ -282,7 +307,8 @@ class _FlowRenderer:
 
     def _branch(self, node: FlowNode, depth: int) -> None:
         switch = _path(node.switch)
-        self.emit(depth, f"BRANCH on {switch}:" if switch else "BRANCH:", node)
+        head = f"BRANCH on {switch}:" if switch else "BRANCH:"
+        self.emit(depth, self.tag(node) + head, node)
         for case in node.children:
             if case.type is not FlowNodeType.BRANCH_CASE:
                 self.visit(case, depth + 1, None)
@@ -296,7 +322,7 @@ class _FlowRenderer:
                 head = f"when {_quote(label)}:"
             else:
                 head = f"when {label}:" if label else "when (no condition):"
-            self.emit(depth + 1, head)
+            self.emit(depth + 1, self.tag(case) + head)
             before = len(self.lines)
             self._children(case, depth + 2, label)
             if len(self.lines) == before:
@@ -308,7 +334,7 @@ class _FlowRenderer:
         note = call_annotation(
             target, self.resolved.get(target, False), self.callee_note, self.external_note
         )
-        self.emit(depth, f"{verb} {target}  # {note}", node)
+        self.emit(depth, f"{self.tag(node)}{verb} {target}  # {note}", node)
         returned = self.callee_outputs(target) if self.callee_outputs is not None else None
         for child in node.children:
             if child.type is FlowNodeType.MAP:

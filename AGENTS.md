@@ -10,6 +10,7 @@ Current milestone: M12 (approved by the repository owner). The earlier business-
 business-enrichment path (`build-business-context`, `enrich-business`, `ollama-test`,
 `business-context.v*`, `business-result.v*`) was removed in M12; do not reintroduce it.
 M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
+M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditional FLOW logic".
 
 ## Pipeline and modules
 
@@ -56,6 +57,9 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
   dynamic, unsupported) for scope boundaries and the explorer; `output_cleanup.py` removes
   managed output paths for `analyze` and `explorer build`.
 - Explorer (`explorer/`, app source in `explorer-ui/`): see "Explorer".
+- Conditional FLOW logic (`flow_semantics.py`, `flow_paths.py`, `flow_logic.py`,
+  `flow_lineage.py`, `flow_scenarios.py`): see "Conditional FLOW logic". Tests build FLOW
+  services with `tests/support/flowxml.py` (test-only; `samples/` stays read-only).
 
 ## Contracts
 
@@ -119,7 +123,8 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
   facts. All text is rendered as text (no HTML or Markdown rendering, no
   `dangerouslySetInnerHTML`); a strict CSP; no external requests. Literal values, designer
   comments, Notes, SQL and connection properties are never exported (a data effect known from
-  a literal shows `(literal, not exported)`); free text passes the
+  a literal shows `(literal, not exported)`; branch condition values are the one exception,
+  see "Conditional FLOW logic"); free text passes the
   disclosure scan or is withheld and counted.
 - The output folder must not overlap the packages folder. Files are named by hashed IDs.
 - The call graph (`graph.json`, `explorer-ui/src/domain/graph.ts`) walks only emitted
@@ -133,6 +138,71 @@ M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
 - PoC plan: PR 1 search and service pages; PR 2 descriptions, effects and trust labels;
   PR 3 bounded dependency graph (React Flow, caps on depth, nodes and neighbours per node);
   PR 4 package explorer and scale checks.
+
+## Conditional FLOW logic (owner approval, M14)
+
+- Goal: explain which calls run under which BRANCH conditions, which paths are alternatives,
+  where decision variables come from and how earlier responses feed later decisions. Static
+  only: no runtime simulation, no evaluation of expressions or regular expressions.
+- The logic is derived core facts computed on demand (like `effects.py`), never stored in
+  `analysis.json`. Every derived fact carries a certainty (observed, derived, possible,
+  unknown), a basis, and the id of the IS rule it rests on (`flow_semantics.py`, documented in
+  `docs/flow-semantics.md`); conclusions resting on an assumed rule are shown as assumptions.
+- Rule statuses follow the owner's audit of the IBM 10.15 documentation (2026-10-27):
+  documented rules are cited by id, assumed ones as "assumption S#"; no rule is verified until
+  the owner runs the checklist. Pages never write a status by hand: every citation comes from
+  `rule_label` / `assumption_label` (tested), and rule ids are never renumbered. A TRY is read
+  with its CATCH and FINALLY blocks as one step: a CATCH runs only when the TRY may fail,
+  FINALLY unless every way out is EXIT `$flow` FAILURE (S33); a missing switch without `$null`
+  or `$default` may fail the BRANCH (S31), so "no case matched" is never shown as only falling
+  through; first-level fields roll back after a failed EXIT-ON SUCCESS/DONE child or REPEAT on
+  FAILURE attempt (S36), but not for a CATCH (S15); linking a whole document shares it, so a
+  change inside one of two linked documents is a possible origin for the other (S38).
+- Owner decisions (2026-10-25): branch condition values are shown in pages, prompts and the
+  Explorer, subject to the free-text policy and the secret guard (`explorer build
+  --condition-values exclude` opts out; MAPSET literals stay unexported in the Explorer); a
+  called service's declared outputs are possible sources only, and calls between a definition
+  and a decision are listed as a caveat; the owner checks the assumed rules on IS 10.15; AI
+  descriptions return structured items that reference decision, case and call ids, the tool
+  writes condition text, and answers are checked against the facts.
+- A step after a BRANCH never inherits that BRANCH's conditions. "Comes from" wording requires
+  exactly one observed origin on every path and no call in between; nothing is concluded from
+  similar field names. A definition replaces earlier ones only when it certainly writes the
+  field (`flow_lineage.py`); copies from a possibly absent field or one list element,
+  transformer outputs, overwrite-off sets, declared callee outputs, `clearPipeline` (its
+  `preserve` list may come from the pipeline) and lines with uninterpreted attributes keep the
+  earlier ones possible.
+- Scenarios (`flow_scenarios.py`, the `### Scenarios` part of the Decisions section) combine
+  decisions only along data dependencies (an origin of a later decision's field runs only in
+  some cases of an earlier one, or it carries a response of a call there), one table per chain
+  of at most 4 decisions and at most 32 scenarios, then a "cut short" marker; independent
+  decisions and decisions inside loops are never combined. Each scenario re-walks the lineage
+  with its outcomes fixed (`compute_flow_lineage(..., only=, choices=)`), groups cases that
+  leave the same origins further on, and includes a missing switch failing the BRANCH (S31),
+  LOOPs failing on a missing array (S29) and EXIT `$flow` FAILURE (S33); a decision some paths
+  may skip also gets "not reached". An outcome is ruled out only when a unique observed included
+  literal (no surrounding blanks) differs from a value label; never by a match (labels are
+  trimmed when parsed), patterns, expressions, withheld labels or hidden literals.
+- Description files show the decisions and their origins under `### Decisions` in the facts
+  block (refreshed on every run, not part of the facts hash).
+- Stage 4 (`flow_answers.py`, describe prompt v4): for FLOW services the prompt carries ids in
+  the pseudo-code (`render_pseudocode(..., logic=)`: `[D1]`, `[D1.c2]`, `[C3]`, `[E1]`) and a
+  decisions block; detailed-flow items are `{text, decision, case, calls}` (`calls` holds call
+  and EXIT ids; `flow_item` reads ids by shape, R2 also places EXITs); the tool writes the
+  case condition in front of the text (stored as plain strings) and checks R1-R7 (`standard`
+  R1-R3, `thorough`/`deep` all; the rest only counted) within the one corrective retry
+  (`thorough` adds one request when only the flow is still wrong); `--keep-unverified` marks
+  `unverified_flow`. New drafts use `facts_basis: 2` (pseudo-code facts plus `logic_json`,
+  behaviour only, never a rule status); files without the key stay on basis 1 and carry
+  `next=` in their facts marker for `approve --upgrade-basis`, which never moves an approved
+  file whose facts changed (`upgrade_blocker`); nothing moves silently. Model-written ids are
+  normalised and echoed in corrections or `unverified_flow` only in the shape of an id.
+- The pseudo-code the model sees (every detail level, with notes and comments) and the facts
+  hash of description files are frozen for the samples and a builder-made service by
+  `tests/unit/test_flow_facts_golden.py`; change them only on purpose.
+- Plan: stage 0 foundations; 1 call conditions and a Decisions section; 2 decision-variable
+  lineage; 3 scenarios; 4 AI prompt and structured validation; 5 disclosure hardening
+  (`analysis.v12`); 6 Explorer conditional flow; 7 conservative cross-service facts.
 
 ## Out of scope without explicit owner approval
 

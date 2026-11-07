@@ -23,8 +23,10 @@ from wm_doc.describer import (
     collect_states,
     current_facts_hashes,
     describe_services,
+    doc_bases,
     export_designer_comments,
     render_status,
+    upgrade_blocker,
 )
 from wm_doc.discovery import scan_path
 from wm_doc.effects import compute_service_facts
@@ -695,9 +697,9 @@ KeepUnverifiedOption = Annotated[
     typer.Option(
         "--keep-unverified",
         help=(
-            "Still write a draft whose answer names things the facts do not contain (after "
-            "the retry), marked with those names. Answers that fail the disclosure scan are "
-            "never kept."
+            "Still write a draft whose answer names things the facts do not contain, or "
+            "whose detailed flow does not match the facts (after the retry), marked with "
+            "what is wrong. Answers that fail the disclosure scan are never kept."
         ),
     ),
 ]
@@ -964,12 +966,20 @@ def _echo_generation_summary(
         f"- drafts kept (facts unchanged): {counts.get(DescribeOutcome.UNCHANGED, 0)}\n"
         f"- approved or edited, kept: {counts.get(DescribeOutcome.PROTECTED, 0)}\n"
         f"- rejected by validation: {counts.get(DescribeOutcome.REJECTED, 0)}\n"
-        f"- kept with unverified names: {counts.get(DescribeOutcome.UNVERIFIED, 0)}\n"
+        f"- kept unverified (names or detailed flow): "
+        f"{counts.get(DescribeOutcome.UNVERIFIED, 0)}\n"
         f"- generation failed: {counts.get(DescribeOutcome.FAILED, 0)}\n"
         f"- corrective retries: {stats.retried}\n"
         + (
-            f"- completeness passes (thorough): {stats.coverage_passes}\n"
+            f"- detailed-flow passes (thorough): {stats.coverage_passes}\n"
             if stats.coverage_passes
+            else ""
+        )
+        + (
+            "- detailed-flow findings counted, not enforced at this level: "
+            + ", ".join(f"{rule} {count}" for rule, count in sorted(stats.flow_counts.items()))
+            + "\n"
+            if stats.flow_counts
             else ""
         )
         + f"- facts shortened to fit: {stats.shortened}\n"
@@ -1156,6 +1166,18 @@ def approve(
     all_drafts: Annotated[
         bool, typer.Option("--all-drafts", help="Approve every draft in the directory.")
     ] = False,
+    upgrade_basis: Annotated[
+        bool,
+        typer.Option(
+            "--upgrade-basis",
+            help=(
+                "Approve the chosen descriptions written before the decision-aware facts "
+                "(facts basis 1) against the current facts, approved ones included, after "
+                "checking that they still fit. Run describe first so the files carry the "
+                "current facts hash."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Mark reviewed descriptions as approved; they are never overwritten afterwards."""
     if sum(1 for chosen in (bool(service), package is not None, all_drafts) if chosen) != 1:
@@ -1165,10 +1187,21 @@ def approve(
         )
         raise typer.Exit(code=2)
     approved, missing = approve_docs(
-        docs_dir, services=service or [], package=package, all_drafts=all_drafts
+        docs_dir,
+        services=service or [],
+        package=package,
+        all_drafts=all_drafts,
+        upgrade_basis=upgrade_basis,
     )
     for name in approved:
         typer.echo(f"approved: {name}")
+    if upgrade_basis:
+        wanted = set(service or [])
+        for _path, doc in iter_docs(docs_dir):
+            chosen = doc.service in wanted or doc.package == package or all_drafts
+            reason = upgrade_blocker(doc) if doc.facts_basis < 2 else None
+            if chosen and reason is not None and doc.service not in approved:
+                typer.echo(f"not upgraded ({reason}): {doc.service}", err=True)
     for name in missing:
         typer.echo(f"no description file: {name}", err=True)
     typer.echo(f"Approved {len(approved)} description(s) in {docs_dir}.")
@@ -1208,7 +1241,13 @@ def status(
         if doc_path(docs_dir, service.identity.package, service.identity.full_name).is_file()
     }
     hashes = current_facts_hashes(
-        analysis, packages_path, app_config, external_catalog, facts=facts, only=described
+        analysis,
+        packages_path,
+        app_config,
+        external_catalog,
+        facts=facts,
+        only=described,
+        bases=doc_bases(analysis, docs_dir),
     )
     states = collect_states(analysis, docs_dir, hashes)
     overviews = overview_states(analysis, docs_dir, facts)
