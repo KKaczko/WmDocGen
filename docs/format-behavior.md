@@ -55,13 +55,18 @@ Observed from current fixtures:
   returns a non-zero CLI status when rendering was explicitly requested.
 - Graphviz, temporary-file, and generated-output cleanup diagnostics are scrubbed before CLI
   disclosure. Absolute paths are replaced, JDBC-like connection strings are redacted, and
-  secret-like key/value forms such as `password=`, `passwd=`, `access_token=`, `api-key:`, and
-  bearer authorization values do not expose their values. Raw renderer stderr/stdout is not written
-  to canonical JSON, Markdown, graph indexes, or process/service/document pages.
+  secret-like key/value forms such as `password=`, `passwd=`, `access_token=`, `api-key:`,
+  bearer authorization values, Basic credentials, JSON Web Tokens, private keys and URL user
+  info do not expose their values (`secret_guard.redact_secrets`). Raw renderer stderr/stdout
+  is not written to canonical JSON, Markdown, graph indexes, or process/service/document pages.
 - Generated-output cleanup is shape-tolerant only for managed generated paths:
   `analysis.json`, `index.md`, `entrypoints.md`, `scope.json`, `scope.md`, `services`,
-  `documents`, `processes`, and `graphs`. Other output-root files are outside the managed cleanup
-  contract.
+  `documents`, `packages`, `processes`, and `graphs`. Other output-root files are outside the
+  managed cleanup contract.
+- Before any work, every command that writes files refuses a path that is, lies inside, or
+  contains the analysed packages folder: `scan`, `stats`/`probe-shapes -o`, `analyze -o`,
+  `describe`/`overview` (`--docs-dir`, `--cache-dir`), `status --docs-dir` and `explorer
+  build -o` exit with code 2 and `OUTPUT_INSIDE_PACKAGES` or `PACKAGES_INSIDE_OUTPUT`.
 - SVG output is accepted only after XML parsing and normalization. The known Graphviz SVG 1.1
   external DTD declaration and comments are removed; malformed XML, entity declarations, script,
   JavaScript URLs, `foreignObject`, event handlers, `file://` links, absolute local paths, and

@@ -72,7 +72,11 @@ from wm_doc.openai_compatible_provider import (
     OpenAICompatibleProvider,
     resolve_api_key,
 )
-from wm_doc.output_cleanup import OutputCleanupError
+from wm_doc.output_cleanup import (
+    OutputCleanupError,
+    OutputLocationError,
+    check_outside_packages,
+)
 from wm_doc.output_cleanup import remove_managed_path as _remove_managed_path
 from wm_doc.overviews import (
     describe_overviews,
@@ -333,6 +337,7 @@ def scan(
     all_packages: AllPackagesOption = False,
 ) -> None:
     """Discover packages and artifact candidates without executing analyzed code."""
+    _check_outside_packages_or_exit(packages_path, (output, "output folder"))
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
@@ -368,6 +373,7 @@ def stats(
     platform_services_file: PlatformServicesOption = None,
 ) -> None:
     """Print counts and names (no code or values) to plan documentation of a server."""
+    _check_outside_packages_or_exit(packages_path, (output, "report file"))
     _use_platform_services_or_exit(platform_services_file)
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
@@ -398,6 +404,7 @@ def probe_shapes(
     no_analysis_cache: NoAnalysisCacheOption = False,
 ) -> None:
     """Print node.ndf key paths of triggers, descriptors and adapters (no values)."""
+    _check_outside_packages_or_exit(packages_path, (output, "report file"))
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
@@ -542,6 +549,7 @@ def analyze(
     ] = None,
 ) -> None:
     """Analyze supported services and emit deterministic technical outputs."""
+    _check_outside_packages_or_exit(packages_path, (output, "analysis output folder"))
     try:
         scope_request = _scope_request_from_cli(
             target_service=target_service,
@@ -814,6 +822,9 @@ def describe(
     parallel: ParallelOption = 1,
 ) -> None:
     """Write or refresh per-service description files with a local model, callees first."""
+    _check_outside_packages_or_exit(
+        packages_path, (docs_dir, "descriptions folder"), (cache_dir, "draft cache folder")
+    )
     if not model.strip():
         typer.echo("DESCRIBE_INPUT_INVALID: --model must not be blank.", err=True)
         raise typer.Exit(code=2)
@@ -1033,6 +1044,9 @@ def overview(
     parallel: ParallelOption = 1,
 ) -> None:
     """Write or refresh package overviews, and optionally the server overview."""
+    _check_outside_packages_or_exit(
+        packages_path, (docs_dir, "descriptions folder"), (cache_dir, "draft cache folder")
+    )
     if not model.strip():
         typer.echo("OVERVIEW_INPUT_INVALID: --model must not be blank.", err=True)
         raise typer.Exit(code=2)
@@ -1227,6 +1241,7 @@ def status(
     platform_services_file: PlatformServicesOption = None,
 ) -> None:
     """Report which services have no, draft, edited, approved or outdated descriptions."""
+    _check_outside_packages_or_exit(packages_path, (docs_dir, "descriptions folder"))
     app_config = _with_package_selection(
         load_config(config), include_package, exclude_package, all_packages
     )
@@ -1504,6 +1519,20 @@ def explorer_serve(
         pass
     finally:
         server.server_close()
+
+
+def _check_outside_packages_or_exit(
+    packages_path: Path, *written: tuple[Path | None, str]
+) -> None:
+    """Exit before any work when a path to write to overlaps the packages folder."""
+    for path, what in written:
+        if path is None:
+            continue
+        try:
+            check_outside_packages(path, packages_path, what)
+        except OutputLocationError as exc:
+            typer.echo(f"{exc.code}: {exc.safe_message}", err=True)
+            raise typer.Exit(code=2) from exc
 
 
 def _check_explorer_output_or_exit(output: Path, packages_root: Path) -> None:

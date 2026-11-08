@@ -44,6 +44,8 @@ def classify_finding(finding: AnalysisFinding) -> TargetStatus | None:
     """DYNAMIC or UNSUPPORTED when a finding reports a call the analysis cannot follow."""
     code = finding.code.upper()
     message = finding.message.upper()
+    if code == "INVOKE_WITHOUT_SERVICE":  # an INVOKE that names no service: not followed
+        return TargetStatus.UNSUPPORTED
     if "DYNAMIC" in code and ("SERVICE" in code or "INVOKE" in code or "CALL" in code):
         return TargetStatus.DYNAMIC
     if "UNSUPPORTED" in code and ("SERVICE" in code or "INVOKE" in code or "CALL" in code):

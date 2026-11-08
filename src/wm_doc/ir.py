@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from wm_doc.secret_guard import SECRET_GUARD_STRATEGY_VERSION
+
 
 class FindingStatus(StrEnum):
     SUPPORTED = "SUPPORTED"
@@ -367,7 +369,7 @@ class SecretGuardSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = True
-    strategy_version: str = "secret-guard.v1"
+    strategy_version: str = SECRET_GUARD_STRATEGY_VERSION
 
 
 class ExtractionPolicySnapshot(BaseModel):

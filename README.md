@@ -280,9 +280,15 @@ says so on every page. Details: `docs/explorer.md`.
 
 ## Safety
 
-- Package files are only read, with a hardened XML parser (no DTDs or entities).
-- Secret-like literals and comments are redacted in every output; `--config` can redact or omit
-  all literals or free text.
+- Package files are only read, with a hardened XML parser (no DTDs or entities, in any
+  encoding). No command writes into the packages folder, and an output folder that contains it
+  is refused, so `analyze -o` next to `packages` can never clean it away.
+- Secret-like literals and comments are withheld in every output: by name (any part such as
+  `password`, `pwd`, `apiKey`, `token`, `Authorization`) and by value (bearer tokens, Basic
+  credentials, JSON Web Tokens, private keys, URLs with a password). `--config` can redact or
+  omit all literals or free text.
+- `explorer serve` listens on this computer only by default and then answers only requests
+  addressed to `localhost`, `127.0.0.1` or `[::1]`.
 - Prompts and raw model responses are never stored; only validated text is cached
   (`--cache-dir`, default under your user cache folder).
 - A server token is read from an environment variable (`--api-key-env`), never from a flag, and
@@ -298,6 +304,14 @@ through the free-text policy and the secret guard; only `$flow`, `$parent`, `$lo
 modes, the facts hash of FLOW services with withheld case labels, EXIT labels or failure
 messages; in `include` mode, only that of services whose EXIT label or failure message looks
 secret-like (now withheld). Their approved descriptions then show "approved, facts changed".
+
+**Secret guard `secret-guard.v2`.** The guard now also knows `pwd`, `passwd`, `apikey`,
+`accesskey`, `authorization` and `bearer` in any spelling, and checks literal values by their
+shape. What changes once after the upgrade: literals and free text that now look secret-like
+are withheld (also in `include` mode), the analysis cache is rebuilt, and the facts hash of
+the services concerned changes ("approved, facts changed"). An `analysis.json` or analysis
+cache written by an earlier version may still hold such values: run `analyze` again and
+delete old copies.
 
 `wm-doc analyze` writes `analysis.json` (schema `analysis.v12`; each fact is stored once, on
 the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,

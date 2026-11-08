@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
 from wm_doc.analysis_cache import CACHE_DIR_ENV
+
+
+@pytest.fixture()
+def out_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A folder outside `tmp_path`, for tests whose packages folder is `tmp_path` itself.
+
+    Commands refuse to write into the packages folder they analyse.
+    """
+    return tmp_path_factory.mktemp("out")
 
 
 @pytest.fixture(autouse=True, scope="session")

@@ -27,6 +27,7 @@ from wm_doc import __version__
 from wm_doc.analysis import analyze_path
 from wm_doc.config import AppConfig
 from wm_doc.ir import ANALYSIS_SCHEMA_VERSION, AnalysisResult, AnalyzedPackage
+from wm_doc.secret_guard import SECRET_GUARD_STRATEGY_VERSION
 
 CACHE_FORMAT = "analysis-cache.v2"
 CACHE_SUFFIX = ".jsonl.gz"
@@ -57,6 +58,8 @@ def input_fingerprint(
         "format": CACHE_FORMAT,
         "tool": __version__,
         "schema": ANALYSIS_SCHEMA_VERSION,
+        # A stronger guard must never reuse an analysis that kept values it now withholds.
+        "secret_guard": SECRET_GUARD_STRATEGY_VERSION,
         "config": config.model_dump(mode="json"),
         "processes_explicit": processes_file_explicit,
     }

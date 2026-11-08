@@ -3,14 +3,49 @@
 Shared by `analyze` (Markdown site) and `explorer build`. A managed path is a fixed name
 directly under the output root. Symlinks and junctions at that path are unlinked, never
 followed, and nothing outside the output root is touched.
+
+Every command that writes files first checks that the path it writes to does not overlap the
+analysed packages folder (`check_outside_packages`): analysed packages are never written to,
+and a cleanup of an output folder that contains them would delete them.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
 from wm_doc.graph_publish import _safe_diagnostic
+
+
+class OutputLocationError(Exception):
+    def __init__(self, code: str, safe_message: str) -> None:
+        super().__init__(f"{code}: {safe_message}")
+        self.code = code
+        self.safe_message = safe_message
+
+
+def check_outside_packages(path: Path, packages_root: Path, what: str) -> None:
+    """Refuse a path to write to that is, lies inside, or contains the packages folder.
+
+    Paths are compared after resolving links, without regard to case on Windows.
+    """
+    written = _resolved_parts(path)
+    root = _resolved_parts(packages_root)
+    if written[: len(root)] == root:
+        raise OutputLocationError(
+            "OUTPUT_INSIDE_PACKAGES",
+            f"The {what} must be outside the analysed packages folder.",
+        )
+    if root[: len(written)] == written:
+        raise OutputLocationError(
+            "PACKAGES_INSIDE_OUTPUT",
+            f"The analysed packages folder must not be inside the {what}.",
+        )
+
+
+def _resolved_parts(path: Path) -> tuple[str, ...]:
+    return tuple(os.path.normcase(part) for part in path.resolve().parts)
 
 
 class OutputCleanupError(Exception):

@@ -36,9 +36,15 @@ def parse_xml_file(path: Path) -> etree._Element:
         remove_blank_text=False,
     )
     try:
-        return etree.fromstring(raw, parser=parser)
+        root = etree.fromstring(raw, parser=parser)
     except etree.XMLSyntaxError as exc:
         raise XmlParseError(safe_xml_error_message("Malformed XML", exc)) from exc
+    # The byte check above misses declarations in UTF-16 or UTF-32 files; the parsed document
+    # does not, whatever the encoding. Entities are never resolved or loaded either way.
+    docinfo = root.getroottree().docinfo
+    if docinfo.doctype or docinfo.internalDTD is not None or docinfo.externalDTD is not None:
+        raise XmlSecurityError("DTD declarations are disabled for XML input.")
+    return root
 
 
 def safe_xml_error_message(prefix: str, exc: Exception | str) -> str:

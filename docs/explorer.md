@@ -52,7 +52,10 @@ wm-doc explorer serve out/explorer
   condition as withheld (the facts stay the same) and drops case labels from step names.
 - The output folder must be outside the packages folder; analysed packages are never written.
 - Browsers do not load the app from `file://`, so serve the folder: `wm-doc explorer serve`
-  (loopback only by default) or any static web server.
+  (loopback only by default) or any static web server. On a loopback address `serve` answers
+  only requests addressed to `localhost`, `127.0.0.1` or `[::1]` (other Host headers get 421),
+  so another web site cannot read the data through DNS rebinding; hidden files are refused
+  also when the path is URL-encoded (`%2E`).
 
 ## Data contract `wm-doc-explorer.v1`
 

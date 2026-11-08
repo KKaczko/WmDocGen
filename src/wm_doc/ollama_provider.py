@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from wm_doc.secret_guard import redact_secrets
+
 HTTP_TIMEOUT_SECONDS = 600
 HTTP_CONNECT_TIMEOUT_SECONDS = 5
 MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -29,16 +31,6 @@ class ProviderErrorCode(StrEnum):
     TIMEOUT = "TIMEOUT"
 
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-SECRET_KEY_VALUE_RE = re.compile(
-    r"(?ix)"
-    r"(?P<key_quote>['\"]?)"
-    r"(?P<key>[A-Za-z0-9_.-]*(?:password|passwd|pwd|passphrase|token|api[-_]?key|"
-    r"client[-_]?secret)[A-Za-z0-9_.-]*)"
-    r"(?P=key_quote)\s*(?P<separator>[:=]\s*)"
-    r"(?P<value>['\"]?)[^\s,|}\]]+"
-)
-AUTHORIZATION_RE = re.compile(r"(?i)(authorization\s*[:=]\s*)[^\s,|}\]]+")
-BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s,|}\]]+")
 WINDOWS_ABSOLUTE_RE = re.compile(r"\b[A-Za-z]:[\\/][^\s|}\]]+")
 POSIX_ABSOLUTE_RE = re.compile(r"(?<![\w.])/(?:Users|home|tmp|var|etc|mnt|opt)/[^\s|}\]]*")
 DIAGNOSTIC_LIMIT = 300
@@ -426,15 +418,7 @@ def _safe_label(value: str) -> str:
 
 def _safe_diagnostic(text: str) -> str:
     cleaned = CONTROL_RE.sub(" ", text)
-    cleaned = SECRET_KEY_VALUE_RE.sub(
-        lambda match: (
-            f"{match.group('key_quote')}{match.group('key')}{match.group('key_quote')}"
-            f"{match.group('separator')}[REDACTED]"
-        ),
-        cleaned,
-    )
-    cleaned = AUTHORIZATION_RE.sub(lambda match: f"{match.group(1)}[REDACTED]", cleaned)
-    cleaned = BEARER_RE.sub(lambda match: f"{match.group(1)}[REDACTED]", cleaned)
+    cleaned = redact_secrets(cleaned)
     cleaned = WINDOWS_ABSOLUTE_RE.sub("<path>", cleaned)
     cleaned = POSIX_ABSOLUTE_RE.sub("<path>", cleaned)
     cleaned = " ".join(cleaned.split())

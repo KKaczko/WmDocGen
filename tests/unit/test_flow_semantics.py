@@ -65,7 +65,7 @@ def test_every_check_is_described_in_the_checklist() -> None:
     checks = sorted({check for item in RULES for check in item.checks}, key=lambda c: int(c[1:]))
 
     assert checks == [f"V{number}" for number in range(1, len(checks) + 1)]
-    assert len(checks) == 34
+    assert len(checks) == 35
     for check in checks:
         assert f"\n| {check} | " in text, check
 

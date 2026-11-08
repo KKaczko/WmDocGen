@@ -128,6 +128,8 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   see "Conditional FLOW logic"); free text passes the
   disclosure scan or is withheld and counted.
 - The output folder must not overlap the packages folder. Files are named by hashed IDs.
+  `explorer serve` checks hidden paths after URL decoding and, on a loopback address,
+  answers only Host headers naming this computer (no DNS rebinding).
 - The call graph (`graph.json`, `explorer-ui/src/domain/graph.ts`) walks only emitted
   edges and must reach exactly what focused publication reaches for the same service and
   depth (cross-language fixture test). It is bounded: depth 1-4, node limit 50/150/300,
@@ -158,7 +160,11 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   or `$default` may fail the BRANCH (S31), so "no case matched" is never shown as only falling
   through; first-level fields roll back after a failed EXIT-ON SUCCESS/DONE child or REPEAT on
   FAILURE attempt (S36), but not for a CATCH (S15); linking a whole document shares it, so a
-  change inside one of two linked documents is a possible origin for the other (S38).
+  change inside one of two linked documents is a possible origin for the other (S38); links
+  made by the caller or an earlier called service are not known, so a change inside any
+  document is a possible origin for the field with the same path below any other document
+  (S39, `flow_writes.may_share`; never for a first-level field). An INVOKE without a SERVICE
+  may change anything (an unknown origin, an unknown write summary).
 - Owner decisions (2026-10-25): branch condition values are shown in pages, prompts and the
   Explorer, subject to the free-text policy and the secret guard (`explorer build
   --condition-values exclude` opts out; MAPSET literals stay unexported in the Explorer); a
@@ -193,7 +199,8 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
     are not catalogued), a service outside the packages, a dynamic call, a cycle, a computed
     or nested Java access, an opaque or partly analysed service or a duplicate name makes it
     "unknown". Lineage (`writes=`) only drops a call from "calls in between" when its summary
-    proves it cannot change the field; it never adds an origin. Pages, scenarios, description
+    proves it cannot change the field, also through a shared document (S39); it never adds
+    an origin. Pages, scenarios, description
     facts and the Explorer use the same summaries.
   - Decision inputs: fields a decision tests that the service does not set before it on some
     path. For each direct caller (at most 50, FLOW only), a separate lineage walk with
@@ -260,7 +267,8 @@ publishing, a backend or database for the explorer.
 
 - Never execute code from analyzed packages.
 - Never modify analyzed packages. Designer comment text is exported to files only.
-- Parse XML with the secure parser in `wm_doc.xmlsafe`.
+- Parse XML with the secure parser in `wm_doc.xmlsafe` (no DTD in any encoding: checked on
+  the bytes and again on the parsed document).
 - Keep XML parser diagnostics disclosure-safe: findings use relative `SourceReference.path` for
   location and must not repeat absolute local paths in messages.
 - Treat unknown, malformed, unsupported, or backup files as explicit findings or inventory entries.
@@ -270,9 +278,19 @@ publishing, a backend or database for the explorer.
   Graphviz executable paths or raw Graphviz diagnostics containing secret-like values.
 - Managed output cleanup is limited to generated root files and generated directories; unrelated
   output-root files must be preserved and symlinks unlinked rather than traversed.
+- Every command that writes files checks each path it writes to with
+  `output_cleanup.check_outside_packages` before any work: a path that is, lies inside, or
+  contains the analysed packages folder is refused (`OUTPUT_INSIDE_PACKAGES`,
+  `PACKAGES_INSIDE_OUTPUT`), compared after resolving links and without case on Windows.
 - Keep cleanup, provider and Graphviz diagnostics bounded, relative/path-scrubbed, and redacted for
   key names such as `password`, `passwd`, `token`, `access_token`, `api-key`, and bearer values.
-- Do not expose secret values from package files.
+- Do not expose secret values from package files. `secret_guard.py` is the one rule set for
+  this: names (any part containing a secret term, e.g. `pwd`, `apiKey`, `Authorization`, or a
+  short part such as `pw`), free text (secret terms, not short words), diagnostic keys (the
+  key must hold the secret: `tokenValue` yes, `passwordPolicy` no) and value shapes (secret
+  `key=value`, Authorization/bearer, Basic credentials, JWT, private keys, URL user info),
+  all in linear time. The analysis, the disclosure scan and the diagnostics all use it;
+  changing it bumps `SECRET_GUARD_STRATEGY_VERSION`, which also invalidates the analysis cache.
 - Never persist raw prompts, raw model responses, provider URLs, auth material, chain-of-thought,
   or invalid model output (except the marked unverified drafts above, kept on request). A
   server token is read from the environment variable named by

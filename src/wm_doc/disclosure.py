@@ -4,16 +4,8 @@ from __future__ import annotations
 
 import re
 
-SECRET_KEY_VALUE_RE = re.compile(
-    r"(?P<key_quote>['\"]?)"
-    r"(?P<key>[A-Za-z0-9_.-]*(?:password|passwd|pwd|passphrase|token|api[-_]?key|"
-    r"client[-_]?secret)[A-Za-z0-9_.-]*)"
-    r"(?P=key_quote)\s*(?P<separator>[:=]\s*)"
-    r"(?P<value>['\"]?)[^\s,|}\]]+",
-    re.IGNORECASE,
-)
-AUTHORIZATION_RE = re.compile(r"(?i)(authorization\s*[:=]\s*)[^\s,|}\]]+")
-BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s,|}\]]+")
+from wm_doc.secret_guard import secret_value_label
+
 # A JDBC URL: `jdbc:<driver>:...` (jdbc:oracle:thin:@host, jdbc:mysql://host, jdbc:wm://host).
 # A namespace name such as `orders.jdbc:OrdersConnection` is not one.
 JDBC_RE = re.compile(r"(?i)(?<![\w.])jdbc:[a-z][\w+.-]*:[^\s,|}\]]*")
@@ -28,10 +20,9 @@ PROMPT_DISCLOSURE_RE = re.compile(
 
 def unsafe_disclosure_label(text: str) -> str | None:
     """Name the first kind of content that must not be published, or None when clean."""
-    if SECRET_KEY_VALUE_RE.search(text):
-        return "secret-like key/value"
-    if AUTHORIZATION_RE.search(text) or BEARER_RE.search(text):
-        return "authorization header or bearer value"
+    secret = secret_value_label(text)
+    if secret is not None:
+        return secret
     if JDBC_RE.search(text):
         return "connection string"
     if WINDOWS_ABSOLUTE_RE.search(text) or POSIX_ABSOLUTE_RE.search(text):

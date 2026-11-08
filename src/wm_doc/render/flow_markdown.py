@@ -672,6 +672,13 @@ def _origin_what(logic: FlowLogic, origin: Origin, *, brief: bool, literals: boo
             f"may be changed in place when {where} writes {written}, the same field of a "
             f"document linked to this one ({rule_label(['S38'])})"
         )
+    if kind is OriginKind.SHARED:
+        written = code_span(origin.written_path.text()) if origin.written_path else "a field"
+        return (
+            f"may be changed in place when {where} writes {written}, the same field of a "
+            f"document the caller or a called service may share with this one "
+            f"({rule_label(['S39'])})"
+        )
     if kind is OriginKind.COLLECTED:
         return f"collected by {_step(logic, origin.node_id)} (OUT-ARRAY)"
     if kind is OriginKind.SERVICE_INPUT:
@@ -688,6 +695,8 @@ def _origin_what(logic: FlowLogic, origin: Origin, *, brief: bool, literals: boo
         return f"may be changed inside {step}, which works on one document (a scope; not followed)"
     if "deep_loop" in origin.notes:
         return f"may be changed by repeated runs of {step} (not followed)"
+    if "unnamed_call" in origin.notes:
+        return f"may be changed by {step}, an INVOKE that names no service (not followed)"
     return f"may be changed inside {step} (nested too deeply; not followed)"
 
 
