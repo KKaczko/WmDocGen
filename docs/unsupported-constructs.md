@@ -149,11 +149,14 @@ M3 hardening adds two document-specific findings:
   deterministically and retain bounded source samples. Metadata values remain policy-controlled and
   are not printed in findings.
 
-Literal values default to redacted output. Even when literal inclusion is enabled, secret-like
-mapping contexts still block literal value disclosure. Free-text policy applies before canonical
-serialization to supported free-text fields such as service descriptions, FLOW labels, display
-labels, and mapping operation names. Raw attribute collections are filtered and are not an escape
-hatch for free-text values.
+Literal and free-text values are included by default (`include`); `--config` can redact or
+omit them. In every mode the secret guard (`secret_guard.py`) runs first: a literal is
+withheld when its mapping context is secret-like (any name part such as `password`, `pwd`,
+`apiKey`, `token`, `Authorization`) or its value looks like a credential (secret `key=value`,
+bearer token, Basic credentials, JSON Web Token, private key, URL with a password).
+Free-text policy applies before canonical serialization to supported free-text fields such as
+service descriptions, FLOW labels, display labels, and mapping operation names. Raw attribute
+collections are filtered and are not an escape hatch for free-text values.
 
 Malformed XML parser messages are sanitized before canonical serialization. Findings keep the
 relative `SourceReference.path` and safe parser reason, but do not print absolute workspace paths,

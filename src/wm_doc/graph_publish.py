@@ -14,6 +14,8 @@ from typing import Protocol
 
 from lxml import etree
 
+from wm_doc.secret_guard import redact_secrets
+
 GRAPH_RENDER_TIMEOUT_SECONDS = 30
 DIAGNOSTIC_LIMIT = 300
 SVG_MAX_BYTES = 25 * 1024 * 1024
@@ -31,49 +33,10 @@ FRAGMENT_HREF_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_.:-]*$")
 STYLE_FRAGMENT_URL_RE = re.compile(r"url\(\s*(['\"]?)#[A-Za-z_][A-Za-z0-9_.:-]*\1\s*\)")
 WINDOWS_ABSOLUTE_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"'<>]+")
 POSIX_ABSOLUTE_RE = re.compile(r"(?<!:)\/(?:[^\/\s\"'<>]+\/)+[^\/\s\"'<>]+")
-SECRET_KEY_VALUE_RE = re.compile(
-    r"""(?ix)
-    (?P<key_quote>["']?)
-    (?P<key>[A-Za-z][A-Za-z0-9_-]*)
-    (?P=key_quote)
-    (?P<separator>\s*[:=]\s*)
-    (?P<value>
-        "(?:[^"\\]|\\.)*" |
-        '(?:[^'\\]|\\.)*' |
-        [^\s,;]+(?:\s+(?![A-Za-z][A-Za-z0-9_-]*\s*[:=])[^\s,;]+){0,3}
-    )
-    """
-)
-AUTHORIZATION_RE = re.compile(
-    r"(?i)\b(authorization\s*[:=]\s*bearer\s+)([^\s,;]+)"
-)
-BEARER_RE = re.compile(r"(?i)\b(bearer\s+)([^\s,;]+)")
 JDBC_RE = re.compile(r"(?i)\bjdbc:[^\s\"'<>]+")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 REDACTED_DIAGNOSTIC_VALUE = "[REDACTED]"
-SECRET_KEY_COMPACT_NAMES = {
-    "apikey",
-    "authorization",
-    "bearer",
-    "clientsecret",
-    "idtoken",
-    "password",
-    "passphrase",
-    "passwd",
-    "pwd",
-    "refreshtoken",
-    "secret",
-    "token",
-}
-SECRET_KEY_SUFFIX_PARTS = {
-    "password",
-    "passphrase",
-    "passwd",
-    "pwd",
-    "secret",
-    "token",
-}
 
 
 class GraphRenderMode(StrEnum):
@@ -896,41 +859,12 @@ def _safe_diagnostic(text: str, output_dir: Path) -> str:
     cleaned = cleaned.replace(str(output_dir.resolve()), "<output>")
     cleaned = WINDOWS_ABSOLUTE_RE.sub("<path>", cleaned)
     cleaned = POSIX_ABSOLUTE_RE.sub("<path>", cleaned)
-    cleaned = SECRET_KEY_VALUE_RE.sub(_redact_secret_key_value, cleaned)
     cleaned = JDBC_RE.sub("<redacted:connection-string>", cleaned)
-    cleaned = AUTHORIZATION_RE.sub(
-        lambda match: f"{match.group(1)}{REDACTED_DIAGNOSTIC_VALUE}",
-        cleaned,
-    )
-    cleaned = BEARER_RE.sub(
-        lambda match: f"{match.group(1)}{REDACTED_DIAGNOSTIC_VALUE}",
-        cleaned,
-    )
+    cleaned = redact_secrets(cleaned, REDACTED_DIAGNOSTIC_VALUE)
     cleaned = " ".join(cleaned.split())
     if len(cleaned) > DIAGNOSTIC_LIMIT:
         return cleaned[:DIAGNOSTIC_LIMIT] + "..."
     return cleaned
-
-
-def _redact_secret_key_value(match: re.Match[str]) -> str:
-    key = match.group("key")
-    if not _is_secret_diagnostic_key(key):
-        return match.group(0)
-    return (
-        f"{match.group('key_quote')}{key}{match.group('key_quote')}"
-        f"{match.group('separator')}{REDACTED_DIAGNOSTIC_VALUE}"
-    )
-
-
-def _is_secret_diagnostic_key(key: str) -> bool:
-    normalized = key.casefold().replace("-", "_")
-    parts = [part for part in normalized.split("_") if part]
-    compact = "".join(parts)
-    if compact in SECRET_KEY_COMPACT_NAMES:
-        return True
-    if parts and parts[-1] in SECRET_KEY_SUFFIX_PARTS:
-        return True
-    return len(parts) >= 2 and parts[-1] == "key" and parts[-2] in {"api", "private"}
 
 
 class GraphRenderException(Exception):

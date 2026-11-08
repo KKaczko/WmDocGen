@@ -192,7 +192,7 @@ def test_opaque_service_resolves_as_exact_call_target(tmp_path) -> None:
     assert "pkg.adapter:sharedName" in dot
 
 
-def test_opaque_service_disclosure_and_secret_guard(tmp_path) -> None:
+def test_opaque_service_disclosure_and_secret_guard(tmp_path, out_dir) -> None:
     marker = "jdbc:wm://host.example:5555 password=hunter2"
     service_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="secretish")
     _write_opaque_node(
@@ -213,7 +213,7 @@ def test_opaque_service_disclosure_and_secret_guard(tmp_path) -> None:
     assert marker not in render_dependency_dot(include_analysis)
 
     runner = CliRunner()
-    output_dir = tmp_path / "out"
+    output_dir = out_dir
     result = runner.invoke(app, ["analyze", str(tmp_path), "--output", str(output_dir)])
     assert result.exit_code == 0
     assert marker not in result.output
@@ -455,7 +455,7 @@ def test_service_signature_source_points_to_actual_metadata_shape(tmp_path) -> N
 
 
 def test_flow_and_java_calls_to_opaque_resolve_cli_metrics_and_called_by(
-    tmp_path,
+    tmp_path, out_dir
 ) -> None:
     secret_marker = "password=opaque-do-not-render"
     target_dir = _service_dir(tmp_path, namespace="pkg.adapter", name="target")
@@ -505,7 +505,7 @@ def test_flow_and_java_calls_to_opaque_resolve_cli_metrics_and_called_by(
     assert analysis.metrics.resolved_call_occurrence_target_type_counts["OPAQUE"] == 3
     assert analysis.metrics.resolved_unique_dependency_target_type_counts["OPAQUE"] == 2
 
-    output_dir = tmp_path / "cli-out"
+    output_dir = out_dir
     result = CliRunner().invoke(app, ["analyze", str(tmp_path), "--output", str(output_dir)])
     assert result.exit_code == 0
     for expected_line in (
@@ -535,7 +535,7 @@ def test_flow_and_java_calls_to_opaque_resolve_cli_metrics_and_called_by(
     assert secret_marker not in target_markdown
 
 
-def test_process_catalog_validation_disclosure_and_cli_output(tmp_path) -> None:
+def test_process_catalog_validation_disclosure_and_cli_output(tmp_path, out_dir) -> None:
     flow_dir = _service_dir(tmp_path, namespace="pkg.proc", name="start")
     _write_node(flow_dir / "node.ndf")
     (flow_dir / "flow.xml").write_text(
@@ -614,7 +614,7 @@ processes:
             "analyze",
             str(tmp_path),
             "--output",
-            str(tmp_path / "out"),
+            str(out_dir),
             "--processes-file",
             str(processes_file),
         ],
@@ -1740,7 +1740,7 @@ def test_policy_snapshot_records_secret_guard(tmp_path) -> None:
     assert analysis.extraction_policy.literal_mode == "include"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
-    assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v1"
+    assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v2"
     assert "D:/Dev" not in payload
     assert "D:\\Dev" not in payload
 
@@ -1917,7 +1917,7 @@ def test_document_markdown_renders_disclosure_policy_modes(tmp_path) -> None:
         assert f"- Free text mode: {free_text_mode.value}" in markdown
         assert f"- Literal mode: {literal_mode.value}" in markdown
         assert "- Secret guard: enabled" in markdown
-        assert "- Secret guard strategy: secret-guard.v1" in markdown
+        assert "- Secret guard strategy: secret-guard.v2" in markdown
 
 
 def test_malformed_nested_record_findings_are_explicit(tmp_path) -> None:

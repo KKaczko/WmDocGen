@@ -28,19 +28,14 @@ from pydantic import BaseModel
 
 from wm_doc.explorer.build import ExplorerBundle
 from wm_doc.explorer.contract import dump_json
-from wm_doc.output_cleanup import remove_managed_path
+from wm_doc.output_cleanup import OutputLocationError, check_outside_packages, remove_managed_path
 
 APP_DIR = Path(__file__).with_name("app")
 DATA_DIR = "data"
 STAGING_DIR = ".data-staging"
 APP_FILES = ("index.html", "assets", "THIRD-PARTY.txt")
 
-
-class ExplorerOutputError(Exception):
-    def __init__(self, code: str, safe_message: str) -> None:
-        super().__init__(f"{code}: {safe_message}")
-        self.code = code
-        self.safe_message = safe_message
+ExplorerOutputError = OutputLocationError
 
 
 @dataclass(frozen=True)
@@ -53,18 +48,7 @@ class WriteReport:
 
 def check_output_location(output: Path, packages_root: Path) -> None:
     """Refuse an output folder that overlaps the analysed packages folder."""
-    out = output.resolve()
-    root = packages_root.resolve()
-    if out == root or root in out.parents:
-        raise ExplorerOutputError(
-            "OUTPUT_INSIDE_PACKAGES",
-            "The explorer output folder must be outside the analysed packages folder.",
-        )
-    if out in root.parents:
-        raise ExplorerOutputError(
-            "PACKAGES_INSIDE_OUTPUT",
-            "The analysed packages folder must not be inside the explorer output folder.",
-        )
+    check_outside_packages(output, packages_root, "explorer output folder")
 
 
 def dump(model: BaseModel) -> bytes:

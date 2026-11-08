@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import re
 import shutil
@@ -381,11 +382,54 @@ def test_server_sends_security_headers_and_json_type(server: str) -> None:
         assert response.status == 200
 
 
-@pytest.mark.parametrize("path", ["/data/", "/.hidden", "/data/../.hidden", "/missing.json"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/data/",
+        "/.hidden",
+        "/data/../.hidden",
+        "/%2Ehidden",
+        "/%2ehidden",
+        "/data/%2E%2E/%2Ehidden",
+        "/data%5C.hidden",
+        "/%252Ehidden",
+        "/missing.json",
+    ],
+)
 def test_server_lists_no_folders_and_hides_dot_files(server: str, path: str) -> None:
     with pytest.raises(urllib.error.HTTPError) as error:
         urllib.request.urlopen(f"{server}{path}")
     assert error.value.code == 404
+
+
+@pytest.mark.parametrize(
+    ("host", "status"),
+    [
+        ("127.0.0.1:{port}", 200),
+        ("localhost:{port}", 200),
+        ("[::1]:{port}", 200),
+        ("LocalHost:{port}", 200),
+        ("localhost.:{port}", 200),
+        ("attacker.example:{port}", 421),
+        ("127.0.0.1.attacker.example", 421),
+        ("", 421),
+    ],
+)
+def test_server_answers_only_requests_addressed_to_this_computer(
+    server: str, host: str, status: int
+) -> None:
+    port = int(server.rsplit(":", 1)[1])
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        connection.putrequest("GET", "/data/manifest.json", skip_host=True)
+        if host:
+            connection.putheader("Host", host.format(port=port))
+        connection.endheaders()
+        response = connection.getresponse()
+        response.read()
+    finally:
+        connection.close()
+    assert response.status == status
 
 
 def _tree(root: Path, *, with_mtime: bool = False) -> dict[str, Any]:

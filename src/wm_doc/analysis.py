@@ -110,6 +110,7 @@ from wm_doc.java_analysis import analyze_java_service
 from wm_doc.process_analysis import build_process_analysis
 from wm_doc.process_catalog import ParsedProcessCatalog, load_process_catalog
 from wm_doc.references import find_references
+from wm_doc.secret_guard import is_secret_name, is_secret_text, looks_like_secret
 from wm_doc.triggers import TRIGGER_NODE_TYPE, read_trigger
 from wm_doc.values import parse_values_file, scalar_value
 from wm_doc.xmlsafe import XmlParseError, XmlSecurityError, parse_xml_file
@@ -169,18 +170,6 @@ AGGREGATABLE_FINDINGS = {
     "JAVA_SOURCE_PARTIAL_PARSE",
     "PARTIALLY_STATIC_SERVICE_TARGET",
 }
-SECRET_TERMS = (
-    "password",
-    "secret",
-    "credential",
-    "private key",
-    "private-key",
-    "private_key",
-    "privatekey",
-    "passphrase",
-    "token",
-)
-SECRET_GUARD_STRATEGY_VERSION = "secret-guard.v1"
 FLOW_TECHNICAL_ATTRIBUTES: dict[str, set[str]] = {
     "FLOW": {"CLEANUP", "VERSION"},
     "SEQUENCE": {"EXIT-ON", "FORM", "TIMEOUT"},
@@ -2607,12 +2596,9 @@ def _parse_mapset_literal(
     type_record = _record_child(values, "type")
     declared_type = _value_child(type_record, "field_type")
     declared_field_name = _value_child(type_record, "field_name")
-    secret_context = _is_secret_context(
-        element.get("FIELD"),
-        element.get("NAME"),
-        declared_type,
-        declared_field_name,
-    )
+    secret_context = is_secret_name(
+        element.get("FIELD"), element.get("NAME"), declared_type, declared_field_name
+    ) or looks_like_secret(raw_value)
     length = len(raw_value) if raw_value is not None else None
     literal = LiteralValue(
         present=True,
@@ -2631,7 +2617,7 @@ def _parse_mapset_literal(
             AnalysisFinding(
                 status=FindingStatus.PARTIALLY_SUPPORTED,
                 code="SECRET_LITERAL_REDACTED",
-                message="Literal value was redacted because its mapping context is secret-like.",
+                message="Literal value was redacted: its mapping context or value is secret-like.",
                 source=data_source,
             )
         )
@@ -3700,7 +3686,7 @@ def _classified_attributes(
 def _unknown_attribute(
     name: str, value: str, source: SourceReference, config: AppConfig
 ) -> AttributeValue:
-    secret = _is_secret_context(name, value)
+    secret = is_secret_name(name) or is_secret_text(value) or looks_like_secret(value)
     if config.extraction.freeText.mode == ExtractionMode.OMIT:
         disclosure = TextDisclosure.OMITTED
         marker = None
@@ -3750,7 +3736,9 @@ def _apply_free_text_policy(
 ) -> TextValue | None:
     if value is None:
         return None
-    secret = _is_secret_context(value, role, *context)
+    secret = (
+        is_secret_name(role, *context) or is_secret_text(value) or looks_like_secret(value)
+    )
     if config.extraction.freeText.mode == ExtractionMode.OMIT:
         return TextValue(
             present=True,
@@ -3784,11 +3772,6 @@ def _apply_free_text_policy(
         value=value,
         source=source,
     )
-
-
-def _is_secret_context(*values: str | None) -> bool:
-    combined = " ".join(value.casefold() for value in values if value)
-    return any(term in combined for term in SECRET_TERMS)
 
 
 _call_key = call_sort_key

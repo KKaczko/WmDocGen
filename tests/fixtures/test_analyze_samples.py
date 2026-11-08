@@ -195,7 +195,7 @@ def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies(
     assert analysis.extraction_policy.literal_mode == "include"
     assert analysis.extraction_policy.free_text_mode == "include"
     assert analysis.extraction_policy.secret_guard.enabled is True
-    assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v1"
+    assert analysis.extraction_policy.secret_guard.strategy_version == "secret-guard.v2"
     assert len(analysis.call_occurrences) == 85
     assert len(analysis.unique_dependencies) == 80
     assert all(call.id.startswith("call_") for call in analysis.call_occurrences)
@@ -780,7 +780,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "- Free text mode: include" in document_markdown
     assert "- Literal mode: include" in document_markdown
     assert "- Secret guard: enabled" in document_markdown
-    assert "- Secret guard strategy: secret-guard.v1" in document_markdown
+    assert "- Secret guard strategy: secret-guard.v2" in document_markdown
 
     data = json.loads(payload)
     source_paths = []
