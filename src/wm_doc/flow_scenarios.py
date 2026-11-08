@@ -50,6 +50,7 @@ from wm_doc.flow_logic import (
     subtree,
 )
 from wm_doc.flow_paths import path_ref
+from wm_doc.flow_writes import PipelineWrites
 from wm_doc.ir import FlowNode, FlowNodeType, FlowService, ServiceSignature
 
 MAX_CHAIN = 4  # decisions combined in one table
@@ -152,11 +153,15 @@ def compute_flow_scenarios(
     logic: FlowLogic | None,
     lineage: FlowLineage | None,
     signatures: Mapping[str, ServiceSignature] | None = None,
+    *,
+    writes: Mapping[str, PipelineWrites] | None = None,
 ) -> FlowScenarios | None:
     """Scenarios of a FLOW service's decisions; None when it has no decisions."""
     if service.flow_tree is None or logic is None or lineage is None or not logic.decisions:
         return None
-    return _Scenarios(service, service.flow_tree, logic, lineage, signatures or {}).run()
+    return _Scenarios(
+        service, service.flow_tree, logic, lineage, signatures or {}, writes or {}
+    ).run()
 
 
 # --- implementation ------------------------------------------------------------------------
@@ -206,12 +211,14 @@ class _Scenarios:
         logic: FlowLogic,
         lineage: FlowLineage,
         signatures: Mapping[str, ServiceSignature],
+        writes: Mapping[str, PipelineWrites],
     ) -> None:
         self.service = service
         self.root = root
         self.logic = logic
         self.lineage = lineage
         self.signatures = signatures
+        self.writes = writes
         self.index = {decision.id: position for position, decision in enumerate(logic.decisions)}
         self.loops = [node for node in subtree(root) if node.type is FlowNodeType.LOOP]
         self.position: dict[str, int] = {}
@@ -371,7 +378,12 @@ class _Scenarios:
         for other, cases in implied.items():
             choices[other] = Choice(frozenset(cases))
         result = compute_flow_lineage(
-            self.service, self.logic, self.signatures, only=self.followed, choices=choices
+            self.service,
+            self.logic,
+            self.signatures,
+            only=self.followed,
+            choices=choices,
+            writes=self.writes,
         )
         self.cache[key] = result
         return result

@@ -53,6 +53,7 @@ from wm_doc.flow_answers import (
 )
 from wm_doc.flow_lineage import compute_flow_lineage
 from wm_doc.flow_logic import FlowLogic, compute_flow_logic
+from wm_doc.flow_writes import PipelineWrites, compute_pipeline_writes
 from wm_doc.ir import (
     AnalysisResult,
     FlowService,
@@ -719,6 +720,7 @@ def render_facts_block(
     service: FlowService,
     facts: ServiceFacts,
     signatures: Mapping[str, ServiceSignature] | None = None,
+    writes: Mapping[str, PipelineWrites] | None = None,
 ) -> str:
     """Deterministic facts shown at the bottom of every description file.
 
@@ -751,7 +753,8 @@ def render_facts_block(
     lines += _field_lines("Output", service.signature.outputs)
     lines += ["", "### Data and systems touched", "", render_effects_table(facts).rstrip()]
     logic = compute_flow_logic(service)
-    decisions = render_decision_facts(logic, compute_flow_lineage(service, logic, signatures))
+    lineage = compute_flow_lineage(service, logic, signatures, writes=writes)
+    decisions = render_decision_facts(logic, lineage)
     if decisions:
         lines += ["", decisions]
     return "\n".join(lines)
@@ -1009,6 +1012,7 @@ class _Run:
         self.facts = facts
         self.callee_outputs = callee_outputs_lookup(services)
         self.signatures = {name: item.signature for name, item in services.items()}
+        self.writes = compute_pipeline_writes(services.values())
         self.session = session
         self.options = options
         self.position = {name: index for index, name in enumerate(order)}
@@ -1081,7 +1085,7 @@ class _Run:
         logic = compute_flow_logic(service)
         hashed = basis_facts(deterministic, logic)
         hashes = {1: facts_hash(deterministic), CURRENT_BASIS: facts_hash(hashed)}
-        facts_markdown = render_facts_block(service, facts, self.signatures)
+        facts_markdown = render_facts_block(service, facts, self.signatures, self.writes)
         path = self.path(name)
         existing = self.doc(name)
         basis = min(existing.facts_basis, CURRENT_BASIS) if existing is not None else 1

@@ -71,6 +71,7 @@ from wm_doc.flow_scenarios import (
     compute_flow_scenarios,
 )
 from wm_doc.flow_semantics import assumption_label, rule_label
+from wm_doc.flow_writes import PipelineWrites
 from wm_doc.ir import CallType, FlowNode, FlowNodeType, FlowService, ServiceSignature
 from wm_doc.ir import SourceReference as IrSourceReference
 from wm_doc.render.flow_markdown import (
@@ -218,13 +219,14 @@ def flow_view(
     signatures: Mapping[str, ServiceSignature],
     *,
     condition_values: ConditionValues,
+    writes: Mapping[str, PipelineWrites] | None = None,
 ) -> tuple[FlowRef, FlowView] | None:
     """The flow file of a service with decisions, EXITs or TRY/CATCH; None otherwise."""
     logic = compute_flow_logic(service)
     if logic is None or not logic.significant or service.flow_tree is None:
         return None
-    lineage = compute_flow_lineage(service, logic, signatures)
-    scenarios = compute_flow_scenarios(service, logic, lineage, signatures)
+    lineage = compute_flow_lineage(service, logic, signatures, writes=writes)
+    scenarios = compute_flow_scenarios(service, logic, lineage, signatures, writes=writes)
     shown = logic if condition_values == "included" else _without_condition_values(logic, service)
     text = _Text(guard, refs)
     outline = _Outline(shown, refs, text)

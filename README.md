@@ -308,6 +308,12 @@ with their descriptions and callers), `packages/*.md`, `services/*.md`, `documen
 graph per service (`graphs/services/`). Before writing it removes only these generated files and
 directories; other files in the output directory are kept.
 
+A FLOW service page has a Decisions section: when each call runs, where the fields its BRANCH
+steps test come from, scenarios along dependent decisions, and, for a field the service takes
+from its caller, what each direct caller passes into it (a literal, a copy, or nothing set
+before the call). Only when one literal reaches the call with nothing in between that may
+change it does the page say which single case of a decision can run on that call.
+
 ## Analysis cache
 
 `stats`, `analyze`, `describe`, `overview`, `status` and `probe-shapes` start from a full

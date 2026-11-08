@@ -9,7 +9,10 @@ flattened inside code spans, so it cannot form Markdown structure.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from wm_doc.call_targets import TargetStatus
+from wm_doc.flow_callers import MAX_CALLERS, CallerPass, DecisionInput, PassKind
 from wm_doc.flow_lineage import (
     MAX_DECISIONS,
     MAX_PATHS_PER_DECISION,
@@ -99,6 +102,7 @@ def note_text(note: str) -> str:
         return "Some label expressions could not be split into field references."
     return note
 
+
 MAX_VARIABLES_SHOWN = 5
 MAX_ORIGINS_SHOWN = 8
 MAX_SOURCE_ORIGINS = 4
@@ -110,7 +114,7 @@ MAX_FACT_CASES = 40  # cases per decision in a description file's facts block
 ORIGINS_INTRO = (
     'Under each decision, "Where ... comes from" lists what may have set each field it tests '
     "on the paths that reach it: mapping lines, values a called service may leave, the "
-    'service\'s inputs or the caller\'s pipeline. "Comes from" means exactly one observed '
+    "service's inputs or the caller's pipeline. \"Comes from\" means exactly one observed "
     'definition reaches the decision and no call runs in between; otherwise it says "may come '
     'from". Fields are matched by their exact path, never by a similar name.'
 )
@@ -154,17 +158,29 @@ def render_decisions_section(
     logic: FlowLogic | None,
     lineage: FlowLineage | None = None,
     scenarios: FlowScenarios | None = None,
+    *,
+    inputs: Sequence[DecisionInput] | None = None,
 ) -> str:
-    """The section body (without its heading), or "" when there is nothing conditional."""
+    """The section body (without its heading), or "" when there is nothing conditional.
+
+    `inputs` (`flow_callers`) adds what the direct callers pass into the fields that come
+    from the caller, and the list of those decision inputs.
+    """
     if logic is None or not logic.significant:
         return ""
     parts = [INTRO]
     if lineage is not None and lineage.variables:
         parts.append(ORIGINS_INTRO)
+    by_path = {item.path.base(): item for item in inputs or ()}
+    if any(item.passes or item.callers_hidden for item in by_path.values()):
+        parts.append(CALLERS_INTRO)
     parts += [
-        _decision_block(logic, item, lineage) for item in logic.decisions[:MAX_DECISIONS_SHOWN]
+        _decision_block(logic, item, lineage, by_path)
+        for item in logic.decisions[:MAX_DECISIONS_SHOWN]
     ]
     parts += _more(len(logic.decisions), MAX_DECISIONS_SHOWN, "decision")
+    if by_path:
+        parts.append(inputs_line(tuple(by_path.values())))
     if lineage is not None and lineage.limits:
         parts.append("Origin limits: " + "; ".join(lineage.limits) + ".")
     if scenarios is not None and scenarios.tables:
@@ -211,7 +227,12 @@ def decision_title(decision: Decision) -> str:
     return f"{decision.id}: BRANCH without a switch{line}"
 
 
-def _decision_block(logic: FlowLogic, decision: Decision, lineage: FlowLineage | None) -> str:
+def _decision_block(
+    logic: FlowLogic,
+    decision: Decision,
+    lineage: FlowLineage | None,
+    inputs: Mapping[tuple[str, ...], DecisionInput] | None = None,
+) -> str:
     lines = [f"### {decision_title(decision)}", ""]
     if decision.guard.terms:
         lines += [f"Evaluated only when: {guard_text(logic, decision.guard)}.", ""]
@@ -245,7 +266,7 @@ def _decision_block(logic: FlowLogic, decision: Decision, lineage: FlowLineage |
     if decision.falls_through:
         lines.append(f"| - | no case matches | - | - | {_cell(no_match_text(decision))} |")
     if lineage is not None:
-        lines += _origins_block(logic, lineage, decision)
+        lines += _origins_block(logic, lineage, decision, inputs or {})
     return "\n".join(lines)
 
 
@@ -329,7 +350,12 @@ def case_short(case: DecisionCase) -> str:
 # --- origins -------------------------------------------------------------------------------
 
 
-def _origins_block(logic: FlowLogic, lineage: FlowLineage, decision: Decision) -> list[str]:
+def _origins_block(
+    logic: FlowLogic,
+    lineage: FlowLineage,
+    decision: Decision,
+    inputs: Mapping[tuple[str, ...], DecisionInput],
+) -> list[str]:
     lines: list[str] = []
     for reason in lineage.unfollowed.get(decision.id, ()):
         lines += ["", UNFOLLOWED_TEXT.get(reason, reason)]
@@ -337,10 +363,97 @@ def _origins_block(logic: FlowLogic, lineage: FlowLineage, decision: Decision) -
     for variable in variables[:MAX_VARIABLES_SHOWN]:
         lines += ["", f"Where {code_span(variable.path.text())} comes from:", ""]
         lines += variable_lines(logic, lineage, variable)
+        found = inputs.get(variable.path.base())
+        if found is not None:
+            lines += caller_lines(logic, found, decision.id)
     hidden = len(variables) - min(len(variables), MAX_VARIABLES_SHOWN)
     if hidden:
         lines += ["", f"... and {hidden} more field(s) not shown."]
     return lines
+
+
+CALLERS_INTRO = (
+    'Under a field that comes from the caller, "What its callers pass" reads the FLOW of each '
+    f"direct caller (at most {MAX_CALLERS}) just before its call, after the call's input map. "
+    "Only one thing is concluded: a single literal that reaches the call on every path, with "
+    "no call in between that may change it, leaves only the case whose label equals it (or "
+    "the default) of a decision that compares the field as it arrives; patterns, expressions, "
+    "withheld labels and loops never lead to a conclusion."
+)
+MAX_CALLER_LINES = 10
+MAX_PASS_ORIGINS = 3
+
+
+def caller_lines(logic: FlowLogic, item: DecisionInput, decision_id: str) -> list[str]:
+    """Markdown list lines saying what each direct caller passes into one field."""
+    if not item.passes and not item.callers_hidden:
+        return []
+    lines = ["", "What its callers pass (calls from analysed services):", ""]
+    lines += [
+        f"- {pass_text(logic, entry, decision_id)}" for entry in item.passes[:MAX_CALLER_LINES]
+    ]
+    if len(item.passes) > MAX_CALLER_LINES:
+        lines.append(f"- and {len(item.passes) - MAX_CALLER_LINES} more call(s)")
+    if item.callers_hidden:
+        lines.append(f"- {item.callers_hidden} more caller(s) not read (at most {MAX_CALLERS})")
+    return lines
+
+
+def pass_text(logic: FlowLogic, entry: CallerPass, decision_id: str) -> str:
+    """One call: what the caller passes, what that leaves of `decision_id`, how sure."""
+    head = (
+        f"{code_span(entry.caller)} {entry.call_id}:"
+        if entry.call_id
+        else (f"{code_span(entry.caller)}:")
+    )
+    if entry.kind is PassKind.UNKNOWN or entry.caller_logic is None:
+        what = (
+            "what it passes is not read (a transformer call, a caller that is not a FLOW "
+            "service, or a call not reached)"
+        )
+    elif entry.kind is PassKind.THROUGH:
+        what = "does not set it before the call; it comes from that service's own callers"
+    else:
+        shown = [
+            origin_text(entry.caller_logic, origin, brief=True)
+            for origin in entry.origins[:MAX_PASS_ORIGINS]
+        ]
+        hidden = len(entry.origins) - len(shown)
+        what = "; or ".join(shown) + (f"; or {hidden} more" if hidden else "")
+    conclusion = ""
+    if entry.cases is not None and decision_id in entry.cases:
+        chosen = entry.cases[decision_id]
+        if chosen:
+            names = ", ".join(f"{case_id} ({_case_name(logic, case_id)})" for case_id in chosen)
+            conclusion = f", so on this call only {names} can run"
+        else:
+            conclusion = f", so on this call no case of {decision_id} runs"
+    between = ""
+    if entry.calls_between and entry.caller_logic is not None:
+        verb = "runs" if len(entry.calls_between) == 1 and not entry.more_calls_between else "run"
+        calls = calls_text(entry.caller_logic, entry.calls_between, entry.more_calls_between)
+        between = f"; {calls} {verb} before the call and may change it"
+    label = assumption_label(entry.rules)
+    level = f"{entry.certainty.value}; {label}" if label else entry.certainty.value
+    return f"{head} {what}{conclusion}{between} ({level})."
+
+
+def _case_name(logic: FlowLogic, case_id: str) -> str:
+    case = logic.case(case_id)
+    if case.condition.kind is ConditionKind.DEFAULT:
+        return "no other case matches"
+    return case_short(case)
+
+
+def inputs_line(inputs: Sequence[DecisionInput]) -> str:
+    """The fields a caller sets: declared inputs or not, and the decisions that test them."""
+    parts = []
+    for item in inputs:
+        declared = "a declared input" if item.declared else "not a declared input"
+        parts.append(
+            f"{code_span(item.path.text())} ({declared}; tested by {', '.join(item.decision_ids)})"
+        )
+    return "Decision inputs: " + "; ".join(parts) + "."
 
 
 def variable_lines(logic: FlowLogic, lineage: FlowLineage, variable: VariableOrigins) -> list[str]:
@@ -984,9 +1097,7 @@ def outcomes_text(logic: FlowLogic, outcomes: tuple[Outcome, ...]) -> str:
     return "; ".join(outcome_text(logic, item) for item in outcomes)
 
 
-def scenario_call(
-    logic: FlowLogic, table: ScenarioTable, scenario: Scenario, call_id: str
-) -> str:
+def scenario_call(logic: FlowLogic, table: ScenarioTable, scenario: Scenario, call_id: str) -> str:
     """A call of a scenario, with what else it needs: cases of a grouped outcome, decisions
     outside the table, loops, failures."""
     call = logic.call(call_id)

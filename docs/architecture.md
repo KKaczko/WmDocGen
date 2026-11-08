@@ -433,6 +433,17 @@ conditional, unresolved) and the assumed rules it rests on. Decisions inside loo
 independent decisions are never combined. The service page shows the tables under
 `### Scenarios` in the Decisions section.
 
+Stage 7 adds conservative facts across services. `flow_writes.py` summarizes, callees first,
+the pipeline fields each fully analysed FLOW or Java service may write or drop; any platform
+call, call outside the packages, dynamic call, cycle or unreadable Java access makes the
+summary "unknown". Lineage uses a summary only to drop a call from "calls in between" when it
+cannot change the field. `flow_callers.py` lists the decision inputs of a service (fields its
+decisions test that it does not set first) and, for each direct caller (at most 50), what the
+caller's FLOW holds in that field just before the call (a separate lineage walk with a probe
+at the call, after its input map). Only a single observed literal with no call in between can
+narrow a switch-mode decision outside a loop to the matching case, `$default` or none. The
+service page shows this as "What its callers pass" under the field.
+
 `flow_answers.py` (stage 4) ties model answers to the control model. For FLOW services the
 describe prompt shows the pseudo-code with decision, case, call and EXIT ids and a block that
 lists each decision's cases with the calls in them. Each detailed-flow item comes back as text

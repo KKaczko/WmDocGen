@@ -53,6 +53,7 @@ from wm_doc.flow_logic import (
 )
 from wm_doc.flow_paths import PipelineRef, path_ref
 from wm_doc.flow_semantics import PIPELINE_RESET
+from wm_doc.flow_writes import PipelineWrites
 from wm_doc.ir import (
     FlowMap,
     FlowNode,
@@ -161,6 +162,17 @@ class VariableOrigins:
     notes: tuple[str, ...]  # "scope", "too_deep", "not_followed", "list_element"
 
 
+@dataclass(frozen=True, slots=True)
+class CallProbe:
+    """What a field holds just before a call (after the call's input map), stage 7."""
+
+    call_id: str
+    path: PipelineRef
+    origins: tuple[str, ...]  # origin ids, document order
+    calls_in_between: tuple[str, ...]  # calls since the last definition that may change it
+    more_calls_in_between: bool
+
+
 @dataclass(frozen=True)
 class FlowLineage:
     service: str
@@ -171,6 +183,8 @@ class FlowLineage:
     # Steps some path the walk knows reaches (failure paths included); steps that are not
     # followed count as reached with everything inside them.
     reached_nodes: frozenset[str] = frozenset()
+    # Asked for with `probes=`: the probed fields at each call to the probed services.
+    probes: tuple[CallProbe, ...] = ()
     _origins: dict[str, Origin] = field(init=False, repr=False, compare=False)
     _by_decision: dict[str, tuple[VariableOrigins, ...]] = field(
         init=False, repr=False, compare=False
@@ -214,6 +228,8 @@ def compute_flow_lineage(
     *,
     only: Collection[str] | None = None,
     choices: Mapping[str, Choice] | None = None,
+    writes: Mapping[str, PipelineWrites] | None = None,
+    probes: Mapping[str, Collection[Key]] | None = None,
 ) -> FlowLineage | None:
     """Origins of the fields tested by each decision; None without decisions.
 
@@ -221,11 +237,24 @@ def compute_flow_lineage(
     name its declared outputs as possible origins. `only` follows the fields of those
     decisions alone, and `choices` fixes how some decisions (outside loops) are taken; both
     serve scenarios (`flow_scenarios`), which walk one combination of cases at a time.
+    `writes` (`flow_writes`) drops a call from "calls in between" when its summary proves it
+    cannot change the field. `probes` (called service -> fields) also records those fields
+    just before every call to that service (`FlowLineage.probes`), for `flow_callers`; with
+    probes, a service without decisions is walked too.
     """
-    if service.flow_tree is None or logic is None or not logic.decisions:
+    if service.flow_tree is None or logic is None:
+        return None
+    if not logic.decisions and not probes:
         return None
     return _Lineage(
-        service, service.flow_tree, logic, signatures or {}, only=only, choices=choices
+        service,
+        service.flow_tree,
+        logic,
+        signatures or {},
+        only=only,
+        choices=choices,
+        writes=writes,
+        probes=probes,
     ).run()
 
 
@@ -300,11 +329,16 @@ class _Lineage:
         *,
         only: Collection[str] | None = None,
         choices: Mapping[str, Choice] | None = None,
+        writes: Mapping[str, PipelineWrites] | None = None,
+        probes: Mapping[str, Collection[Key]] | None = None,
     ) -> None:
         self.service = service
         self.root = root
         self.logic = logic
         self.signatures = signatures
+        self.writes = writes or {}
+        self.probes = {target: tuple(keys) for target, keys in (probes or {}).items()}
+        self.probe_snapshots: dict[str, dict[Key, _Value]] = {}  # call node id -> field -> value
         self.only = frozenset(only) if only is not None else None
         # BRANCH node id -> (the case node ids that may run, its choice)
         self.choices: dict[str, tuple[frozenset[str], Choice]] = {
@@ -430,6 +464,13 @@ class _Lineage:
                     limited = True
                     continue
                 tracked[key] = None
+        for keys in self.probes.values():
+            for key in keys:
+                if key and key not in tracked:
+                    if len(tracked) >= MAX_TRACKED_PATHS:
+                        limited = True
+                        continue
+                    tracked[key] = None
         if len(self.logic.decisions) > MAX_DECISIONS:
             self.limits.append(
                 f"only the fields of the first {MAX_DECISIONS} decisions are followed"
@@ -854,7 +895,14 @@ class _Lineage:
             if any(_overlaps(read, key) for read in reads):
                 notes.append("output_map_reads")
             if not notes:
-                result[key] = (numbers, _merge_calls(calls, (call.index,)))
+                summary = self.writes.get(call.target)
+                linked = self.aliases.get(key, set())  # the same field of linked documents (S38)
+                if summary is not None and not any(
+                    summary.may_change(item) for item in (key, *sorted(linked))
+                ):
+                    result[key] = (numbers, calls)  # it cannot change the field (flow_writes)
+                else:
+                    result[key] = (numbers, _merge_calls(calls, (call.index,)))
                 continue
             item = self._definition(
                 OriginKind.CALL_RESPONSE,
@@ -975,6 +1023,14 @@ class _Lineage:
         for child in inputs:
             writes = self._map_writes(child, MapRole.CALL_INPUT, node.id, call_node, 0)
             before_call = self._apply(writes, before_call)
+        if call_node is not None:
+            probed = self.probes.get(self.calls[call_node].target)
+            if probed:
+                stored = self.probe_snapshots.setdefault(call_node, {})
+                for key in probed:
+                    value = before_call.get(key)
+                    if value is not None:
+                        stored[key] = _join_value(stored.get(key), value)
         reads = [
             ref.base()
             for child in outputs
@@ -1323,6 +1379,12 @@ class _Lineage:
                 variables.append((decision, key, value))
         used: set[int] = set()
         stack = [number for _d, _k, value in variables if value for number in value[0]]
+        stack += [
+            number
+            for stored in self.probe_snapshots.values()
+            for value in stored.values()
+            for number in value[0]
+        ]
         while stack:
             number = stack.pop()
             if number in used:
@@ -1335,6 +1397,19 @@ class _Lineage:
         built = tuple(
             self._variable(decision, key, value, names) for decision, key, value in variables
         )
+        probes = tuple(
+            CallProbe(
+                call_id=self.calls[node_id].id,
+                path=PipelineRef(key),
+                origins=tuple(names[number] for number in self._ordered(value[0])),
+                calls_in_between=tuple(
+                    self.call_by_index[index].id for index in value[1][:MAX_CALLS_KEPT]
+                ),
+                more_calls_in_between=len(value[1]) > MAX_CALLS_KEPT,
+            )
+            for node_id in sorted(self.probe_snapshots, key=lambda item: self.calls[item].index)
+            for key, value in self.probe_snapshots[node_id].items()
+        )
         return FlowLineage(
             service=self.service.identity.full_name,
             variables=built,
@@ -1342,6 +1417,7 @@ class _Lineage:
             unfollowed={key: tuple(value) for key, value in self.unfollowed.items()},
             limits=tuple(dict.fromkeys(self.limits)),
             reached_nodes=frozenset(self.reached_nodes),
+            probes=probes,
         )
 
     def _sort_key(self, item: _Def) -> tuple[int, int, int, Key, int]:

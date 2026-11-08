@@ -29,6 +29,7 @@ from xml.sax.saxutils import escape, quoteattr
 from wm_doc.config import AppConfig
 from wm_doc.describer import current_facts_hashes, render_facts_block
 from wm_doc.effects import compute_service_facts
+from wm_doc.flow_writes import compute_pipeline_writes
 from wm_doc.ir import AnalysisResult
 from wm_doc.overviews import (
     OverviewNarrative,
@@ -729,6 +730,7 @@ def write_demo_descriptions(
     """Write the synthetic description files for the services that exist; return how many."""
     services = {service.identity.full_name: service for service in analysis.services}
     signatures = {name: service.signature for name, service in services.items()}
+    writes = compute_pipeline_writes(services.values())
     names = [name for name in _DEMOS if name in services]
     facts = compute_service_facts(analysis)
     hashes = current_facts_hashes(analysis, packages_root, config, facts=facts, only=set(names))
@@ -760,7 +762,7 @@ def write_demo_descriptions(
             text_hash=text_hash(written_text),
             narrative=narrative,
             notes=NOTES_MARKER,
-            facts_markdown=render_facts_block(service, facts[name], signatures),
+            facts_markdown=render_facts_block(service, facts[name], signatures, writes),
             current_facts_hash=current,
             extra_front_matter=extra,
         )

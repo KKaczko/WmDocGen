@@ -82,6 +82,7 @@ from wm_doc.explorer.text import (
     narrative_blocks,
 )
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
+from wm_doc.flow_writes import compute_pipeline_writes
 from wm_doc.ir import (
     AdapterDetails,
     AdapterRole,
@@ -226,6 +227,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
     details: dict[str, ServiceDetail] = {}
     flows: dict[str, bytes] = {}
     signatures = {item.identity.full_name: item.signature for item in services}
+    writes = compute_pipeline_writes(services)
     search_services: list[SearchService] = []
     call_count = 0
     ordered = sorted(services, key=_service_key)
@@ -275,6 +277,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
                 guard,
                 signatures,
                 condition_values=options.condition_values,
+                writes=writes,
             )
             if service.service_type is ServiceType.FLOW
             else None
