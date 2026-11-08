@@ -31,7 +31,7 @@ from wm_doc.describer import (
 from wm_doc.discovery import scan_path
 from wm_doc.effects import compute_service_facts
 from wm_doc.explorer.build import ExplorerOptions, build_bundle
-from wm_doc.explorer.contract import DescriptionsShown
+from wm_doc.explorer.contract import ConditionValues, DescriptionsShown
 from wm_doc.explorer.ids import IdCollisionError
 from wm_doc.explorer.inputs import explorer_inputs
 from wm_doc.explorer.serve import is_loopback, make_server
@@ -1323,6 +1323,25 @@ DescriptionsOption = Annotated[
 ]
 
 
+ConditionValuesOption = Annotated[
+    str,
+    typer.Option(
+        "--condition-values",
+        help="include (default) shows branch condition values (case labels, under the "
+        "free-text policy) in the conditional flow; exclude shows them as withheld.",
+    ),
+]
+
+
+def _condition_values_or_exit(value: str) -> ConditionValues:
+    if value == "include":
+        return "included"
+    if value == "exclude":
+        return "excluded"
+    typer.echo("EXPLORER_INPUT_INVALID: --condition-values must be include or exclude.", err=True)
+    raise typer.Exit(code=2)
+
+
 def _descriptions_or_exit(value: str) -> DescriptionsShown:
     if value == "approved":
         return "approved"
@@ -1345,6 +1364,7 @@ def explorer_build(
         typer.Option("--docs-dir", help="Description files to show (see --descriptions)."),
     ] = None,
     descriptions: DescriptionsOption = "approved",
+    condition_values: ConditionValuesOption = "include",
     dataset_kind: Annotated[
         str,
         typer.Option(
@@ -1366,6 +1386,7 @@ def explorer_build(
 ) -> None:
     """Write the explorer for a packages folder: the prebuilt app plus its data files."""
     shown = _descriptions_or_exit(descriptions)
+    values = _condition_values_or_exit(condition_values)
     if dataset_kind not in ("private", "synthetic"):
         typer.echo("EXPLORER_INPUT_INVALID: --dataset-kind must be private or synthetic.", err=True)
         raise typer.Exit(code=2)
@@ -1380,6 +1401,7 @@ def explorer_build(
         dataset_kind="synthetic" if dataset_kind == "synthetic" else "private",
         dataset_label=dataset_label,
         descriptions=shown,
+        condition_values=values,
     )
     _write_explorer_or_exit(
         output, packages_path, analysis, app_config, external_catalog, docs_dir, options

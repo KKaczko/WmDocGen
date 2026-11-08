@@ -58,12 +58,13 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   managed output paths for `analyze` and `explorer build`.
 - Explorer (`explorer/`, app source in `explorer-ui/`): see "Explorer".
 - Conditional FLOW logic (`flow_semantics.py`, `flow_paths.py`, `flow_logic.py`,
-  `flow_lineage.py`, `flow_scenarios.py`): see "Conditional FLOW logic". Tests build FLOW
+  `flow_lineage.py`, `flow_scenarios.py`, `flow_writes.py`, `flow_callers.py`): see
+  "Conditional FLOW logic". Tests build FLOW
   services with `tests/support/flowxml.py` (test-only; `samples/` stays read-only).
 
 ## Contracts
 
-- `analysis.json` is schema `analysis.v11`: each fact is stored once, on the service, package or
+- `analysis.json` is schema `analysis.v12`: each fact is stored once, on the service, package or
   document it belongs to. Server-wide lists (`AnalysisResult.call_occurrences`,
   `unique_dependencies`, `mapping_operations`, Java lists, `document_types`, ...) are derived
   properties, not serialized. Each package's `service_index` lists only its own services.
@@ -185,6 +186,46 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   trimmed when parsed), patterns, expressions, withheld labels or hidden literals.
 - Description files show the decisions and their origins under `### Decisions` in the facts
   block (refreshed on every run, not part of the facts hash).
+- Stage 7 (`flow_writes.py`, `flow_callers.py`), conservative facts across services:
+  - Write summaries (`compute_pipeline_writes`, bottom-up over `callgraph.summary_order`): the
+    pipeline fields a fully analysed FLOW or Java service may write or drop, with its invoked
+    callees' (transformers are isolated, S18, and not callees). A platform call (its outputs
+    are not catalogued), a service outside the packages, a dynamic call, a cycle, a computed
+    or nested Java access, an opaque or partly analysed service or a duplicate name makes it
+    "unknown". Lineage (`writes=`) only drops a call from "calls in between" when its summary
+    proves it cannot change the field; it never adds an origin. Pages, scenarios, description
+    facts and the Explorer use the same summaries.
+  - Decision inputs: fields a decision tests that the service does not set before it on some
+    path. For each direct caller (at most 50, FLOW only), a separate lineage walk with
+    `probes=` reads the field just before each call, after its input map: one literal, set or
+    copied otherwise, or passed through. The one conclusion: a single observed literal (no
+    surrounding blanks) reaching the call on every path, no call in between that may change
+    it, and a switch-mode decision outside a loop that compares the field as it arrives with
+    value, empty, `$null` or `$default` cases only, leaves only the matching case, `$default`
+    or none (S1, S2, S6, S7). Never from patterns, expressions, withheld labels or loops; no
+    transitive composition. Service pages show "What its callers pass" and the decision
+    inputs; nothing is stored.
+- Stage 6 (Explorer, `explorer/flow.py`): a FLOW service with decisions, EXITs or TRY/CATCH
+  gets `ServiceDetail.flow` (counts) and a lazy `flows/<id>.json` (`FlowView`): outline (at most
+  1,500 steps), decisions with cases and field origins (certainty, basis, evidence), calls by
+  condition, EXITs, steps that never run, scenarios. Python computes and words everything
+  through `render.flow_markdown` (`origin_text`/`ruled_text` with `literals=False`: MAPSET
+  literals are never exported); every text passes `TextGuard` as prose.
+  `explorer build --condition-values exclude` (`Disclosure.conditionValues`) shows every case
+  label as withheld from the same facts and strips case labels from step names. The app
+  (`ConditionalFlowSection`) renders nested lists and `<details>`, never links inside a
+  `<summary>`, and fetches the file only when opened.
+- Stage 5 (`analysis.v12`): BRANCH cases carry `case_kind` (default, null, blank, pattern,
+  text) and label expressions `condition_refs`, both read from the raw label before the
+  free-text policy, so `$null`, blank and withheld labels stay distinct in every mode (a
+  withheld label is `CaseCondition.withheld`, never compared, never read as blank or `$null`,
+  never used to rule out an outcome). `condition_refs` are field paths, kept in every mode
+  like SWITCH paths and mapping endpoints (the secret guard covers values, not field names).
+  EXIT `FROM` labels (`exit_label`) and `FAILURE-MESSAGE` (`failure_message`) go through the
+  policy with the secret guard first and are never kept raw (not in `attributes` either);
+  only `$flow`, `$parent`, `$loop` and `$iteration` stay raw in `exit_from`. The parser
+  resolves a label EXIT to `exit_target_id` from the raw labels. Include-mode output is
+  unchanged except for secret-like EXIT labels and messages, which are now withheld.
 - Stage 4 (`flow_answers.py`, describe prompt v4): for FLOW services the prompt carries ids in
   the pseudo-code (`render_pseudocode(..., logic=)`: `[D1]`, `[D1.c2]`, `[C3]`, `[E1]`) and a
   decisions block; detailed-flow items are `{text, decision, case, calls}` (`calls` holds call

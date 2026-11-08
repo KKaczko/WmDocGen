@@ -10,9 +10,11 @@ from typing import TYPE_CHECKING
 from jinja2 import Template
 
 from wm_doc.builtins import builtin_effect, is_builtin_name
+from wm_doc.flow_callers import compute_decision_inputs
 from wm_doc.flow_lineage import compute_flow_lineage
 from wm_doc.flow_logic import compute_flow_logic
 from wm_doc.flow_scenarios import compute_flow_scenarios
+from wm_doc.flow_writes import PipelineWrites, compute_pipeline_writes
 from wm_doc.ir import (
     CallOccurrence,
     DependencyKind,
@@ -334,8 +336,14 @@ def render_service_markdown(
     facts: ServiceFacts | None = None,
     call_graph: tuple[str, str] | None = None,
     signatures: Mapping[str, ServiceSignature] | None = None,
+    writes: Mapping[str, PipelineWrites] | None = None,
+    analysed: Mapping[str, FlowService] | None = None,
 ) -> str:
-    """One service page; `signatures` (analysed services) name declared callee outputs."""
+    """One service page; `signatures` (analysed services) name declared callee outputs.
+
+    `writes` (`flow_writes`) and `analysed` (services by name) add what direct callers pass
+    into the fields its decisions take from the caller (`flow_callers`).
+    """
     incoming_dependencies = incoming_dependencies or []
     process_memberships = process_memberships or []
     process_definitions = process_definitions or {}
@@ -367,11 +375,27 @@ def render_service_markdown(
     java_dynamic_invocations = _java_invocations_for_static(service.java_analysis, False)
     description_text = _text_display(service.description)
     logic = compute_flow_logic(service)
-    lineage = compute_flow_lineage(service, logic, signatures)
-    scenarios = compute_flow_scenarios(service, logic, lineage, signatures)
+    lineage = compute_flow_lineage(service, logic, signatures, writes=writes)
+    scenarios = compute_flow_scenarios(service, logic, lineage, signatures, writes=writes)
+    inputs = (
+        compute_decision_inputs(
+            service,
+            logic,
+            lineage,
+            callers=[
+                analysed[dependency.source_service]
+                for dependency in incoming_dependencies
+                if dependency.source_service in analysed
+            ],
+            signatures=signatures or {},
+            writes=writes or {},
+        )
+        if analysed is not None
+        else ()
+    )
     return _TEMPLATE.render(
         service=service,
-        decisions_text=render_decisions_section(logic, lineage, scenarios),
+        decisions_text=render_decisions_section(logic, lineage, scenarios, inputs=inputs),
         verbose=verbose,
         doc=doc,
         doc_badge=doc_badge(doc) if doc is not None else "",
@@ -976,6 +1000,8 @@ def _flow_outline(flow_tree: FlowNode | None) -> str:
             detail_parts.append(f"in={node.in_array}")
         if node.exit_from:
             detail_parts.append(f"from={node.exit_from}")
+        elif node.exit_label is not None:
+            detail_parts.append(f"from={_text_display(node.exit_label) or '(label withheld)'}")
         detail = f" ({'; '.join(detail_parts)})" if detail_parts else ""
         lines.append(f"- {indent}`{node.id}` {node.type.value}{detail}")
         if depth >= MAX_OUTLINE_DEPTH:
@@ -1052,6 +1078,14 @@ def write_service_markdown(
     filenames = service_markdown_filenames(services)
     service_docs = service_docs or {}
     signatures = {service.identity.full_name: service.signature for service in services}
+    writes = compute_pipeline_writes(services)
+    # A name two packages define is not read as a caller: which one runs is not known.
+    names = Counter(service.identity.full_name for service in services)
+    analysed = {
+        service.identity.full_name: service
+        for service in services
+        if names[service.identity.full_name] == 1
+    }
     for service in sorted(services, key=lambda item: item.identity.full_name.casefold()):
         path = service_dir / filenames[service.identity.full_name]
         path.write_text(
@@ -1065,6 +1099,8 @@ def write_service_markdown(
                 facts=(service_facts or {}).get(service.identity.full_name),
                 call_graph=(service_graphs or {}).get(service.identity.full_name),
                 signatures=signatures,
+                writes=writes,
+                analysed=analysed,
             ),
             encoding="utf-8",
         )

@@ -121,11 +121,14 @@ def test_synthetic_flow_tree_counts_and_observed_attributes() -> None:
     assert loops[0].in_array == "/orders"
     assert len(exits) == 3
     assert all(exit_node.signal == "SUCCESS" for exit_node in exits)
-    assert [exit_node.exit_from for exit_node in exits] == [
+    # FROM labels go through the free-text policy; only reserved scopes stay raw.
+    assert [exit_node.exit_from for exit_node in exits] == [None, None, None]
+    assert [exit_node.exit_label.value for exit_node in exits if exit_node.exit_label] == [
         "Try",
         "Each order",
         "Validate order batch",
     ]
+    assert all(exit_node.exit_target_id for exit_node in exits)
     assert [exit_node.source.line for exit_node in exits] == [472, 618, 894]
 
 
@@ -146,7 +149,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v11"
+    assert analysis.schema_version == "analysis.v12"
     assert analysis.metrics.call_occurrence_count == 85
     assert analysis.metrics.flow_call_occurrence_count == 85
     assert analysis.metrics.java_static_call_occurrence_count == 0
@@ -228,7 +231,7 @@ processes:
     analysis = analyze_path(_samples(), DEFAULT_CONFIG, processes_file)
     processes = {process.process_id: process for process in analysis.processes}
 
-    assert analysis.schema_version == "analysis.v11"
+    assert analysis.schema_version == "analysis.v12"
     assert set(processes) == {"order-batch-validation", "pgp-key-lookup"}
     assert analysis.metrics.process_definition_count == 2
     assert analysis.metrics.declared_entrypoint_count == 3
@@ -772,7 +775,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v11" in payload
+    assert "analysis.v12" in payload
     assert "## Disclosure Policies" in document_markdown
     assert "- Free text mode: include" in document_markdown
     assert "- Literal mode: include" in document_markdown

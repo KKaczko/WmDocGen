@@ -178,10 +178,12 @@ def test_every_builder_step_is_understood(tmp_path: Path) -> None:
     forms = [node.form for node in _nodes(service.flow_tree, FlowNodeType.SEQUENCE)]
     assert {"TRY", "CATCH", "FINALLY"} <= set(forms)
     exits = _nodes(service.flow_tree, FlowNodeType.EXIT)
-    assert [(node.exit_from, node.signal, node.failure_message) for node in exits] == [
-        ("$loop", "SUCCESS", ""),
-        ("$flow", "FAILURE", "stopped"),
+    messages = [node.failure_message.value if node.failure_message else None for node in exits]
+    assert [(node.exit_from, node.signal) for node in exits] == [
+        ("$loop", "SUCCESS"),
+        ("$flow", "FAILURE"),
     ]
+    assert messages == [None, "stopped"]
     expression_branch = _nodes(service.flow_tree, FlowNodeType.BRANCH)[-1]
     assert expression_branch.evaluate_labels is True
     first_map = service.mapping_operations

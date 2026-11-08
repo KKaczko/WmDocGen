@@ -1,4 +1,5 @@
 import type {
+  FlowView,
   GraphData,
   Manifest,
   PackageDetail,
@@ -16,6 +17,8 @@ export interface ExplorerRepository {
   manifest(): Promise<Manifest>;
   search(): Promise<SearchIndex>;
   service(id: string): Promise<ServiceDetail>;
+  /** The conditional flow of a FLOW service (`ServiceDetail.flow` says it exists). */
+  flow(id: string): Promise<FlowView>;
   /** Every call, for the graph view; loaded on first use. */
   graph(): Promise<GraphData>;
   package(id: string): Promise<PackageDetail>;
@@ -81,6 +84,13 @@ export class StaticJsonRepository implements ExplorerRepository {
       return Promise.reject(new NotFoundError("Not a service ID."));
     }
     return this.#get<ServiceDetail>(`services/${id}.json`);
+  }
+
+  flow(id: string): Promise<FlowView> {
+    if (!ID_PATTERN.test(id)) {
+      return Promise.reject(new NotFoundError("Not a service ID."));
+    }
+    return this.#get<FlowView>(`flows/${id}.json`);
   }
 
   #get<T>(path: string): Promise<T> {

@@ -23,6 +23,7 @@ from wm_doc.analysis import _apply_free_text_policy, _xml_path
 from wm_doc.builtins import builtin_effect, is_builtin_name
 from wm_doc.config import AppConfig
 from wm_doc.ir import (
+    CaseLabelKind,
     FlowNode,
     FlowNodeType,
     FlowService,
@@ -314,10 +315,18 @@ class _FlowRenderer:
                 self.visit(case, depth + 1, None)
                 continue
             label = _text(case.label)
+            withheld = label is None and case.label is not None
             if case.is_default_case or label == "$default":
                 head = "otherwise:"
-            elif label == "$null":
+            elif label == "$null" or (withheld and case.case_kind is CaseLabelKind.NULL):
                 head = "when missing:" if switch else "when (empty condition):"
+            elif withheld:
+                kind = (
+                    "expression"
+                    if node.evaluate_labels
+                    else _WITHHELD_KINDS.get(case.case_kind, "label")
+                )
+                head = f"when ({kind} withheld):"
             elif switch:
                 head = f"when {_quote(label)}:"
             else:
@@ -470,15 +479,32 @@ def _repeat_text(node: FlowNode) -> str:
     return text + ":"
 
 
+_WITHHELD_KINDS: dict[CaseLabelKind | None, str] = {
+    CaseLabelKind.TEXT: "value",
+    CaseLabelKind.PATTERN: "pattern",
+}
+
+
 def _exit_text(node: FlowNode) -> str:
-    scope = node.exit_from or "$parent"
-    scope_text = {"$loop": "the loop", "$parent": "the parent step", "$flow": "the service"}.get(
-        scope, _quote(scope)
-    )
+    if node.exit_label is not None:
+        label = _text(node.exit_label)
+        scope_text = _quote(label) if label is not None else "a labelled step (label withheld)"
+    else:
+        scope = node.exit_from or "$parent"
+        scope_text = {
+            "$loop": "the loop",
+            "$parent": "the parent step",
+            "$flow": "the service",
+        }.get(scope, _quote(scope))
     signal = (node.signal or "SUCCESS").upper()
     text = f"EXIT {scope_text} with {signal.lower()}"
-    if signal == "FAILURE" and node.failure_message:
-        text += f" message {_quote(_one_line(node.failure_message, MAX_LITERAL_CHARS))}"
+    if signal == "FAILURE" and node.failure_message is not None:
+        message = _text(node.failure_message)
+        text += (
+            f" message {_quote(_one_line(message, MAX_LITERAL_CHARS))}"
+            if message is not None
+            else " message (withheld)"
+        )
     return text
 
 

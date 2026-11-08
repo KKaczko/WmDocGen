@@ -1,7 +1,7 @@
 """The explorer data contract `wm-doc-explorer.v1`.
 
 These models describe every JSON file the explorer app reads. They are a projection of the
-analysis made for a browser, not a copy of `analysis.v11`: the vocabulary is lowercase and
+analysis made for a browser, not a copy of `analysis.json`: the vocabulary is lowercase and
 owned here, so renaming an analysis enum never reaches the app.
 
 Versioning: optional fields may be added within v1; removing or renaming anything is v2.
@@ -10,6 +10,7 @@ Versioning: optional fields may be added within v1; removing or renaming anythin
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +28,27 @@ DescriptionState = Literal["approved", "stale", "draft", "edited", "none"]
 DescriptionsShown = Literal["approved", "all", "none"]
 DatasetKind = Literal["synthetic", "private"]
 Severity = Literal["info", "warning", "error"]
+ConditionValues = Literal["included", "excluded"]
+Certainty = Literal["observed", "derived", "possible", "unknown"]
+OriginBasis = Literal[
+    "flow-xml", "is-rule", "callee-signature", "service-signature", "caller-pipeline", "limit"
+]
+FlowStepKind = Literal[
+    "sequence",
+    "try",
+    "catch",
+    "finally",
+    "branch",
+    "case",
+    "loop",
+    "repeat",
+    "map",
+    "call",
+    "transformer",
+    "exit",
+]
+CallReach = Literal["normal", "conditional", "failure-path", "unreachable"]
+Feasibility = Literal["possible", "conditional", "unresolved"]
 
 
 class ContractModel(BaseModel):
@@ -60,6 +82,8 @@ class Disclosure(ContractModel):
     notes: Literal["excluded"] = "excluded"
     descriptions: DescriptionsShown
     withheld_strings: int
+    # Case labels (branch condition values) in flows/: shown unless the build excludes them.
+    condition_values: ConditionValues = "included"
 
 
 class Counts(ContractModel):
@@ -293,6 +317,125 @@ class ServiceDetail(ContractModel):
     documents: list[DocumentUse] = Field(default_factory=list)
     adapter: AdapterInfo | None = None
     description: Description | None = None
+    # A FLOW service with decisions, EXITs or TRY/CATCH: its conditional flow is in
+    # flows/<id>.json, loaded when the reader opens it.
+    flow: FlowRef | None = None
+
+
+class FlowRef(ContractModel):
+    decisions: int
+    calls: int
+    exits: int
+
+
+# --- flows/<id>.json --------------------------------------------------------------------------
+# The conditional flow of one FLOW service. Python derives every fact and writes every text
+# (the same wording as the service pages); the app only shows them. Ids: D1 decisions, D1.c2
+# cases, C3 calls, E1 EXIT steps, in the order they appear in the FLOW.
+
+
+class FlowStep(ContractModel):
+    """One step of the FLOW outline."""
+
+    kind: FlowStepKind
+    ref: str | None = None
+    text: list[Segment]
+    target_id: str | None = None  # a call to an analysed service
+    never: bool = False  # the step never runs
+    children: list[FlowStep] = Field(default_factory=list)
+
+
+class FlowCase(ContractModel):
+    id: str
+    condition: list[Segment]
+    calls: list[Segment]
+    ends: list[Segment]
+    notes: list[Segment]
+    never: bool
+
+
+class FlowOrigin(ContractModel):
+    """One way a decision field may have got its value, as a chip: what, how sure, why."""
+
+    text: list[Segment]
+    certainty: Certainty
+    basis: OriginBasis
+    # The unconfirmed rules it rests on, as `flow_semantics.assumption_label` names them.
+    assumptions: str | None = None
+    evidence: SourceRef | None = None
+    # 0 for an origin of the field; 1.. for where a copied field comes from, under `copied`.
+    depth: int = 0
+    copied: str | None = None
+
+
+class FlowField(ContractModel):
+    """Where one field a decision tests may come from."""
+
+    path: str
+    summary: list[Segment]
+    origins: list[FlowOrigin]
+    origins_hidden: int
+    notes: list[list[Segment]]
+
+
+class FlowDecision(ContractModel):
+    id: str
+    heading: list[Segment]
+    evaluated_when: list[Segment] | None = None
+    in_loop: bool
+    notes: list[list[Segment]]
+    cases: list[FlowCase]
+    cases_hidden: int
+    no_match: list[Segment] | None = None
+    fields: list[FlowField]
+    fields_hidden: int
+    unfollowed: list[list[Segment]]
+
+
+class FlowCall(ContractModel):
+    id: str
+    target: str
+    target_id: str | None = None
+    how: Literal["step", "transformer"]
+    runs_when: list[Segment]
+    certainty: Certainty
+    assumptions: str | None = None
+    reach: CallReach
+
+
+class FlowScenarioRow(ContractModel):
+    id: str
+    conditions: list[Segment]
+    calls: list[Segment]
+    ends: list[Segment]
+    depends_on: list[Segment]
+    feasibility: Feasibility
+    assumptions: str | None = None
+
+
+class FlowScenarioTable(ContractModel):
+    decisions: list[str]
+    rows: list[FlowScenarioRow]
+    # Cut short, decisions left out, outcomes ruled out (never with a literal value).
+    notes: list[list[Segment]]
+
+
+class FlowView(ContractModel):
+    contract: ContractVersion = CONTRACT
+    service_id: str
+    outline: list[FlowStep]
+    outline_hidden: int
+    decisions: list[FlowDecision]
+    decisions_hidden: int
+    calls: list[FlowCall]
+    calls_hidden: int
+    exits: list[list[Segment]]
+    exits_hidden: int
+    never_run: list[list[Segment]]
+    never_run_hidden: int
+    scenarios: list[FlowScenarioTable]
+    scenario_notes: list[list[Segment]]
+    limits: list[list[Segment]]
 
 
 # --- packages/<id>.json and overview.json ----------------------------------------------------
@@ -391,6 +534,7 @@ def contract_schema() -> dict[str, Any]:
             (Manifest, "serialization"),
             (SearchIndex, "serialization"),
             (ServiceDetail, "serialization"),
+            (FlowView, "serialization"),
             (GraphData, "serialization"),
             (PackageDetail, "serialization"),
             (ServerOverview, "serialization"),
@@ -405,9 +549,14 @@ def contract_schema() -> dict[str, Any]:
 SCHEMA_PATH = "docs/contracts/explorer.v1.schema.json"
 
 
-def render_contract_schema() -> str:
-    import json
+def dump_json(model: BaseModel) -> bytes:
+    """A contract file as written: compact JSON with sorted keys and a final newline."""
+    payload = model.model_dump(mode="json", by_alias=True)
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return (text + "\n").encode("utf-8")
 
+
+def render_contract_schema() -> str:
     return json.dumps(contract_schema(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 

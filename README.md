@@ -261,7 +261,7 @@ operation, or "Not analysed") and the error handling ("not analysed").
 | `provider-probe` | Check how a model server can be reached |
 | `probe-shapes` | Key layout of triggers, descriptors and adapter services (no values) |
 | `scan` | Package and artifact inventory only |
-| `explorer build` / `demo` / `serve` | Interactive explorer: search services, open one, follow its calls (`docs/explorer.md`) |
+| `explorer build` / `demo` / `serve` | Interactive explorer: search services, open one, follow its calls, see when each step runs (`docs/explorer.md`) |
 
 ## Explorer (preview)
 
@@ -290,7 +290,16 @@ says so on every page. Details: `docs/explorer.md`.
 
 ## Output reference
 
-`wm-doc analyze` writes `analysis.json` (schema `analysis.v11`; each fact is stored once, on
+**`analysis.v12`.** BRANCH case labels keep their kind (`$null`, blank, a `/pattern/`, other
+text) and label expressions the fields they test, even when the free-text policy withholds the
+label, so decisions read the same in every mode. EXIT `FROM` labels and failure messages now go
+through the free-text policy and the secret guard; only `$flow`, `$parent`, `$loop` and
+`$iteration` are kept as written. What changes once after the upgrade: in `redact` and `omit`
+modes, the facts hash of FLOW services with withheld case labels, EXIT labels or failure
+messages; in `include` mode, only that of services whose EXIT label or failure message looks
+secret-like (now withheld). Their approved descriptions then show "approved, facts changed".
+
+`wm-doc analyze` writes `analysis.json` (schema `analysis.v12`; each fact is stored once, on
 the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,
 `entrypoints.md`, `artifacts.md`, `platform-services.md` (platform services the code calls,
 with their descriptions and callers), `packages/*.md`, `services/*.md`, `documents/*.md`,
@@ -298,6 +307,12 @@ with their descriptions and callers), `packages/*.md`, `services/*.md`, `documen
 `service-catalogue.md` with `--docs-dir`, and with `--render-graphs` SVG/PNG graphs plus one call
 graph per service (`graphs/services/`). Before writing it removes only these generated files and
 directories; other files in the output directory are kept.
+
+A FLOW service page has a Decisions section: when each call runs, where the fields its BRANCH
+steps test come from, scenarios along dependent decisions, and, for a field the service takes
+from its caller, what each direct caller passes into it (a literal, a copy, or nothing set
+before the call). Only when one literal reaches the call with nothing in between that may
+change it does the page say which single case of a decision can run on that call.
 
 ## Analysis cache
 

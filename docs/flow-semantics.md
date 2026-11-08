@@ -115,6 +115,17 @@ The IBM webMethods documentation the audit used (10.15 unless noted):
   label-expression mode (S8); a later EXIT-ON SUCCESS alternative may also run after a MAP that
   succeeded (S10).
 
+### Across services (stage 7)
+
+A called service shares the caller's pipeline (S16). What a callee may write is summarized
+from its own FLOW or Java code and its analysed callees; a platform service, a service outside
+the packages or a dynamic call makes it unknown, so the call stays a possible change. What a
+caller passes is read from its FLOW just before the call: values written by the call's own
+input map are what the callee receives (S17 is only about whether they stay after the call).
+A literal decides a switch-mode decision only by exact comparison (S1, S2), falling back to
+`$default` (S6) or to no case (S7); it never decides a pattern, an expression, a withheld
+label or a decision inside a loop.
+
 ### Rule status and the facts hash
 
 The `### Decisions` part of a description file's facts block is refreshed on every run but is

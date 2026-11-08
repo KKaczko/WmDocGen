@@ -35,6 +35,7 @@ from wm_doc.call_targets import TargetStatus, classify_target
 from wm_doc.flow_paths import PipelineRef, expression_refs, path_ref
 from wm_doc.ir import (
     CallType,
+    CaseLabelKind,
     FlowNode,
     FlowNodeType,
     FlowService,
@@ -87,6 +88,8 @@ class CaseCondition:
     text: str | None = None  # the label as written; only when the policy includes it
     refs: tuple[PipelineRef, ...] = ()  # fields an expression refers to (never evaluated)
     refs_parsed: bool = True  # False when an expression could not be split reliably
+    # The policy withholds the label, but its kind (and an expression's fields) is known.
+    withheld: bool = False
 
 
 class GuardKind(StrEnum):
@@ -530,6 +533,8 @@ class _Analysis:
     # EXIT targets --------------------------------------------------------------------------
 
     def _exit_target(self, node: FlowNode) -> tuple[str | None, str | None, ExitScope]:
+        if node.exit_label is not None:
+            return self._label_target(node)
         raw = (node.exit_from or "$parent").strip()
         parent = self.parent[node.id]
         if raw == "$flow":
@@ -552,18 +557,14 @@ class _Analysis:
             if parent is None:
                 return None, "no enclosing LOOP or REPEAT", scope
             return parent.id, None, scope
-        withheld = False
-        while parent is not None:
-            label = parent.label
-            if parent.type is not FlowNodeType.BRANCH_CASE and label is not None:
-                if label.disclosure is TextDisclosure.INCLUDED and label.value is not None:
-                    if label.value.strip() == raw:
-                        return parent.id, None, ExitScope.LABEL
-                else:
-                    withheld = True
-            parent = self.parent[parent.id]
-        note = "the step labels are withheld" if withheld else "no enclosing step has that label"
-        return None, note, ExitScope.LABEL
+        return None, "the step it leaves is not known", ExitScope.LABEL
+
+    def _label_target(self, node: FlowNode) -> tuple[str | None, str | None, ExitScope]:
+        """EXIT FROM a label: the parser found the step by its label as written (any mode)."""
+        target = node.exit_target_id
+        if target is not None and target in self.nodes:
+            return target, None, ExitScope.LABEL
+        return None, "no enclosing step has that label", ExitScope.LABEL
 
     def _exit_reach(self, exit_id: str, target: str | None) -> str | None:
         if target is None:
@@ -622,16 +623,18 @@ class _Analysis:
                 self.case_excludes_earlier.add(case.id)
                 if condition.kind is ConditionKind.UNLABELLED or (
                     condition.kind is ConditionKind.EXPRESSION
+                    and not condition.withheld  # a withheld text is neither blank nor $null
                     and (condition.text or "").strip() in ("", "$null")
                 ):
                     self.unreachable_cases[case.id] = "S8"
                     notes.append("LABELS_IGNORED")
             elif condition.kind in _COMPARABLE:
                 key = (condition.kind, condition.text)
-                if key in seen:
+                if key in seen and not condition.withheld:  # withheld texts are not compared
                     self.unreachable_cases[case.id] = "S37"
                     notes.append("DUPLICATE_LABEL")
-                seen.add(key)
+                if not condition.withheld:
+                    seen.add(key)
                 if condition.kind is ConditionKind.PATTERN:
                     overlap = True
                 if overlap and position:
@@ -640,7 +643,7 @@ class _Analysis:
                     self.case_excludes_earlier.add(case.id)
                     rules.append("S37")
             self.case_rules[case.id] = sort_rules(rules)
-            if condition.kind is ConditionKind.WITHHELD:
+            if condition.kind is ConditionKind.WITHHELD or condition.withheld:
                 notes.append("LABELS_WITHHELD")
             if condition.kind is ConditionKind.EXPRESSION and not condition.refs_parsed:
                 notes.append("EXPRESSION_NOT_SPLIT")
@@ -1479,7 +1482,7 @@ def _condition(case: FlowNode, mode: DecisionMode) -> CaseCondition:
         kind = ConditionKind.UNLABELLED if mode is DecisionMode.EXPRESSIONS else ConditionKind.EMPTY
         return CaseCondition(kind)
     if label.disclosure is not TextDisclosure.INCLUDED or label.value is None:
-        return CaseCondition(ConditionKind.WITHHELD)
+        return _withheld_condition(case, mode)
     text = label.value
     if mode is DecisionMode.EXPRESSIONS:
         refs = expression_refs(text)
@@ -1491,6 +1494,39 @@ def _condition(case: FlowNode, mode: DecisionMode) -> CaseCondition:
     if len(text) > 2 and text.startswith("/") and text.endswith("/"):
         return CaseCondition(ConditionKind.PATTERN, text)
     return CaseCondition(ConditionKind.VALUE, text)
+
+
+def _withheld_condition(case: FlowNode, mode: DecisionMode) -> CaseCondition:
+    """A case whose label the policy withholds, read from the kind the parser recorded.
+
+    `$null` is a keyword, so it is shown in every mode; other text stays withheld, and an
+    expression keeps only the fields it refers to.
+    """
+    kind = case.case_kind
+    if kind is None:
+        return CaseCondition(ConditionKind.WITHHELD)  # not recorded: nothing is known
+    if kind is CaseLabelKind.DEFAULT:
+        return CaseCondition(ConditionKind.DEFAULT, "$default")
+    if mode is DecisionMode.EXPRESSIONS:
+        if kind is CaseLabelKind.BLANK:
+            return CaseCondition(ConditionKind.UNLABELLED)
+        if kind is CaseLabelKind.NULL:
+            return CaseCondition(ConditionKind.EXPRESSION, "$null", ())
+        refs = case.condition_refs
+        return CaseCondition(
+            ConditionKind.EXPRESSION,
+            None,
+            tuple(ref for item in refs or () if (ref := path_ref(item)) is not None),
+            refs_parsed=refs is not None,
+            withheld=True,
+        )
+    if kind is CaseLabelKind.BLANK:
+        return CaseCondition(ConditionKind.EMPTY)
+    if kind is CaseLabelKind.NULL:
+        return CaseCondition(ConditionKind.NULL, "$null")
+    if kind is CaseLabelKind.PATTERN:
+        return CaseCondition(ConditionKind.PATTERN, None, withheld=True)
+    return CaseCondition(ConditionKind.VALUE, None, withheld=True)
 
 
 def step_form(node: FlowNode) -> str | None:

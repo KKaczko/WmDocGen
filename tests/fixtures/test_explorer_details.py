@@ -208,7 +208,9 @@ def test_entry_points_and_effects_link_analysed_services(built: dict[str, bytes]
         {"name": "orders.db:insertOrder", "id": _detail(built, "orders.db:insertOrder")["id"]}
     ]
     cancel = _detail(built, "orders.api:cancelOrder")["entryPoints"]
-    assert [e["kind"] for e in cancel] == ["JMS trigger"]
+    # orders.api:processOrder (no callers) also calls it.
+    assert [e["kind"] for e in cancel] == ["JMS trigger", "service with no callers"]
+    assert cancel[1]["path"][0]["name"] == "orders.api:processOrder"
     documents = detail["documents"]
     assert {"name": "orders.docs:Order", "role": "input", "resolved": True} in documents
 

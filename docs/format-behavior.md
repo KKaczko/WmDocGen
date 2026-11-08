@@ -170,7 +170,9 @@ Observed from current fixtures:
 - `LOOP` elements can carry `NAME`, `IN-ARRAY`, optional `OUT-ARRAY`, and `TIMEOUT`. M2a does not
   simulate iterations or infer collection schemas.
 - `EXIT` elements observed in real 10.15 services carry `FROM`, `SIGNAL="SUCCESS"`, and an
-  empty `FAILURE-MESSAGE`; the synthetic SampleOrders fixture has three in that shape.
+  empty `FAILURE-MESSAGE`; the synthetic SampleOrders fixture has three in that shape. Since
+  `analysis.v12` a `FROM` label and a non-blank `FAILURE-MESSAGE` follow the free-text policy
+  (secret guard first); a blank message is no message.
 - SampleOrders uses `LOOP` and `EXIT`; PGP active FLOW fixtures do not currently show either tag.
 - Observed `MAP`-family elements can contain nested operations and invocations. M2b positions
   structural `MAP` nodes in the FLOW tree and also extracts canonical mapping records for observed

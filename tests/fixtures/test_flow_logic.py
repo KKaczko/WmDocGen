@@ -338,10 +338,12 @@ def test_withheld_labels_are_never_shown_as_empty_strings(
     )
     logic = _logic(service)
 
-    kinds = [case.condition.kind for case in logic.decision("D1").cases]
-    assert kinds == [ConditionKind.WITHHELD, ConditionKind.EMPTY]
+    cases = logic.decision("D1").cases
+    # The kind is known from the file (analysis.v12); only the text is withheld.
+    assert [case.condition.kind for case in cases] == [ConditionKind.VALUE, ConditionKind.EMPTY]
+    assert [case.condition.withheld for case in cases] == [True, False]
     text = render_decisions_section(logic)
-    assert "(label withheld)" in text
+    assert "`/s` is a value (withheld)" in text
     assert "ACTIVE" not in text
     assert 'is ""' not in text
 
@@ -351,7 +353,7 @@ def test_secret_like_labels_are_withheld(tmp_path: Path) -> None:
     text = render_decisions_section(_logic(service))
 
     assert "TOKEN_EXPIRED" not in text
-    assert "(label withheld)" in text
+    assert "`/s` is a value (withheld)" in text
 
 
 @pytest.mark.slow

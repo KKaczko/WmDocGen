@@ -228,7 +228,8 @@ def test_export_meets_the_budgets_at_production_size(tmp_path: Path) -> None:
     budgets = {
         "export seconds (30)": (seconds, 30),
         "memory MB above the analysis (300)": (peak / 1e6, 300),
-        "data MB (30)": (report.data_bytes / 1e6, 30),
+        # An average, so a larger server is never over it; a bloating file format is.
+        "data KB per service (8)": (report.data_bytes / len(services) / 1e3, 8),
         "graph.json MB (2)": ((data / "graph.json").stat().st_size / 1e6, 2),
         "search.json MB (2)": ((data / "search.json").stat().st_size / 1e6, 2),
         "largest service file KB (100)": (

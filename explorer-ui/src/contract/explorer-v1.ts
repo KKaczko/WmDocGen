@@ -42,6 +42,7 @@ export interface Dataset {
  * via the `definition` "Disclosure".
  */
 export interface Disclosure {
+  conditionValues: "included" | "excluded";
   descriptions: "approved" | "all" | "none";
   designerComments: "excluded";
   literals: "excluded";
@@ -108,6 +109,7 @@ export interface ServiceDetail {
   effectsHidden: number;
   entryPoints: EntryPoint[];
   entryPointsTotal: number;
+  flow: FlowRef | null;
   id: string;
   kind: "flow" | "java" | "adapter" | "opaque";
   name: string;
@@ -276,6 +278,15 @@ export interface EntryPoint {
 }
 /**
  * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowRef".
+ */
+export interface FlowRef {
+  calls: number;
+  decisions: number;
+  exits: number;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
  * via the `definition` "PackageRef".
  */
 export interface PackageRef {
@@ -312,6 +323,147 @@ export interface SignatureField {
 export interface DocumentRef {
   name: string;
   resolved: boolean;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowCall".
+ */
+export interface FlowCall {
+  assumptions: string | null;
+  certainty: "observed" | "derived" | "possible" | "unknown";
+  how: "step" | "transformer";
+  id: string;
+  reach: "normal" | "conditional" | "failure-path" | "unreachable";
+  runsWhen: (TextSegment | CodeSegment)[];
+  target: string;
+  targetId: string | null;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowCase".
+ */
+export interface FlowCase {
+  calls: (TextSegment | CodeSegment)[];
+  condition: (TextSegment | CodeSegment)[];
+  ends: (TextSegment | CodeSegment)[];
+  id: string;
+  never: boolean;
+  notes: (TextSegment | CodeSegment)[];
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowDecision".
+ */
+export interface FlowDecision {
+  cases: FlowCase[];
+  casesHidden: number;
+  evaluatedWhen: (TextSegment | CodeSegment)[] | null;
+  fields: FlowField[];
+  fieldsHidden: number;
+  heading: (TextSegment | CodeSegment)[];
+  id: string;
+  inLoop: boolean;
+  noMatch: (TextSegment | CodeSegment)[] | null;
+  notes: (TextSegment | CodeSegment)[][];
+  unfollowed: (TextSegment | CodeSegment)[][];
+}
+/**
+ * Where one field a decision tests may come from.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowField".
+ */
+export interface FlowField {
+  notes: (TextSegment | CodeSegment)[][];
+  origins: FlowOrigin[];
+  originsHidden: number;
+  path: string;
+  summary: (TextSegment | CodeSegment)[];
+}
+/**
+ * One way a decision field may have got its value, as a chip: what, how sure, why.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowOrigin".
+ */
+export interface FlowOrigin {
+  assumptions: string | null;
+  basis:
+    "flow-xml" | "is-rule" | "callee-signature" | "service-signature" | "caller-pipeline" | "limit";
+  certainty: "observed" | "derived" | "possible" | "unknown";
+  copied: string | null;
+  depth: number;
+  evidence: SourceRef | null;
+  text: (TextSegment | CodeSegment)[];
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowScenarioRow".
+ */
+export interface FlowScenarioRow {
+  assumptions: string | null;
+  calls: (TextSegment | CodeSegment)[];
+  conditions: (TextSegment | CodeSegment)[];
+  dependsOn: (TextSegment | CodeSegment)[];
+  ends: (TextSegment | CodeSegment)[];
+  feasibility: "possible" | "conditional" | "unresolved";
+  id: string;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowScenarioTable".
+ */
+export interface FlowScenarioTable {
+  decisions: string[];
+  notes: (TextSegment | CodeSegment)[][];
+  rows: FlowScenarioRow[];
+}
+/**
+ * One step of the FLOW outline.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowStep".
+ */
+export interface FlowStep {
+  children: FlowStep[];
+  kind:
+    | "sequence"
+    | "try"
+    | "catch"
+    | "finally"
+    | "branch"
+    | "case"
+    | "loop"
+    | "repeat"
+    | "map"
+    | "call"
+    | "transformer"
+    | "exit";
+  never: boolean;
+  ref: string | null;
+  targetId: string | null;
+  text: (TextSegment | CodeSegment)[];
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "FlowView".
+ */
+export interface FlowView {
+  calls: FlowCall[];
+  callsHidden: number;
+  contract: "wm-doc-explorer.v1";
+  decisions: FlowDecision[];
+  decisionsHidden: number;
+  exits: (TextSegment | CodeSegment)[][];
+  exitsHidden: number;
+  limits: (TextSegment | CodeSegment)[][];
+  neverRun: (TextSegment | CodeSegment)[][];
+  neverRunHidden: number;
+  outline: FlowStep[];
+  outlineHidden: number;
+  scenarioNotes: (TextSegment | CodeSegment)[][];
+  scenarios: FlowScenarioTable[];
+  serviceId: string;
 }
 /**
  * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema

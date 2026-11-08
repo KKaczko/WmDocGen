@@ -96,7 +96,8 @@ Subsystems:
 - `flow_tree` stores ordered FLOW nodes for `FLOW`, `SEQUENCE`, `BRANCH`, derived `BRANCH_CASE`,
   `LOOP`, structural `MAP`, `INVOKE`, `MAPINVOKE`, and `EXIT`.
 - `EXIT` nodes preserve observed `FROM`, `SIGNAL`, and `FAILURE-MESSAGE` attributes. Unknown EXIT
-  shapes are still parsed and also produce findings.
+  shapes are still parsed and also produce findings. (Since `analysis.v12`, `FROM` labels and
+  `FAILURE-MESSAGE` go through the free-text policy; see below.)
 
 M2b migrates to `analysis.v3`:
 
@@ -334,6 +335,23 @@ M12 then migrates to `analysis.v11` for the approved readers:
 - Entry points also come from legacy REST v1 handlers (`_get`, `_post`, ... at
   `/rest/<namespace as path>`).
 
+M14 stage 5 (owner-approved) migrates to `analysis.v12` for disclosure hardening of FLOW
+labels:
+
+- `BRANCH_CASE` nodes carry `case_kind` (`default`, `null`, `blank`, `pattern`, `text`) and, under
+  a BRANCH with label expressions, `condition_refs` (the `%field%` references as paths), both
+  read from the raw label before the free-text policy. `flow_logic` reads a withheld label from
+  them (`CaseCondition.withheld`): `$null` is shown in every mode as a keyword, other text stays
+  withheld, and a withheld label is never compared with another or with a literal.
+- `EXIT` nodes keep only `SIGNAL` in `attributes`. `exit_from` holds a reserved scope (`$flow`,
+  `$parent`, `$loop`, `$iteration`); a step label is `exit_label` and `FAILURE-MESSAGE` is
+  `failure_message`, both `TextValue`s under the free-text policy with the secret guard first.
+  The parser resolves a label EXIT to `exit_target_id` from the raw labels, so the control model
+  finds the step it leaves in every mode.
+- In `include` mode pages, prompts and facts hashes are byte-identical (golden test) except for
+  secret-like EXIT labels and messages, which are now withheld; in `redact` and `omit` modes they
+  change for FLOW services with withheld labels or EXIT texts.
+
 M13 (owner-approved PoC) adds the explorer and keeps `analysis.v11`:
 
 - `wm-doc explorer build|demo|serve` writes a static web app next to the data contract
@@ -414,6 +432,17 @@ may fail on a missing array), the calls whose responses it depends on, a feasibi
 conditional, unresolved) and the assumed rules it rests on. Decisions inside loops and
 independent decisions are never combined. The service page shows the tables under
 `### Scenarios` in the Decisions section.
+
+Stage 7 adds conservative facts across services. `flow_writes.py` summarizes, callees first,
+the pipeline fields each fully analysed FLOW or Java service may write or drop; any platform
+call, call outside the packages, dynamic call, cycle or unreadable Java access makes the
+summary "unknown". Lineage uses a summary only to drop a call from "calls in between" when it
+cannot change the field. `flow_callers.py` lists the decision inputs of a service (fields its
+decisions test that it does not set first) and, for each direct caller (at most 50), what the
+caller's FLOW holds in that field just before the call (a separate lineage walk with a probe
+at the call, after its input map). Only a single observed literal with no call in between can
+narrow a switch-mode decision outside a loop to the matching case, `$default` or none. The
+service page shows this as "What its callers pass" under the field.
 
 `flow_answers.py` (stage 4) ties model answers to the control model. For FLOW services the
 describe prompt shows the pseudo-code with decision, case, call and EXIT ids and a block that
