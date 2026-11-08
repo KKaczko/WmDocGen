@@ -11,3 +11,8 @@ samples/** text=auto eol=lf
 
 # Golden test snapshots are compared byte for byte.
 tests/fixtures/golden/** text eol=lf
+
+# The explorer app is formatted with LF (Prettier) and its committed build must not depend on
+# the checkout: with CRLF sources Vite writes mixed line endings into index.html.
+explorer-ui/** text=auto eol=lf
+src/wm_doc/explorer/app/** text=auto eol=lf
