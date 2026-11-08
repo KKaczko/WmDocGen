@@ -361,6 +361,16 @@ RULES: tuple[Rule, ...] = (
         DOCUMENTED,
         ("V27",),
     ),
+    Rule(
+        "S39",
+        "MAP",
+        "A document this service did not link may still be shared: its caller, or a service "
+        "it called earlier, may have linked it with another one (S38). A change inside one "
+        "document may therefore change the field with the same path below any other "
+        "document.",
+        ASSUMED,
+        ("V35",),
+    ),
 )
 
 RULES_BY_ID: dict[str, Rule] = {item.id: item for item in RULES}

@@ -409,7 +409,11 @@ caller's pipeline. BRANCH cases, EXITs, failure paths (CATCH, EXIT-ON SUCCESS an
 REPEAT) and LOOP iterations are joined; after a failed EXIT-ON SUCCESS or DONE child, or a
 failed attempt of a REPEAT on FAILURE, first-level fields roll back while nested ones keep both
 values as possible (S36). Linking a whole document shares it (S38): a line that changes a field
-inside one of two linked documents adds a possible origin to the same field of the other. Any
+inside one of two linked documents adds a possible origin to the same field of the other.
+Links made by the caller or by a service called earlier are not known (S39), so a line that
+changes a field inside any document also adds a possible origin to the field with the same
+path below every other followed document, and a call whose summary writes such a field stays
+"in between". An INVOKE without a SERVICE may change any field (an unknown origin). Any
 called service may change any field (S16), so the
 calls between the last certain definition and the decision are listed as a caveat. Steps with
 a scope and loops nested too deeply are not followed; the fields they may change get an

@@ -2,7 +2,7 @@
 
 wm-doc never runs a service. When it says which steps run under which conditions, or where a
 value that a BRANCH tests comes from, it relies on Integration Server FLOW behaviour. Every such
-rule is listed in `src/wm_doc/flow_semantics.py` with an id (S1-S38) and a status:
+rule is listed in `src/wm_doc/flow_semantics.py` with an id (S1-S39) and a status:
 
 | Status | Meaning | How readers see it |
 | --- | --- | --- |
@@ -63,6 +63,7 @@ new ids (S31-S38).
 | S36 | Pipeline | After a failed child of an EXIT-ON SUCCESS or DONE sequence, or a failed attempt of a REPEAT on FAILURE, the first pipeline level is rolled back; nested documents changed in place may keep their changes. | documented | V14, V28 | [3], [4], [5] |
 | S37 | BRANCH | When labels can match the same value (a repeated label, or overlapping patterns), the first matching child in document order is assumed to win. | assumed | V1 | [1] |
 | S38 | MAP | Linking a whole document copies a reference: a change inside it through one field is seen through the other; a String is copied by value. | documented | V27 | [5] |
+| S39 | MAP | A document this service did not link may still be shared: its caller or a service it called earlier may have linked it with another one (S38), so a change inside one document may change the field with the same path below any other document. | assumed | V35 | [5] |
 
 ### Sources
 
@@ -108,6 +109,11 @@ The IBM webMethods documentation the audit used (10.15 unless noted):
 - Linked documents (S38): a line that changes a field inside one of two linked documents may
   also change the same field of the other; that change is listed as possible, so neither field
   "comes from" its own definition alone.
+- Documents shared elsewhere (assumption S39): which documents the caller or an earlier called
+  service linked is not known, so a line (or a called service) that changes a field inside one
+  document may also change the field with the same path below any other document, for example
+  `/y/status` and `/x/status`. That change is listed as possible and keeps a call "in between",
+  so no literal is then the only possible value. A first-level field is never shared.
 - In an EXIT-ON DONE sequence a step that fails before its EXIT does not stop the later steps,
   so they no longer claim that the EXIT's case was not taken; an EXIT-ON SUCCESS sequence with
   no step at all finishes.
@@ -181,6 +187,7 @@ edit `flow.xml` by hand.
 | V32 | (a) A transformer (for example `pub.flow:debugLog`) whose outputs are not linked; (b) two transformers in one MAP that both write `/t` through their outputs | none | Does (a) run (look in the server log)? Which value does `/t` get in (b), and is it the same every run? |
 | V33 | Two conditional links to one target `/t`, both conditions true, from `/a` and `/b` | `a=1`, `b=2` | Which value does `/t` get, and is it the same every run? |
 | V34 | BRANCH on `/x` with only child A (no `$null`, no `$default`), then a MAP setting `/after=reached` | `x` absent; `x=B` | Does `x` absent fail the service? Does `x=B` reach `/after`? |
+| V35 | Service B sets `/y/status=B`. Service A links the whole document `/x` to `/y`, sets `/x/status=A`, invokes B and then copies `/x/status` to `/after`. Also: service C receives `/x` and `/y` from A linked that way and sets `/y/status=C` | none | Is `/after` "B" (B changed the document A shares)? After C, is A's `/x/status` "C"? |
 
 Report results by check id. Each result changes one or more rules from assumed to verified, or
 corrects a rule statement; a corrected rule may also need the analysis to change.

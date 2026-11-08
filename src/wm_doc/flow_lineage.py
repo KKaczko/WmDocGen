@@ -16,6 +16,9 @@ Nothing is evaluated and no field is ever matched by a similar name. A definitio
 earlier ones only when it certainly writes the field; otherwise the earlier ones stay possible.
 Linking a whole document shares it (S38): a line that changes a field inside one of the two
 linked documents may also change the same field of the other, which is kept as possible.
+Documents linked elsewhere (by the caller, or by a service called earlier) are not known, so
+a line changing a field inside any document may also change the field with the same path
+below any other document; that is kept as possible too (S39).
 BRANCH cases, failure paths (CATCH, EXIT-ON SUCCESS and DONE, REPEAT), EXITs and LOOP iterations
 are joined, so every definition that can reach a decision on a path the model knows is listed.
 After a failed child of an EXIT-ON SUCCESS or DONE sequence, or a failed attempt of a REPEAT on
@@ -53,7 +56,7 @@ from wm_doc.flow_logic import (
 )
 from wm_doc.flow_paths import PipelineRef, path_ref
 from wm_doc.flow_semantics import PIPELINE_RESET
-from wm_doc.flow_writes import PipelineWrites
+from wm_doc.flow_writes import PipelineWrites, may_share
 from wm_doc.ir import (
     FlowMap,
     FlowNode,
@@ -91,6 +94,7 @@ class OriginKind(StrEnum):
     RESTORED = "restored"  # pub.flow:restorePipeline*
     PARTIAL = "partial"  # a mapping line writes or drops a field inside it
     LINKED = "linked"  # changed in place through a linked document (S38)
+    SHARED = "shared"  # may be changed through a document shared elsewhere (S39)
     COLLECTED = "collected"  # a LOOP's OUT-ARRAY
     SERVICE_INPUT = "service_input"  # a declared input, unchanged on this path
     CALLER = "caller"  # not set by this service on this path
@@ -112,6 +116,7 @@ ABSENT_KINDS = frozenset(
         OriginKind.DROPPED,
         OriginKind.CLEARED,
         OriginKind.LINKED,
+        OriginKind.SHARED,
         OriginKind.UNKNOWN,
     }
 )
@@ -386,6 +391,11 @@ class _Lineage:
         for key in self.keys:
             for length in range(1, len(key) + 1):
                 self.under.setdefault(key[:length], []).append(key)
+        # A name below the first level -> the followed fields that have it there (S39).
+        self.inner: dict[str, list[Key]] = {}
+        for key in self.keys:
+            for segment in dict.fromkeys(key[1:]):
+                self.inner.setdefault(segment, []).append(key)
         self.defs: list[_Def] = []
         self.def_index: dict[tuple[OriginKind, str | None, str | None, Key], int] = {}
         self.snapshots: dict[str, dict[Key, _Value]] = {}
@@ -707,7 +717,8 @@ class _Lineage:
         for write in writes:
             for key in self._overlapping(write.target):
                 affected.setdefault(key, []).append(write)
-        if not affected:
+        shared = self._shared_writes(writes)
+        if not affected and not shared:
             return state
         result = dict(state)
         for key, items in affected.items():
@@ -720,16 +731,20 @@ class _Lineage:
                 all_weak = all_weak and weak
             defs, calls = state[key]
             result[key] = (defs | numbers, calls) if all_weak else (frozenset(numbers), ())
-        if self.aliases:
-            self._through_links(affected, result)
+        linked = self._through_links(affected, result) if self.aliases else set()
+        self._through_shared(shared, linked, result)
         return result
 
-    def _through_links(self, affected: dict[Key, list[_Write]], result: _State) -> None:
+    def _through_links(
+        self, affected: dict[Key, list[_Write]], result: _State
+    ) -> set[tuple[str, Key]]:
         """A line changing a field inside a linked document also changes the other one (S38).
 
         Only lines that write the field itself or something inside it change the shared
-        document in place; a line replacing a whole document above it does not.
+        document in place; a line replacing a whole document above it does not. Returns the
+        (mapping line, field) pairs handled, which S39 then leaves alone.
         """
+        handled: set[tuple[str, Key]] = set()
         for key, items in affected.items():
             partners = self.aliases.get(key)
             if not partners:
@@ -757,6 +772,57 @@ class _Lineage:
                     item.source = write.op.source
                     numbers, calls = result[other]
                     result[other] = (numbers | {item.number}, calls)
+                    handled.add((write.op.id, other))
+        return handled
+
+    def _shared_writes(self, writes: list[_Write]) -> list[tuple[_Write, Key]]:
+        """Lines changing a field inside a document, with the followed fields of other
+        documents they may change if the two documents are shared (S39)."""
+        pairs: list[tuple[_Write, Key]] = []
+        for write in writes:
+            if len(write.target) < 2:
+                continue  # a first-level field is replaced, not changed in place
+            seen: set[Key] = set()
+            for segment in dict.fromkeys(write.target[1:]):
+                for key in self.inner.get(segment, ()):
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if not _overlaps(write.target, key) and may_share(write.target, key):
+                        pairs.append((write, key))
+        return pairs
+
+    def _through_shared(
+        self,
+        pairs: list[tuple[_Write, Key]],
+        linked: set[tuple[str, Key]],
+        result: _State,
+    ) -> None:
+        """A line changing a field inside a document may change the same field of another
+        document that the caller or a called service linked with it (S39). Pairs that a
+        link made in this service already explains (S38) are left alone."""
+        for write, key in pairs:
+            if (write.op.id, key) in linked:
+                continue
+            item = self._definition(
+                OriginKind.SHARED,
+                write.anchor,
+                f"{write.op.id}:{'/'.join(write.target)}",
+                key,
+                certainty=Certainty.POSSIBLE,
+                weak=True,
+                phase=write.phase,
+                order=write.op.order,
+            )
+            item.rules.add("S39")
+            item.call_node = write.call_node
+            item.role = write.role
+            item.operation = write.kind
+            item.written = write.target
+            item.line = write.op.source.line or item.line
+            item.source = write.op.source
+            numbers, calls = result[key]
+            result[key] = (numbers | {item.number}, calls)
 
     def _line_definition(
         self, write: _Write, key: Key, before: _State, several: bool
@@ -870,7 +936,8 @@ class _Lineage:
     def _call_effects(self, node: FlowNode, state: _State, reads: list[Key]) -> _State:
         call = self.calls.get(node.id)
         if call is None:
-            return state
+            # An INVOKE that names no service: what it runs may change any field (S16).
+            return self._havoc(state, node, "unnamed_call", ("S16",))
         reset = PIPELINE_RESET.get(call.target)
         result: _State = {}
         if reset is not None:
@@ -1199,7 +1266,8 @@ class _Lineage:
     def _in_place(self, number: int) -> bool:
         item = self.defs[number]
         return (
-            item.kind in (OriginKind.PARTIAL, OriginKind.LINKED, OriginKind.UNKNOWN)
+            item.kind
+            in (OriginKind.PARTIAL, OriginKind.LINKED, OriginKind.SHARED, OriginKind.UNKNOWN)
             or "list_element" in item.notes
         )
 
@@ -1353,6 +1421,7 @@ class _Lineage:
         if not out_array:
             return state
         result = dict(state)
+        handled: set[Key] = set()
         for key in self._overlapping(out_array):
             numbers, calls = state[key]
             item = self._definition(
@@ -1360,7 +1429,46 @@ class _Lineage:
             )
             item.rules.add("S22")
             result[key] = (numbers | {item.number}, calls)
+            if len(out_array) < len(key):
+                continue  # the list above the field is replaced, not changed in place (S38)
+            for other in sorted(self.aliases.get(key, ())):
+                self._collected_through(node, out_array, other, OriginKind.LINKED, "S38", result)
+                handled.add(other)
+        # The OUT-ARRAY may lie inside a document shared with another one (S39).
+        if len(out_array) >= 2:
+            for segment in dict.fromkeys(out_array[1:]):
+                for key in self.inner.get(segment, ()):
+                    if key in handled or _overlaps(out_array, key):
+                        continue
+                    if may_share(out_array, key):
+                        self._collected_through(
+                            node, out_array, key, OriginKind.SHARED, "S39", result
+                        )
+                        handled.add(key)
         return result
+
+    def _collected_through(
+        self,
+        node: FlowNode,
+        out_array: Key,
+        key: Key,
+        kind: OriginKind,
+        rule_id: str,
+        result: _State,
+    ) -> None:
+        """A LOOP's OUT-ARRAY written inside a linked (S38) or shared (S39) document."""
+        item = self._definition(
+            kind,
+            node.id,
+            f"collected:{'/'.join(out_array)}",
+            key,
+            certainty=Certainty.POSSIBLE,
+            weak=True,
+        )
+        item.rules.add(rule_id)
+        item.written = out_array
+        numbers, calls = result[key]
+        result[key] = (numbers | {item.number}, calls)
 
     def _snapshot(self, decision: Decision, state: _State) -> None:
         stored = self.snapshots.setdefault(decision.id, {})

@@ -144,6 +144,7 @@ _BASIS: dict[OriginKind, OriginBasis] = {
     OriginKind.CLEARED: "is-rule",
     OriginKind.RESTORED: "is-rule",
     OriginKind.LINKED: "is-rule",
+    OriginKind.SHARED: "is-rule",
     OriginKind.SERVICE_INPUT: "service-signature",
     OriginKind.CALLER: "caller-pipeline",
     OriginKind.UNKNOWN: "limit",

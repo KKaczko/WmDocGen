@@ -160,7 +160,11 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   or `$default` may fail the BRANCH (S31), so "no case matched" is never shown as only falling
   through; first-level fields roll back after a failed EXIT-ON SUCCESS/DONE child or REPEAT on
   FAILURE attempt (S36), but not for a CATCH (S15); linking a whole document shares it, so a
-  change inside one of two linked documents is a possible origin for the other (S38).
+  change inside one of two linked documents is a possible origin for the other (S38); links
+  made by the caller or an earlier called service are not known, so a change inside any
+  document is a possible origin for the field with the same path below any other document
+  (S39, `flow_writes.may_share`; never for a first-level field). An INVOKE without a SERVICE
+  may change anything (an unknown origin, an unknown write summary).
 - Owner decisions (2026-10-25): branch condition values are shown in pages, prompts and the
   Explorer, subject to the free-text policy and the secret guard (`explorer build
   --condition-values exclude` opts out; MAPSET literals stay unexported in the Explorer); a
@@ -195,7 +199,8 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
     are not catalogued), a service outside the packages, a dynamic call, a cycle, a computed
     or nested Java access, an opaque or partly analysed service or a duplicate name makes it
     "unknown". Lineage (`writes=`) only drops a call from "calls in between" when its summary
-    proves it cannot change the field; it never adds an origin. Pages, scenarios, description
+    proves it cannot change the field, also through a shared document (S39); it never adds
+    an origin. Pages, scenarios, description
     facts and the Explorer use the same summaries.
   - Decision inputs: fields a decision tests that the service does not set before it on some
     path. For each direct caller (at most 50, FLOW only), a separate lineage walk with

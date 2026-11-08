@@ -15,7 +15,9 @@ an adapter or other opaque service, a name two packages define.
 
 Derived on demand like `effects`, never stored in `analysis.json`. Lineage (`flow_lineage`)
 uses it only to drop a call from "calls in between" when its summary proves it cannot touch
-the field; it never adds an origin.
+the field; it never adds an origin. A field written inside one document may also be the field
+with the same path below another one, shared by a link the caller or another service made
+(`may_share`, S39), so such a write never proves a call harmless.
 """
 
 from __future__ import annotations
@@ -50,10 +52,11 @@ class PipelineWrites:
     unknown: bool
 
     def may_change(self, key: Key) -> bool:
-        """Whether a call to the service may change `key` or a field inside or above it."""
+        """Whether a call to the service may change `key`: a field inside or above it, or the
+        same field below a document that may be shared with the one holding it (S39)."""
         if self.unknown:
             return True
-        return any(_overlaps(field, key) for field in self.fields)
+        return any(_overlaps(field, key) or may_share(field, key) for field in self.fields)
 
 
 UNKNOWN = PipelineWrites(frozenset(), True)
@@ -143,3 +146,23 @@ def _nodes(node: FlowNode) -> Iterable[FlowNode]:
 def _overlaps(first: Key, second: Key) -> bool:
     shorter = min(len(first), len(second))
     return shorter > 0 and first[:shorter] == second[:shorter]
+
+
+def may_share(written: Key, tested: Key) -> bool:
+    """Whether writing `written` may change `tested` through a shared document (S39).
+
+    Both lie inside documents. The document at `written[:i]` may be the one at `tested[:j]`
+    (linked by a caller or another service, S38); writing inside it then changes `tested` when
+    the rest of the two paths overlap. The same document is a plain overlap, not sharing.
+    """
+    if len(written) < 2 or len(tested) < 2:
+        return False
+    for i in range(1, len(written)):
+        for j in range(1, len(tested)):
+            if (
+                written[i] == tested[j]
+                and written[:i] != tested[:j]
+                and _overlaps(written[i:], tested[j:])
+            ):
+                return True
+    return False
