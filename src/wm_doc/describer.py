@@ -33,7 +33,7 @@ from typing import Any
 
 from wm_doc.builtins import BuiltinFamily, builtin_effect, is_builtin_name
 from wm_doc.callgraph import summary_order
-from wm_doc.config import AppConfig
+from wm_doc.config import AppConfig, DescribeFieldLimits
 from wm_doc.disclosure import unsafe_disclosure_label
 from wm_doc.effects import ServiceFacts, compute_service_facts
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
@@ -85,7 +85,6 @@ from wm_doc.service_docs import (
     BASIS_KEY,
     CURRENT_BASIS,
     DETAIL_KEY,
-    MAX_DESIGNER_COMMENT_CHARS,
     UNVERIFIED_FLOW_KEY,
     UNVERIFIED_KEY,
     DocState,
@@ -108,15 +107,10 @@ BRIEF_NUM_PREDICT = 1536
 THOROUGH_NUM_PREDICT = 6144
 DEEP_NUM_PREDICT = 8192
 MAX_STEPS = 8
-MAX_STEP_CHARS = 200
 MAX_DETAILED_STEPS = 30
-MAX_DETAILED_STEP_CHARS = 600
-FIELD_LIMITS = {
-    "purpose": 400,
-    "usage": 400,
-    "data_effects": 900,
-    "error_handling": 300,
-}
+# The text fields of an answer. How many characters of each are kept is configured
+# (`describe.fieldLimits`) and applied only after the answer is validated (`shorten_answer`).
+TEXT_FIELDS = ("purpose", "usage", "data_effects", "error_handling")
 
 # One detailed-flow item: what happens, and the ids of the decision, case and calls it is
 # about (see `flow_answers`); the tool writes the case's condition in front of the text.
@@ -1223,6 +1217,8 @@ class _Run:
                         with self.lock:
                             counts = self.stats.flow_counts
                             counts[item.rule.value] = counts.get(item.rule.value, 0) + 1
+            # Validated on the whole answer; only now is each field cut to its cap.
+            answer = shorten_answer(answer, self.options.config.describe.fieldLimits)
             narrative = replace(
                 answer.narrative,
                 detailed_steps=tuple(item_text(item, flow) for item in answer.items),
@@ -1350,7 +1346,7 @@ def _flow_items(value: Any) -> tuple[FlowItem, ...]:
             )
         else:
             continue
-        text = clean_text(strip_ids(item.text), MAX_DETAILED_STEP_CHARS)
+        text = clean_text(strip_ids(item.text), None)
         if sum(char.isalpha() for char in text) >= 3:  # punctuation-only items are dropped
             items.append(replace(item, text=text))
     return tuple(items)
@@ -1360,17 +1356,17 @@ def answer_from_payload(payload: Any) -> DescribeAnswer | None:
     if not isinstance(payload, dict):
         return None
     texts: dict[str, str] = {}
-    for name, limit in FIELD_LIMITS.items():
+    for name in TEXT_FIELDS:
         value = payload.get(name)
         if not isinstance(value, str):
             return None
-        texts[name] = clean_text(value, limit)
+        texts[name] = clean_text(value, None)
     steps_value = payload.get("steps")
     comment = payload.get("designer_comment")
     if not isinstance(steps_value, list) or not isinstance(comment, str):
         return None
     steps = tuple(
-        clean_text(step, MAX_STEP_CHARS)
+        clean_text(step, None)
         for step in steps_value[:MAX_STEPS]
         if isinstance(step, str)
     )
@@ -1385,7 +1381,7 @@ def answer_from_payload(payload: Any) -> DescribeAnswer | None:
         data_effects=texts["data_effects"],
         steps=steps,
         error_handling=texts["error_handling"],
-        designer_comment=clean_text(comment.replace("`", ""), MAX_DESIGNER_COMMENT_CHARS),
+        designer_comment=clean_text(comment.replace("`", ""), None),
         detailed_steps=tuple(item.text for item in items),
     )
     return DescribeAnswer(narrative, items)
@@ -1470,12 +1466,47 @@ DESCRIBE_SPECS: dict[DetailLevel, AnswerSpec[DescribeAnswer]] = {
 }
 
 
-def clean_text(text: str, limit: int) -> str:
+def shorten_answer(answer: DescribeAnswer, limits: DescribeFieldLimits) -> DescribeAnswer:
+    """The answer as it is stored: each field cut to its `describe.fieldLimits` cap.
+
+    Runs after the answer passed its checks, so a cut can never make a name look invented.
+    """
+    narrative = answer.narrative
+    step = limits.limit("step")
+    detailed = limits.limit("detailedStep")
+    shortened = replace(
+        narrative,
+        purpose=clean_text(narrative.purpose, limits.limit("purpose")),
+        usage=clean_text(narrative.usage, limits.limit("usage")),
+        data_effects=clean_text(narrative.data_effects, limits.limit("dataEffects")),
+        error_handling=clean_text(narrative.error_handling, limits.limit("errorHandling")),
+        steps=tuple(clean_text(text, step) for text in narrative.steps),
+        detailed_steps=tuple(clean_text(text, detailed) for text in narrative.detailed_steps),
+        designer_comment=clean_text(
+            narrative.designer_comment, limits.limit("designerComment")
+        ),
+    )
+    items = tuple(replace(item, text=clean_text(item.text, detailed)) for item in answer.items)
+    return DescribeAnswer(shortened, items)
+
+
+def clean_text(text: str, limit: int | None) -> str:
+    """One line of text, at most `limit` characters (None: the whole text).
+
+    A long text ends at the last sentence end in its second half, else at the last space
+    before the limit and "...": a cut never splits a word, so never a name.
+    """
     flat = " ".join(text.split())
     if flat[:1] in {"#", ">", "-", "*", "+", "|"}:
         flat = "\\" + flat
-    if len(flat) <= limit:
+    if limit is None or len(flat) <= limit:
         return flat
     cut = flat[:limit]
     sentence_end = cut.rfind(". ")
-    return cut[: sentence_end + 1] if sentence_end > limit // 2 else cut.rstrip() + "..."
+    if sentence_end > limit // 2:
+        return cut[: sentence_end + 1]
+    if flat[limit] != " ":  # the limit falls inside a word: end before it
+        space = cut.rfind(" ")
+        if space > 0:
+            cut = cut[:space]
+    return cut.rstrip() + "..."

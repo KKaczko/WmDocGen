@@ -209,6 +209,12 @@ the package or server facts the draft was written from.
   `unverified_flow` in the front matter and a notice at the top); it is asked again on the
   next run until it passes, and approving it removes the marks. Answers that fail the
   disclosure scan are never kept.
+- Names are checked on the whole answer. Only then is each field cut to its cap from
+  `describe.fieldLimits` in the `--config` file (Purpose and Usage 400 characters, What it
+  does to data 900, Error handling 300, a step 200, a detailed-flow item and the Designer
+  comment 600). A cut ends at a sentence or a word, never inside a name. Set a field to
+  `null` to keep it whole, or `fieldLimits: off` to keep every field whole; see
+  `examples/wm-doc.yml`. These settings never invalidate the cached analysis.
 - Description files written before decision-aware describe have no `facts_basis` key: their
   hash covers the pseudo-code facts only, so they stay approved. After the next `describe`
   run their facts marker also carries the current hash (`next=...`); once you have checked

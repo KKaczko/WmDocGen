@@ -40,3 +40,18 @@ extraction:
     mode: include
   freeText:
     mode: include
+
+describe:
+  # The most characters `wm-doc describe` keeps of each field of a model's answer.
+  # Names are checked on the whole answer first; a cut ends at a sentence or a word.
+  # `null` keeps one field whole; `enabled: false` (or `fieldLimits: off`) keeps them all.
+  # Changing these never invalidates the cached analysis.
+  fieldLimits:
+    enabled: true
+    purpose: 400
+    usage: 400          # lists of callers with long names may need more, e.g. 1500
+    dataEffects: 900
+    errorHandling: 300
+    step: 200           # one item of Main steps
+    detailedStep: 600   # one item of the detailed flow
+    designerComment: 600

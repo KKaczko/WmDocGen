@@ -5,7 +5,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from wm_doc.ir import ClassificationMatch, ClassificationResult, Importance, Layer
 
@@ -75,10 +75,45 @@ class PackageSelectionConfig(BaseModel):
 ANALYZE_ALL_PACKAGES = PackageSelectionConfig(exclude=[], skipSystemPackages=False)
 
 
+class DescribeFieldLimits(BaseModel):
+    """The most characters `wm-doc describe` keeps of each field of a model's answer.
+
+    A guard against a rambling answer, not a style rule. Names are checked on the whole
+    answer before anything is cut, and a cut ends at a sentence or a word, never inside a
+    name. A field set to null is kept whole; `enabled: false` keeps every field whole.
+    """
+
+    enabled: bool = True
+    purpose: int | None = Field(default=400, ge=1)
+    usage: int | None = Field(default=400, ge=1)
+    dataEffects: int | None = Field(default=900, ge=1)
+    errorHandling: int | None = Field(default=300, ge=1)
+    # One item of Main steps, and one item of the detailed flow.
+    step: int | None = Field(default=200, ge=1)
+    detailedStep: int | None = Field(default=600, ge=1)
+    designerComment: int | None = Field(default=600, ge=1)
+
+    def limit(self, field: str) -> int | None:
+        """The cap of one field (a name above), or None when it is kept whole."""
+        return getattr(self, field) if self.enabled else None
+
+
+class DescribeConfig(BaseModel):
+    fieldLimits: DescribeFieldLimits = Field(default_factory=DescribeFieldLimits)
+
+    @field_validator("fieldLimits", mode="before")
+    @classmethod
+    def _switched_off(cls, value: object) -> object:
+        # `fieldLimits: false` (or `off`, which YAML reads as false) turns every cap off.
+        return {"enabled": False} if value is False else value
+
+
 class AppConfig(BaseModel):
     classification: ClassificationConfig = Field(default_factory=ClassificationConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     packages: PackageSelectionConfig = Field(default_factory=PackageSelectionConfig)
+    # Settings of `wm-doc describe` only; they never change the analysis or its cache.
+    describe: DescribeConfig = Field(default_factory=DescribeConfig)
 
 
 # Generic defaults only. Project-specific namespace rules belong in a config file

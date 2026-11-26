@@ -47,6 +47,12 @@ def default_analysis_cache_dir() -> Path:
     return Path.home() / ".cache" / "wm-doc" / "analysis-cache"
 
 
+def _config_settings(config: AppConfig) -> dict[str, object]:
+    """The configuration as it shapes the analysis. `describe` settings never do, so a
+    changed describe setting reuses the cached analysis."""
+    return config.model_dump(mode="json", exclude={"describe"})
+
+
 def input_fingerprint(
     scan_root: Path,
     config: AppConfig,
@@ -60,7 +66,7 @@ def input_fingerprint(
         "schema": ANALYSIS_SCHEMA_VERSION,
         # A stronger guard must never reuse an analysis that kept values it now withholds.
         "secret_guard": SECRET_GUARD_STRATEGY_VERSION,
-        "config": config.model_dump(mode="json"),
+        "config": _config_settings(config),
         "processes_explicit": processes_file_explicit,
     }
     digest.update(json.dumps(settings, sort_keys=True).encode("utf-8"))
@@ -103,7 +109,7 @@ def analyze_cached(
     root = path.resolve()
     owner = hashlib.sha256(
         json.dumps(
-            {"root": str(root).casefold(), "config": config.model_dump(mode="json")},
+            {"root": str(root).casefold(), "config": _config_settings(config)},
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()[:20]

@@ -1,0 +1,407 @@
+diff --git a/README.md b/README.md
+index bb47368..d73916c 100644
+--- a/README.md
++++ b/README.md
+@@ -209,6 +209,12 @@ the package or server facts the draft was written from.
+   `unverified_flow` in the front matter and a notice at the top); it is asked again on the
+   next run until it passes, and approving it removes the marks. Answers that fail the
+   disclosure scan are never kept.
++- Names are checked on the whole answer. Only then is each field cut to its cap from
++  `describe.fieldLimits` in the `--config` file (Purpose and Usage 400 characters, What it
++  does to data 900, Error handling 300, a step 200, a detailed-flow item and the Designer
++  comment 600). A cut ends at a sentence or a word, never inside a name. Set a field to
++  `null` to keep it whole, or `fieldLimits: off` to keep every field whole; see
++  `examples/wm-doc.yml`. These settings never invalidate the cached analysis.
+ - Description files written before decision-aware describe have no `facts_basis` key: their
+   hash covers the pseudo-code facts only, so they stay approved. After the next `describe`
+   run their facts marker also carries the current hash (`next=...`); once you have checked
+diff --git a/examples/wm-doc.yml b/examples/wm-doc.yml
+index 5fcf1d0..6f871b2 100644
+--- a/examples/wm-doc.yml
++++ b/examples/wm-doc.yml
+@@ -40,3 +40,18 @@ extraction:
+     mode: include
+   freeText:
+     mode: include
++
++describe:
++  # The most characters `wm-doc describe` keeps of each field of a model's answer.
++  # Names are checked on the whole answer first; a cut ends at a sentence or a word.
++  # `null` keeps one field whole; `enabled: false` (or `fieldLimits: off`) keeps them all.
++  # Changing these never invalidates the cached analysis.
++  fieldLimits:
++    enabled: true
++    purpose: 400
++    usage: 400          # lists of callers with long names may need more, e.g. 1500
++    dataEffects: 900
++    errorHandling: 300
++    step: 200           # one item of Main steps
++    detailedStep: 600   # one item of the detailed flow
++    designerComment: 600
+diff --git a/src/wm_doc/analysis_cache.py b/src/wm_doc/analysis_cache.py
+index a553de2..0d58969 100644
+--- a/src/wm_doc/analysis_cache.py
++++ b/src/wm_doc/analysis_cache.py
+@@ -47,6 +47,12 @@ def default_analysis_cache_dir() -> Path:
+     return Path.home() / ".cache" / "wm-doc" / "analysis-cache"
+ 
+ 
++def _config_settings(config: AppConfig) -> dict[str, object]:
++    """The configuration as it shapes the analysis. `describe` settings never do, so a
++    changed describe setting reuses the cached analysis."""
++    return config.model_dump(mode="json", exclude={"describe"})
++
++
+ def input_fingerprint(
+     scan_root: Path,
+     config: AppConfig,
+@@ -60,7 +66,7 @@ def input_fingerprint(
+         "schema": ANALYSIS_SCHEMA_VERSION,
+         # A stronger guard must never reuse an analysis that kept values it now withholds.
+         "secret_guard": SECRET_GUARD_STRATEGY_VERSION,
+-        "config": config.model_dump(mode="json"),
++        "config": _config_settings(config),
+         "processes_explicit": processes_file_explicit,
+     }
+     digest.update(json.dumps(settings, sort_keys=True).encode("utf-8"))
+@@ -103,7 +109,7 @@ def analyze_cached(
+     root = path.resolve()
+     owner = hashlib.sha256(
+         json.dumps(
+-            {"root": str(root).casefold(), "config": config.model_dump(mode="json")},
++            {"root": str(root).casefold(), "config": _config_settings(config)},
+             sort_keys=True,
+         ).encode("utf-8")
+     ).hexdigest()[:20]
+diff --git a/src/wm_doc/config.py b/src/wm_doc/config.py
+index 2a4a273..9c6c5de 100644
+--- a/src/wm_doc/config.py
++++ b/src/wm_doc/config.py
+@@ -5,7 +5,7 @@ from fnmatch import fnmatchcase
+ from pathlib import Path
+ 
+ import yaml
+-from pydantic import BaseModel, Field
++from pydantic import BaseModel, Field, field_validator
+ 
+ from wm_doc.ir import ClassificationMatch, ClassificationResult, Importance, Layer
+ 
+@@ -75,10 +75,45 @@ class PackageSelectionConfig(BaseModel):
+ ANALYZE_ALL_PACKAGES = PackageSelectionConfig(exclude=[], skipSystemPackages=False)
+ 
+ 
++class DescribeFieldLimits(BaseModel):
++    """The most characters `wm-doc describe` keeps of each field of a model's answer.
++
++    A guard against a rambling answer, not a style rule. Names are checked on the whole
++    answer before anything is cut, and a cut ends at a sentence or a word, never inside a
++    name. A field set to null is kept whole; `enabled: false` keeps every field whole.
++    """
++
++    enabled: bool = True
++    purpose: int | None = Field(default=400, ge=1)
++    usage: int | None = Field(default=400, ge=1)
++    dataEffects: int | None = Field(default=900, ge=1)
++    errorHandling: int | None = Field(default=300, ge=1)
++    # One item of Main steps, and one item of the detailed flow.
++    step: int | None = Field(default=200, ge=1)
++    detailedStep: int | None = Field(default=600, ge=1)
++    designerComment: int | None = Field(default=600, ge=1)
++
++    def limit(self, field: str) -> int | None:
++        """The cap of one field (a name above), or None when it is kept whole."""
++        return getattr(self, field) if self.enabled else None
++
++
++class DescribeConfig(BaseModel):
++    fieldLimits: DescribeFieldLimits = Field(default_factory=DescribeFieldLimits)
++
++    @field_validator("fieldLimits", mode="before")
++    @classmethod
++    def _switched_off(cls, value: object) -> object:
++        # `fieldLimits: false` (or `off`, which YAML reads as false) turns every cap off.
++        return {"enabled": False} if value is False else value
++
++
+ class AppConfig(BaseModel):
+     classification: ClassificationConfig = Field(default_factory=ClassificationConfig)
+     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+     packages: PackageSelectionConfig = Field(default_factory=PackageSelectionConfig)
++    # Settings of `wm-doc describe` only; they never change the analysis or its cache.
++    describe: DescribeConfig = Field(default_factory=DescribeConfig)
+ 
+ 
+ # Generic defaults only. Project-specific namespace rules belong in a config file
+diff --git a/src/wm_doc/describer.py b/src/wm_doc/describer.py
+index 2eaed38..4c49b31 100644
+--- a/src/wm_doc/describer.py
++++ b/src/wm_doc/describer.py
+@@ -33,7 +33,7 @@ from typing import Any
+ 
+ from wm_doc.builtins import BuiltinFamily, builtin_effect, is_builtin_name
+ from wm_doc.callgraph import summary_order
+-from wm_doc.config import AppConfig
++from wm_doc.config import AppConfig, DescribeFieldLimits
+ from wm_doc.disclosure import unsafe_disclosure_label
+ from wm_doc.effects import ServiceFacts, compute_service_facts
+ from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
+@@ -85,7 +85,6 @@ from wm_doc.service_docs import (
+     BASIS_KEY,
+     CURRENT_BASIS,
+     DETAIL_KEY,
+-    MAX_DESIGNER_COMMENT_CHARS,
+     UNVERIFIED_FLOW_KEY,
+     UNVERIFIED_KEY,
+     DocState,
+@@ -108,15 +107,10 @@ BRIEF_NUM_PREDICT = 1536
+ THOROUGH_NUM_PREDICT = 6144
+ DEEP_NUM_PREDICT = 8192
+ MAX_STEPS = 8
+-MAX_STEP_CHARS = 200
+ MAX_DETAILED_STEPS = 30
+-MAX_DETAILED_STEP_CHARS = 600
+-FIELD_LIMITS = {
+-    "purpose": 400,
+-    "usage": 400,
+-    "data_effects": 900,
+-    "error_handling": 300,
+-}
++# The text fields of an answer. How many characters of each are kept is configured
++# (`describe.fieldLimits`) and applied only after the answer is validated (`shorten_answer`).
++TEXT_FIELDS = ("purpose", "usage", "data_effects", "error_handling")
+ 
+ # One detailed-flow item: what happens, and the ids of the decision, case and calls it is
+ # about (see `flow_answers`); the tool writes the case's condition in front of the text.
+@@ -1223,6 +1217,8 @@ class _Run:
+                         with self.lock:
+                             counts = self.stats.flow_counts
+                             counts[item.rule.value] = counts.get(item.rule.value, 0) + 1
++            # Validated on the whole answer; only now is each field cut to its cap.
++            answer = shorten_answer(answer, self.options.config.describe.fieldLimits)
+             narrative = replace(
+                 answer.narrative,
+                 detailed_steps=tuple(item_text(item, flow) for item in answer.items),
+@@ -1350,7 +1346,7 @@ def _flow_items(value: Any) -> tuple[FlowItem, ...]:
+             )
+         else:
+             continue
+-        text = clean_text(strip_ids(item.text), MAX_DETAILED_STEP_CHARS)
++        text = clean_text(strip_ids(item.text), None)
+         if sum(char.isalpha() for char in text) >= 3:  # punctuation-only items are dropped
+             items.append(replace(item, text=text))
+     return tuple(items)
+@@ -1360,17 +1356,17 @@ def answer_from_payload(payload: Any) -> DescribeAnswer | None:
+     if not isinstance(payload, dict):
+         return None
+     texts: dict[str, str] = {}
+-    for name, limit in FIELD_LIMITS.items():
++    for name in TEXT_FIELDS:
+         value = payload.get(name)
+         if not isinstance(value, str):
+             return None
+-        texts[name] = clean_text(value, limit)
++        texts[name] = clean_text(value, None)
+     steps_value = payload.get("steps")
+     comment = payload.get("designer_comment")
+     if not isinstance(steps_value, list) or not isinstance(comment, str):
+         return None
+     steps = tuple(
+-        clean_text(step, MAX_STEP_CHARS)
++        clean_text(step, None)
+         for step in steps_value[:MAX_STEPS]
+         if isinstance(step, str)
+     )
+@@ -1385,7 +1381,7 @@ def answer_from_payload(payload: Any) -> DescribeAnswer | None:
+         data_effects=texts["data_effects"],
+         steps=steps,
+         error_handling=texts["error_handling"],
+-        designer_comment=clean_text(comment.replace("`", ""), MAX_DESIGNER_COMMENT_CHARS),
++        designer_comment=clean_text(comment.replace("`", ""), None),
+         detailed_steps=tuple(item.text for item in items),
+     )
+     return DescribeAnswer(narrative, items)
+@@ -1470,12 +1466,47 @@ DESCRIBE_SPECS: dict[DetailLevel, AnswerSpec[DescribeAnswer]] = {
+ }
+ 
+ 
+-def clean_text(text: str, limit: int) -> str:
++def shorten_answer(answer: DescribeAnswer, limits: DescribeFieldLimits) -> DescribeAnswer:
++    """The answer as it is stored: each field cut to its `describe.fieldLimits` cap.
++
++    Runs after the answer passed its checks, so a cut can never make a name look invented.
++    """
++    narrative = answer.narrative
++    step = limits.limit("step")
++    detailed = limits.limit("detailedStep")
++    shortened = replace(
++        narrative,
++        purpose=clean_text(narrative.purpose, limits.limit("purpose")),
++        usage=clean_text(narrative.usage, limits.limit("usage")),
++        data_effects=clean_text(narrative.data_effects, limits.limit("dataEffects")),
++        error_handling=clean_text(narrative.error_handling, limits.limit("errorHandling")),
++        steps=tuple(clean_text(text, step) for text in narrative.steps),
++        detailed_steps=tuple(clean_text(text, detailed) for text in narrative.detailed_steps),
++        designer_comment=clean_text(
++            narrative.designer_comment, limits.limit("designerComment")
++        ),
++    )
++    items = tuple(replace(item, text=clean_text(item.text, detailed)) for item in answer.items)
++    return DescribeAnswer(shortened, items)
++
++
++def clean_text(text: str, limit: int | None) -> str:
++    """One line of text, at most `limit` characters (None: the whole text).
++
++    A long text ends at the last sentence end in its second half, else at the last space
++    before the limit and "...": a cut never splits a word, so never a name.
++    """
+     flat = " ".join(text.split())
+     if flat[:1] in {"#", ">", "-", "*", "+", "|"}:
+         flat = "\\" + flat
+-    if len(flat) <= limit:
++    if limit is None or len(flat) <= limit:
+         return flat
+     cut = flat[:limit]
+     sentence_end = cut.rfind(". ")
+-    return cut[: sentence_end + 1] if sentence_end > limit // 2 else cut.rstrip() + "..."
++    if sentence_end > limit // 2:
++        return cut[: sentence_end + 1]
++    if flat[limit] != " ":  # the limit falls inside a word: end before it
++        space = cut.rfind(" ")
++        if space > 0:
++            cut = cut[:space]
++    return cut.rstrip() + "..."
+diff --git a/tests/fixtures/test_describe_field_limits.py b/tests/fixtures/test_describe_field_limits.py
+new file mode 100644
+index 0000000..8417ad3
+--- /dev/null
++++ b/tests/fixtures/test_describe_field_limits.py
+@@ -0,0 +1,128 @@
++"""`describe.fieldLimits`: an answer is checked whole, then cut to configurable caps."""
++
++from __future__ import annotations
++
++import json
++import re
++from pathlib import Path
++from typing import Any
++
++from describe_answers import flow_items
++from flowxml import FlowPackage, invoke
++
++from wm_doc.analysis_cache import input_fingerprint
++from wm_doc.config import AppConfig, load_config
++from wm_doc.describer import DescribeOptions, DescribeOutcome, clean_text, describe_services
++from wm_doc.ollama_provider import (
++    ProviderCheckResult,
++    ProviderGenerationRequest,
++    ProviderGenerationResult,
++)
++from wm_doc.service_docs import doc_path
++
++SUBJECT = "orders.core:save"
++CALLER = "di.channel.bpms.services.fsm:serviceOrderCommentNotification"
++# A usage text whose 400th character falls inside the caller's name, with no sentence end in
++# its second half: the old cut made `di.channel...fsm:serviceOrderComm` and rejected it.
++FILLER = "Used by the field service channel " + "for order comment notifications " * 10
++USAGE = f"{FILLER}through {CALLER} and the other callers listed in the facts"
++assert len(FILLER) < 400 < len(FILLER) + len("through ") + len(CALLER)
++
++
++class Provider:
++    def __init__(self) -> None:
++        self.requests = 0
++
++    def check(self, model: str) -> ProviderCheckResult:
++        return ProviderCheckResult(
++            provider_kind="ollama",
++            model=model,
++            ollama_version="test",
++            model_digest="sha256:test",
++            model_found=True,
++        )
++
++    def generate(self, request: ProviderGenerationRequest) -> ProviderGenerationResult:
++        self.requests += 1
++        payload = {
++            "purpose": "Saves an order.",
++            "usage": USAGE,
++            "data_effects": "Returns nothing.",
++            "steps": ["Saves the order."],
++            "detailed_steps": flow_items(request.messages[1]["content"]),
++            "error_handling": "Not shown in the facts.",
++            "designer_comment": "Saves an order.",
++        }
++        return ProviderGenerationResult(
++            content=json.dumps(payload),
++            provider_kind="ollama",
++            model=request.model,
++            ollama_version="test",
++            model_digest="sha256:test",
++            metrics={"prompt_eval_count": 400},
++        )
++
++
++def _describe(tmp_path: Path, config: AppConfig) -> tuple[DescribeOutcome, str]:
++    root = tmp_path / "packages"
++    pkg = FlowPackage(root, "Orders")
++    pkg.service(SUBJECT, invoke("pub.flow:debugLog"))
++    pkg.service(CALLER, invoke(SUBJECT))
++    options = DescribeOptions(
++        model="fake-model",
++        scan_root=root,
++        config=config,
++        docs_dir=tmp_path / "service-docs",
++        cache_dir=tmp_path / "cache",
++    )
++    results, _ = describe_services(pkg.analyze(), [SUBJECT], Provider(), options)
++    text = doc_path(tmp_path / "service-docs", "Orders", SUBJECT).read_text(encoding="utf-8")
++    usage = re.search(r"## Usage\n\n(.*?)\n\n", text, re.DOTALL)
++    return results[0].outcome, usage.group(1) if usage else ""
++
++
++def _config(tmp_path: Path, yaml_text: str) -> AppConfig:
++    path = tmp_path / "wm-doc.yml"
++    path.write_text(yaml_text, encoding="utf-8")
++    return load_config(path)
++
++
++def test_a_cut_never_ends_inside_a_word() -> None:
++    assert clean_text(f"Used by aaaa {CALLER}", 40) == "Used by aaaa..."
++    assert clean_text(f"Used by aaaa {CALLER}", None) == f"Used by aaaa {CALLER}"
++    assert clean_text("First sentence here. Second one", 25) == "First sentence here."
++
++
++def test_names_are_checked_before_the_answer_is_cut(tmp_path: Path) -> None:
++    outcome, usage = _describe(tmp_path, load_config(None))
++
++    assert outcome is DescribeOutcome.GENERATED
++    assert len(usage) <= 400
++    assert usage.endswith("...")
++    assert "serviceOrderComm" not in usage  # cut before the name, never inside it
++
++
++def test_field_limits_can_be_raised_or_switched_off(tmp_path: Path) -> None:
++    raised = _config(tmp_path, "describe:\n  fieldLimits:\n    usage: 2000\n")
++    single = _config(tmp_path, "describe:\n  fieldLimits:\n    usage: null\n")
++    every = _config(tmp_path, "describe:\n  fieldLimits:\n    enabled: false\n")
++    off = _config(tmp_path, "describe:\n  fieldLimits: off\n")
++
++    assert raised.describe.fieldLimits.limit("usage") == 2000
++    assert single.describe.fieldLimits.limit("usage") is None
++    assert single.describe.fieldLimits.limit("purpose") == 400
++    assert every.describe.fieldLimits.limit("purpose") is None
++    assert off.describe.fieldLimits.limit("dataEffects") is None
++    outcome, usage = _describe(tmp_path, single)
++    assert outcome is DescribeOutcome.GENERATED
++    assert usage == USAGE
++
++
++def test_describe_settings_keep_the_cached_analysis(tmp_path: Path) -> None:
++    root = tmp_path / "packages"
++    FlowPackage(root, "Orders").service(SUBJECT, invoke("pub.flow:debugLog"))
++    changed: dict[str, Any] = {"describe": {"fieldLimits": {"enabled": False}}}
++
++    assert input_fingerprint(root, AppConfig(), None, False) == input_fingerprint(
++        root, AppConfig.model_validate(changed), None, False
++    )
