@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 from jdbc_samples import property_blob, property_bytes, reference_json, sample_dirs
 
+from wm_doc.analysis_cache import input_fingerprint
+from wm_doc.config import load_config
 from wm_doc.idata_binary import (
     LENGTH_SCHEMES,
     MAX_DEPTH,
@@ -37,10 +39,19 @@ SAMPLES = sample_dirs()
 IDS = [folder.name for folder in SAMPLES]
 
 
-CONFIRMED_SAMPLES = {"customSQL", "dynamicSQL"}
+# Samples read by the confirmed rules alone (no unconfirmed reading needed).
+CONFIRMED_SAMPLES = {
+    "customSQL",
+    "dynamicSQL",
+    "customSQLLong",
+    "customSQL127",
+    "customSQL128",
+    "customSQL255",
+    "customSQL256",
+}
 
 
-def test_both_real_templates_are_present() -> None:
+def test_every_real_sample_is_present() -> None:
     assert set(IDS) >= CONFIRMED_SAMPLES
 
 
@@ -84,6 +95,141 @@ def test_back_references_resolve_to_the_earlier_value() -> None:
     assert properties.get("realInputFields") == properties.get("inputField")
     assert properties.get("inputColIndexes") == BinaryArray(STRING, ("-1", "-1"))
     assert properties.get("inputExpression") == BinaryArray(STRING, ())
+
+
+# --- string lengths: one unsigned byte up to 255, tag 0x84 from 256 (IS exports) -------------
+
+
+def _sample(name: str) -> Path:
+    return next(folder for folder in SAMPLES if folder.name == name)
+
+
+def _long_sample() -> Path:
+    return _sample("customSQLLong")
+
+
+@pytest.mark.parametrize(
+    ("name", "prefix"),
+    [
+        ("customSQL127", bytes([0x04, 0x7F])),
+        ("customSQL128", bytes([0x04, 0x80])),
+        ("customSQL255", bytes([0x04, 0xFF])),
+        ("customSQL256", bytes([0x84, 0x00, 0x00, 0x01, 0x00])),
+    ],
+)
+def test_integration_server_switches_to_the_long_string_tag_at_256(
+    name: str, prefix: bytes
+) -> None:
+    # Byte evidence, IS 10.15 exports of SQL templates of exactly 127, 128, 255 and 256
+    # characters: up to 255 the length is one unsigned byte after `04`, from 256 on IS writes
+    # `84` and the length in four bytes. The confirmed rules read all four with no hypothesis.
+    folder = _sample(name)
+    raw = property_bytes(folder)
+    expected = reference_json(folder)
+    assert isinstance(expected, dict)
+    sql = expected["templateProperties"]["sql"]
+    assert len(sql) == int(name.removeprefix("customSQL")) and sql.isascii()
+    at = raw.find(sql.encode("utf-16-be"))
+    assert at > 0 and raw[at - len(prefix) : at] == prefix
+    properties = decode_idata(raw).get("templateProperties")
+    assert isinstance(properties, BinaryDocument) and properties.get("sql") == sql
+    assert decode_idata_hypotheses(raw).hypotheses == ()
+
+
+def test_integration_server_writes_a_long_string_as_tag_0x84_and_a_four_byte_length() -> None:
+    # Byte evidence, IS 10.15 customSQLLong: the `sql` key is followed by `84`, then the
+    # number of UTF-16 code units in four big-endian bytes, then the text; the one-byte form
+    # `04 <length>` is not used for it.
+    folder = _long_sample()
+    raw = property_bytes(folder)
+    expected = reference_json(folder)
+    assert isinstance(expected, dict)
+    sql = expected["templateProperties"]["sql"]
+    data = sql.encode("utf-16-be")
+    at = raw.find(data)
+    key = "sql".encode("utf-16-be")
+    assert len(sql) > 0x7F and at > 0
+    assert raw[at - 5 : at] == bytes([0x84]) + (len(data) // 2).to_bytes(4, "big")
+    assert raw[at - 5 - len(key) - 2 : at - 5] == bytes([0x04, 3]) + key
+    # The confirmed rules read it whole, Polish letters included, with no other reading.
+    properties = decode_idata(raw).get("templateProperties")
+    assert isinstance(properties, BinaryDocument)
+    assert properties.get("sql") == sql
+    assert any(ord(char) > 0x7F for char in sql)
+    assert decode_idata_hypotheses(raw).hypotheses == ()
+
+
+def test_a_long_string_takes_one_reference_index_like_any_string() -> None:
+    # References written after the long SQL (realInputFields) resolve to the right strings,
+    # so the long string is numbered as one object.
+    raw = property_bytes(_long_sample())
+    properties = decode_idata(raw).get("templateProperties")
+    assert isinstance(properties, BinaryDocument)
+    fields = properties.get("inputField")
+    assert isinstance(fields, BinaryArray) and fields.items
+    assert properties.get("realInputFields") == fields
+    for name in fields.items:
+        assert isinstance(name, str)
+        # Written once as text: the second occurrence is a reference to it.
+        assert raw.count(bytes([0x04, len(name)]) + name.encode("utf-16-be")) == 1
+
+
+LENGTHS = [0, 1, 126, 127, 128, 129, 254, 255, 256, 257, 300, 16_384, 65_535, 65_536, 200_000]
+
+
+@pytest.mark.parametrize("chars", LENGTHS)
+def test_strings_on_both_sides_of_the_switch_round_trip(chars: int) -> None:
+    # Synthetic (the encoder writes the layout the IS exports show): up to 255 code units the
+    # one-byte form, from 256 on the long form.
+    document = _doc(("sql", "S" * chars), ("after", "x"))
+    raw = encode_idata(document)
+    start = raw.find("sql".encode("utf-16-be")) + 6
+    if chars <= 255:
+        assert raw[start : start + 2] == bytes([0x04, chars])
+    else:
+        assert raw[start : start + 5] == bytes([0x84]) + chars.to_bytes(4, "big")
+    assert decode_idata(raw) == document
+    assert decode_idata_hypotheses(raw).hypotheses == ()
+
+
+def test_long_strings_keep_unicode_and_special_characters() -> None:
+    text = "SELECT '^' || \"q\" || '\\' || '${name}' -- Zażółć gęślą jaźń \U0001f600\n" * 40
+    document = _doc(("sql", text), ("list", BinaryArray(STRING, (text, "ü"))))
+    raw = encode_idata(document)
+    assert decode_idata(raw) == document
+    # The length counts UTF-16 code units: the emoji counts two.
+    units = len(text.encode("utf-16-be")) // 2
+    assert units == len(text) + 40
+    assert bytes([0x84]) + units.to_bytes(4, "big") in raw
+
+
+def test_a_long_form_used_for_a_short_string_is_read() -> None:
+    # Synthetic: IS writes `84` only from 256 on, but the four-byte length is self-describing,
+    # so a short value in the long form reads the same.
+    raw = HEADER + OPEN + KEY + bytes([0x84, 0, 0, 0, 2]) + "ab".encode("utf-16-be") + CLOSE
+    assert decode_idata(raw).get("k") == "ab"
+
+
+def test_a_reference_to_a_long_string_resolves() -> None:
+    long_text = "x" * 500
+    document = _doc(("a", long_text), ("b", long_text))
+    raw = encode_idata(document, references=True)
+    assert raw.count(bytes([0x84])) == 1  # the second one is a reference
+    assert decode_idata(raw) == document
+
+
+def test_a_long_length_is_never_trusted_beyond_the_bytes_present() -> None:
+    for length in (0x7FFF_FFFF, 0x0010_0000, 2):
+        raw = HEADER + OPEN + KEY + bytes([0x84]) + length.to_bytes(4, "big") + b"\x00"
+        with pytest.raises(IDataBinaryError) as error:
+            decode_idata(raw)
+        assert error.value.code == "truncated"
+        assert error.value.offset is not None and error.value.offset <= len(raw)
+    # Cut inside the four length bytes.
+    for cut in range(1, 5):
+        with pytest.raises(IDataBinaryError) as error:
+            decode_idata(HEADER + OPEN + KEY + bytes([0x84, 0, 0, 0, 1])[:cut])
+        assert error.value.code == "truncated"
 
 
 def _doc(*entries: tuple[str, Value]) -> BinaryDocument:
@@ -155,7 +301,11 @@ CASES = {
     "no-version": (OPEN + CLOSE, "unsupported_header"),
     "no-document": (HEADER + _string("x"), "unsupported_structure"),
     "unknown-tag": (HEADER + OPEN + KEY + bytes([0x07]) + CLOSE, "unsupported_tag"),
-    "long-string": (HEADER + OPEN + KEY + bytes([0x04, 0x80]) + CLOSE, "unsupported_length"),
+    # `04 80` is a string of 128 code units (one unsigned byte); the bytes are not there.
+    "one-byte-length-past-the-end": (
+        HEADER + OPEN + KEY + bytes([0x04, 0x80]) + CLOSE,
+        "truncated",
+    ),
     "long-array": (HEADER + OPEN + KEY + bytes([0x0A, 0x90]) + CLOSE, "unsupported_length"),
     "forward-reference": (HEADER + OPEN + KEY + bytes([0x00, 0x09]) + CLOSE, "invalid_reference"),
     "reference-to-a-document": (
@@ -177,6 +327,32 @@ CASES = {
         HEADER + OPEN + KEY + bytes([0x04, 0x01, 0xD8, 0x00]) + CLOSE,
         "invalid_text",
     ),
+    "long-string-lone-surrogate": (
+        HEADER + OPEN + KEY + bytes([0x84, 0, 0, 0, 1, 0xD8, 0x00]) + CLOSE,
+        "invalid_text",
+    ),
+    "long-string-negative-length": (
+        HEADER + OPEN + KEY + bytes([0x84, 0xFF, 0xFF, 0xFF, 0xFF]) + CLOSE,
+        "invalid_length",
+    ),
+    "long-string-past-the-end": (
+        HEADER + OPEN + KEY + bytes([0x84, 0, 0, 1, 0]) + CLOSE,
+        "truncated",
+    ),
+    # Only the string has a confirmed long form; the same high bit on other tags is not read.
+    "high-bit-reference-tag": (
+        HEADER + OPEN + KEY + bytes([0x80, 0, 0, 0, 1]) + CLOSE,
+        "unsupported_tag",
+    ),
+    "high-bit-array-tag": (
+        HEADER + OPEN + KEY + bytes([0x8A, 0, 0, 0, 0]) + CLOSE,
+        "unsupported_tag",
+    ),
+    "high-bit-document-tag": (HEADER + OPEN + KEY + bytes([0x85, 0x01]) + CLOSE, "unsupported_tag"),
+    "high-bit-integer-tag": (
+        HEADER + OPEN + KEY + bytes([0x8B, 0x04, 0, 0, 0, 1]) + CLOSE,
+        "unsupported_tag",
+    ),
 }
 
 
@@ -187,6 +363,11 @@ def test_unsupported_or_invalid_structures_are_explicit(name: str) -> None:
         decode_idata(raw)
     assert error.value.code == code
     assert error.value.offset is None or 0 <= error.value.offset <= len(raw)
+    if code != "unsupported_length":
+        # No unconfirmed reading lifts an unknown tag, a bad length or broken text.
+        with pytest.raises(IDataBinaryError) as lifted:
+            decode_idata_hypotheses(raw)
+        assert lifted.value.code == code
 
 
 def test_a_reference_after_a_nested_document_end_is_not_guessed() -> None:
@@ -236,11 +417,13 @@ def _long_document(chars: int) -> BinaryDocument:
 
 @pytest.mark.parametrize("scheme", LENGTH_SCHEMES)
 @pytest.mark.parametrize("chars", [128, 200, 255])
-def test_long_lengths_round_trip_under_each_hypothesis(scheme: str, chars: int) -> None:
+def test_long_counts_round_trip_under_each_hypothesis(scheme: str, chars: int) -> None:
+    # The strings of 128..255 code units need no hypothesis (confirmed); the array count of
+    # 130 does.
     document = _long_document(chars)
     raw = encode_idata(document, long_lengths=scheme)
     with pytest.raises(IDataBinaryError) as error:
-        decode_idata(raw)  # the confirmed rules alone never read it
+        decode_idata(raw)  # the confirmed rules alone never read the count
     assert error.value.code == "unsupported_length"
     result = decode_idata_hypotheses(raw)
     assert result.document == document
@@ -278,10 +461,24 @@ def test_oversized_values_are_refused_before_decoding() -> None:
 
 
 def test_the_encoder_only_writes_confirmed_lengths() -> None:
-    with pytest.raises(IDataBinaryError):
-        encode_idata(_doc(("k", "x" * 128)))
+    # Strings of any length have a confirmed form; a long array or a high index has none.
+    assert bytes([0x04, 0xFF]) in encode_idata(_doc(("k", "x" * 255)))
+    assert bytes([0x84, 0, 0, 1, 0]) in encode_idata(_doc(("k", "x" * 256)))
     with pytest.raises(IDataBinaryError):
         encode_idata(_doc(("k", BinaryArray(STRING, tuple("x" * 128)))))
+    many = _doc(*((f"k{index}", f"v{index}") for index in range(70)), ("again", "v69"))
+    with pytest.raises(IDataBinaryError):
+        encode_idata(many, references=True)  # "v69" is object 142: an index past 127
+
+
+def test_a_new_decoder_version_invalidates_cached_analyses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An analysis cached before the decoder read 0x84 kept such a service `partial`.
+    config = load_config(None)
+    before = input_fingerprint(tmp_path, config, None, False)
+    monkeypatch.setattr("wm_doc.analysis_cache.IDATA_DECODER_VERSION", "idata-binary.v99")
+    assert input_fingerprint(tmp_path, config, None, False) != before
 
 
 def test_duplicate_keys_have_no_json_form() -> None:

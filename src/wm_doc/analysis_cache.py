@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from wm_doc import __version__
 from wm_doc.analysis import analyze_path
 from wm_doc.config import AppConfig
+from wm_doc.idata_binary import IDATA_DECODER_VERSION
 from wm_doc.ir import ANALYSIS_SCHEMA_VERSION, AnalysisResult, AnalyzedPackage
 from wm_doc.secret_guard import SECRET_GUARD_STRATEGY_VERSION
 
@@ -66,6 +67,8 @@ def input_fingerprint(
         "schema": ANALYSIS_SCHEMA_VERSION,
         # A stronger guard must never reuse an analysis that kept values it now withholds.
         "secret_guard": SECRET_GUARD_STRATEGY_VERSION,
+        # A decoder that reads more must never reuse an analysis that fell back to less.
+        "idata_decoder": IDATA_DECODER_VERSION,
         "config": _config_settings(config),
         "processes_explicit": processes_file_explicit,
     }

@@ -323,10 +323,12 @@ Callers list the adapter's tables under "Data and systems touched" with the call
 the direct adapter calls under "JDBC adapter calls". `artifacts.md` lists every JDBC adapter
 service with its tables and decoding status, and the tables written by more than one adapter
 service. Other templates (Select, Insert, ...) keep the operation, connection and configured
-tables. Lengths, counts and indexes of 128 or more (for example an SQL template longer than 127
-characters) are read by hypothesis, accepted only when the readings of the bytes agree, and
-marked `ADAPTER_LONG_ENCODING_UNCONFIRMED` with an "Unconfirmed reading" note so you can check
-them against IS (`scripts/decode_adapter.py`, `docs/idata-binary-format.md`). A value the
+tables. SQL templates of any length are read as Integration Server writes them (up to 255
+characters with a one-byte length, longer ones with the long string tag `0x84`; confirmed on
+IS exports). Array counts and reference indexes of 128 or more (for example 130 input fields)
+are read by hypothesis, accepted only when the readings of the bytes agree, and marked
+`ADAPTER_LONG_ENCODING_UNCONFIRMED` with an "Unconfirmed reading" note so you can check them
+against IS (`scripts/decode_adapter.py`, `docs/idata-binary-format.md`). A value the
 decoder still cannot read keeps the identity fields and gets the finding
 `ADAPTER_CONFIGURATION_PARTIALLY_DECODED`. `describe` gives the model the SQL, fitted to
 `--num-ctx`, so it can explain the business rules it implements (the tool writes the steps);

@@ -14,9 +14,16 @@ from pathlib import Path
 
 import pytest
 from flowxml import FlowPackage, copy, extraction_config, invoke, loop, record, set_, string
-from jdbc_samples import NAMESPACE, install_samples, property_blob, reference_json, sample_dirs
+from jdbc_samples import (
+    NAMESPACE,
+    install_samples,
+    property_blob,
+    reference_json,
+    sample_dirs,
+    service_name,
+)
 
-from wm_doc.adapters import SUPPORTED_TEMPLATES, decode_adapter_service
+from wm_doc.adapters import SUPPORTED_TEMPLATES, decode_adapter_service, operation_phrase
 from wm_doc.analysis import analyze_path
 from wm_doc.config import ExtractionMode, load_config
 from wm_doc.describer import DescribeOptions, current_facts_hashes, describe_services
@@ -125,7 +132,7 @@ def test_normalized_configuration_follows_the_reference_document(
     if expected.get("serviceTemplateName", "").rsplit(".", 1)[-1] not in SUPPORTED_TEMPLATES:
         pytest.skip("a template that is decoded but not interpreted")
     properties = expected["templateProperties"]
-    service = _service(analysis, f"{NAMESPACE}:{folder.name}")
+    service = _service(analysis, service_name(folder))
     details = service.adapter
     assert details is not None and details.jdbc is not None
     config = details.jdbc
@@ -189,6 +196,57 @@ def test_the_sql_is_read_into_tables_binds_and_substitutions(analysis: AnalysisR
     # As many `?` as configured bind inputs, in both samples.
     assert len(dynamic_sql.binds) == len(dynamic.jdbc.inputs) == 2
     assert len(custom_sql.binds) == len(custom.jdbc.inputs) == 2
+
+
+LONG_FOLDER = next(folder for folder in sample_dirs() if folder.name == "customSQLLong")
+LONG = service_name(LONG_FOLDER)
+
+
+def test_a_long_custom_sql_from_integration_server_is_read_and_analysed(
+    packages: Path, analysis: AnalysisResult
+) -> None:
+    # The IS 10.15 customSQLLong sample: its SQL (over 10,000 characters) is a long string
+    # (tag 0x84); before the decoder read that tag the service fell back to the identity
+    # fields ("runs custom SQL (not interpreted)") and its SQL was never read.
+    expected = reference_json(LONG_FOLDER)
+    assert isinstance(expected, dict)
+    sql = expected["templateProperties"]["sql"]
+    service = _service(analysis, LONG)
+    details = service.adapter
+    assert details is not None and details.jdbc is not None
+    assert details.decoding is AdapterDecoding.DECODED
+    assert details.decode_problem is None and details.decode_hypotheses == []
+    codes = {finding.code for finding in service.findings}
+    assert "ADAPTER_CONFIGURATION_PARTIALLY_DECODED" not in codes
+    assert "ADAPTER_LONG_ENCODING_UNCONFIRMED" not in codes
+
+    config = details.jdbc
+    assert config.supported and config.template_kind == "CustomSQL"
+    assert config.sql is not None and config.sql.value == sql and config.sql.length == len(sql)
+    assert len(sql) > 10_000 and any(ord(char) > 0x7F for char in sql)
+    reading = config.sql_analysis
+    assert reading is not None and reading.status != "not_analysed"
+    assert reading.statement == "SELECT"
+    assert len(reading.binds) == len(config.inputs) == 2
+    assert operation_phrase(details) == "runs custom SQL (SELECT)"
+
+    # The page, the prompt and the Explorer carry the whole statement.
+    facts = compute_service_facts(analysis)
+    page = render_service_markdown(service, facts=facts[LONG])
+    prompt = render_pseudocode(service, lambda _: None)
+    lines = [line.strip() for line in sql.splitlines() if line.strip()]
+    assert "### SQL template" in page and "not interpreted)" not in page
+    assert "<<<SQL" in prompt and lines[0] in prompt and lines[-1] in prompt
+    inputs = explorer_inputs(analysis, packages, load_config(None))
+    files = render_data_files(build_bundle(inputs, ExplorerOptions()))
+    search = json.loads(files["search.json"])
+    identifier = next(s["id"] for s in search["services"] if s["name"] == LONG)
+    adapter = json.loads(files[f"services/{identifier}.json"])["adapter"]
+    # The Explorer shows line breaks as `\n` (`TextGuard.sql`); nothing else changes.
+    assert adapter["jdbc"]["sql"] == sql.replace("\r\n", "\n")
+    everything = b"".join(files.values()).decode("utf-8")
+    for value in CREDENTIAL_VALUES:
+        assert value not in everything
 
 
 def test_credentials_never_reach_any_output(analysis: AnalysisResult) -> None:
@@ -330,11 +388,11 @@ def _long_sql_value(length: bytes, body: bytes) -> bytes:
     )
 
 
-def test_a_long_sql_read_by_an_unconfirmed_encoding_is_marked(tmp_path: Path) -> None:
-    # 200 characters: `81 48` is 200 only as a big-endian 7-bit varint; every other reading
-    # runs out of bytes or out of step, so that one is used, and the service says so.
+def test_a_200_character_sql_is_read_by_the_confirmed_one_byte_length(tmp_path: Path) -> None:
+    # 200 characters: `04 c8`, one unsigned byte, as IS writes lengths up to 255
+    # (customSQL128 and customSQL255 samples); no hypothesis, nothing to check.
     sql = "SELECT * FROM t WHERE x = ? " + "-" * 172
-    raw = _long_sql_value(bytes([0x81, 0x48]), sql.encode("utf-16-be"))
+    raw = _long_sql_value(bytes([200]), sql.encode("utf-16-be"))
     root = tmp_path / "packages"
     folder = root / PACKAGE / "ns" / "orders" / "db" / "longSql"
     _write_adapter(folder, base64.b64encode(raw).decode("ascii"))
@@ -342,9 +400,25 @@ def test_a_long_sql_read_by_an_unconfirmed_encoding_is_marked(tmp_path: Path) ->
     service = _service(_analysis(root), "orders.db:longSql")
     details = service.adapter
     assert details is not None and details.jdbc is not None
+    assert details.decoding is AdapterDecoding.DECODED and details.decode_hypotheses == []
+    assert details.jdbc.sql is not None and details.jdbc.sql.value == sql
+    assert not [f for f in service.findings if f.code.startswith("ADAPTER_")]
+
+
+def test_a_count_read_by_an_unconfirmed_encoding_is_marked(tmp_path: Path) -> None:
+    # 130 input fields: the count `81 02` is 130 only as a big-endian 7-bit varint; every
+    # other reading runs out of bytes or out of step, so that one is used, and the service
+    # says so.
+    names = tuple(f"in{index}" for index in range(130))
+    root = tmp_path / "packages"
+    _adapter_node(root, "orders.db:wide", _custom_sql("SELECT * FROM t WHERE x = ?", names), "vlq")
+
+    service = _service(_analysis(root), "orders.db:wide")
+    details = service.adapter
+    assert details is not None and details.jdbc is not None
     assert details.decoding is AdapterDecoding.DECODED
     assert details.decode_hypotheses == ["length:vlq"]
-    assert details.jdbc.sql is not None and details.jdbc.sql.value == sql
+    assert [field.field for field in details.jdbc.inputs] == list(names)
     [finding] = [f for f in service.findings if f.code == "ADAPTER_LONG_ENCODING_UNCONFIRMED"]
     assert "length:vlq" in finding.message
     assert "**Unconfirmed reading.**" in render_service_markdown(service)
@@ -690,9 +764,9 @@ def test_callers_prompts_carry_the_statement_and_what_feeds_it(analysis: Analysi
 def test_a_long_sql_is_fitted_to_the_context_window(tmp_path: Path) -> None:
     root = tmp_path / "packages"
     sql = "SELECT id FROM t WHERE x = ? AND note <> 'a'\n" + "  AND y > 0\n" * 900
-    _adapter_node(root, "orders.db:long", _custom_sql(sql, ("x",)), long_lengths="vlq")
+    _adapter_node(root, "orders.db:long", _custom_sql(sql, ("x",)))  # a long string (0x84)
     service = _service(_analysis(root), "orders.db:long")
-    assert service.adapter is not None and service.adapter.decode_hypotheses == ["length:vlq"]
+    assert service.adapter is not None and service.adapter.decode_hypotheses == []
 
     roomy, shortened = fit_facts(service, lambda _: None, {}, 65536)
     assert not shortened and "(cut to fit" not in roomy and roomy.count("AND y > 0") == 900

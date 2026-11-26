@@ -114,6 +114,21 @@ organization- or person-specific: the connection `inea.configuration.jdbc:UtilsC
 namespace `kkaczk.jdbcadapter` and the designer locale `pl_PL`. Confirm or replace them before
 publishing the repository (the tests read the folder names, not these values).
 
+`samples/jdbcadapter/jdbcadapter2/` (added 2026-11-26, same export method) holds the namespace
+folder's `node.idf` (`kkaczk.jdbcadapter.jdbcadapter2`) and `customSQLLong/`, a CustomSQL
+service whose SQL template is 13,739 characters long: a 56-character `SELECT ... FROM DUAL`
+with two bind parameters, followed by a placeholder-text block comment with Polish letters. It
+is the evidence for the long string tag `0x84` (`docs/idata-binary-format.md`). Content
+review: test field names (`test1`, `test2`, `testout`, `testoutSTR`), the same connection,
+locale and credential pipeline paths as above; no credential values.
+
+`samples/jdbcadapter/jdbcadapter3/` (added 2026-11-26, same export method) holds the namespace
+folder's `node.idf` (`kkaczk.jdbcadapter.jdbcadapter3`) and `customSQL127/`, `customSQL128/`,
+`customSQL255/`, `customSQL256/`: CustomSQL services whose SQL is a one-line
+`SELECT 1 AS X FROM DUAL` with a digit-filled block comment, exactly 127, 128, 255 and 256
+ASCII characters long. They are the evidence for the string length switch (one unsigned byte
+up to 255, `0x84` from 256). No credential values.
+
 ## Sensitive Fixture Categories
 
 Potentially sensitive fixture categories are present and should be reviewed before publishing this

@@ -137,16 +137,19 @@ the real IS 10.15 samples; see "JDBC adapter services (M15)". M15 extension (own
   any secret-like key are never read or named. Connection credentials and properties stay
   out of scope.
 - Decoding (`idata_binary.py`, documented in `docs/idata-binary-format.md`): only the layout
-  confirmed on `samples/jdbcadapter/` is read (one-byte lengths, counts and indexes below 128,
-  tags 0x00/0x02/0x04/0x05/0x0a/0x0b); anything else is an `IDataBinaryError` with a code and a
-  byte offset, never a guess. On such an error the service keeps the M12 identity fields,
+  confirmed on `samples/jdbcadapter/` is read (tags 0x00/0x02/0x04/0x05/0x0a/0x0b; array
+  counts and reference indexes below 128 in one byte; string lengths up to 255 in one
+  unsigned byte after 0x04 and from 256 on after the long string tag 0x84 in four big-endian
+  bytes, confirmed 2026-11-26 by `jdbcadapter2/` and `jdbcadapter3/`); anything else is an
+  `IDataBinaryError` with a code and a byte offset, never a guess. On such an error the
+  service keeps the M12 identity fields,
   `decoding: partial` and the INFO finding `ADAPTER_CONFIGURATION_PARTIALLY_DECODED`. The decoder
   never loads classes, executes or looks anything up. Golden tests compare every sample folder
-  with the document IS exported (`tests/unit/test_idata_binary.py`; a new
-  `samples/jdbcadapter/<name>/` with a node.ndf and the JSON is picked up without code changes;
+  with the document IS exported (`tests/unit/test_idata_binary.py`; a new folder at any depth
+  under `samples/jdbcadapter/` with a node.ndf and the JSON is picked up without code changes;
   `scripts/add_sample_checksums.py` adds it to the checksum manifest).
 - M15 extension, owner decision 2026-11-25 (a hypothesis the owner checks against IS output):
-  where the confirmed rules stop (a length, count or index of 128 or more, or a reference past
+  where the confirmed rules stop (an array count or reference index of 128 or more, or a reference past
   a nested document's end), `decode_idata_hypotheses` tries every combination of
   `LENGTH_SCHEMES` (leb128, vlq, one unsigned byte, u15) and `END_NUMBERINGS`, rejects
   non-minimal encodings, and accepts the value only when at least one reading parses it to
@@ -155,7 +158,8 @@ the real IS 10.15 samples; see "JDBC adapter services (M15)". M15 extension (own
   `ADAPTER_LONG_ENCODING_UNCONFIRMED` and its page an "Unconfirmed reading" note.
   `scripts/decode_adapter.py` prints a node's document in the `documentToJSONString` shape or
   compares it with an exported JSON. Hypotheses are tested only by synthetic round trips through
-  `encode_idata`; the golden tests of the two confirmed samples need no hypothesis.
+  `encode_idata`; the golden tests of the seven real samples need no hypothesis. An
+  unknown tag (`unsupported_tag`) is never lifted by a hypothesis.
 - Other templates (Select, Insert, ... ) are decoded but not interpreted (`supported: false`):
   identity, configured tables and property names only, until real samples are checked.
 - SQL reading (`sql_analysis.py`, no new dependency): tokens first (literals, quoted

@@ -100,11 +100,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--show-secrets", action="store_true", help="print secret-like values")
     args = parser.parse_args(argv)
     if args.path.is_dir():
-        # samples/jdbcadapter: every folder with a node.ndf and an exported JSON.
+        # samples/jdbcadapter: every folder, at any depth, with a node.ndf and an exported JSON.
         folders = sorted(
-            folder
-            for folder in args.path.iterdir()
-            if (folder / "node.ndf").is_file() and any(folder.glob("*.json"))
+            node.parent
+            for node in args.path.rglob("node.ndf")
+            if node.is_file() and any(node.parent.glob("*.json"))
         )
         results = [
             _one(folder / "node.ndf", sorted(folder.glob("*.json"))[0], False)

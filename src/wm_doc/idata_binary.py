@@ -9,9 +9,11 @@ Confirmed on real IS 10.15 JDBC adapter services (see `docs/idata-binary-format.
 evidence):
 
 - the value starts with an Integer `1` and then holds one document, nothing after it;
-- every object starts with a one-byte tag: `0x04` string, `0x05` document, `0x0a` array,
-  `0x0b` Integer, `0x00` reference to an earlier object;
-- a string is a length and that many UTF-16BE code units;
+- every object starts with a one-byte tag: `0x04` string, `0x84` long string, `0x05`
+  document, `0x0a` array, `0x0b` Integer, `0x00` reference to an earlier object;
+- a string of up to 255 UTF-16 code units is its length in one unsigned byte and that many
+  UTF-16BE code units; from 256 on it is a long string: its length in four big-endian bytes
+  and the code units (IS exports of 127, 128, 255, 256 and 13,739 characters);
 - a document is `0x05 0x01`, its implementation class (a string), then key/value pairs
   (keys are strings) and `0x02 0x00`;
 - an array is a count, its component class (a string) and that many objects;
@@ -20,10 +22,11 @@ evidence):
   tag is read (containers before their content, references included), starting at 0 with
   the leading Integer.
 
-`decode_idata` reads only that. Lengths, counts and indexes were only seen below 128, as one
-byte, and no sample references an object written after a nested document closes.
+`decode_idata` reads only that. Array counts and reference indexes were only seen below 128,
+and no sample references an object written after a nested document closes.
 `decode_idata_hypotheses` (owner decision, M15 extension) also tries the readings the samples
-do not rule out for those two cases (`LENGTH_SCHEMES`, `END_NUMBERINGS`) and accepts a value
+do not rule out for those two cases (`LENGTH_SCHEMES` for a count or index of 128 or more,
+`END_NUMBERINGS`) and accepts a value
 only when it parses to the end and every reading that does gives the same document; the
 hypotheses it needed are returned so each such value can be checked against IS. A tag not
 listed above, any other marker byte and a reference to a document or an array are always
@@ -38,9 +41,15 @@ import binascii
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
+# Changes whenever the decoder reads more (or differently): cached analyses made by an older
+# decoder are not reused (`analysis_cache`). v2: the long string tag 0x84; v3: string lengths
+# 128..255 in one unsigned byte.
+IDATA_DECODER_VERSION = "idata-binary.v3"
+
 TAG_REFERENCE = 0x00
 TAG_END = 0x02
 TAG_STRING = 0x04
+TAG_LONG_STRING = 0x84  # a string with a four-byte length
 TAG_DOCUMENT = 0x05
 TAG_ARRAY = 0x0A
 TAG_INTEGER = 0x0B
@@ -49,16 +58,20 @@ DOCUMENT_START = 0x01
 DOCUMENT_END = 0x00
 INTEGER_WIDTH = 0x04
 FORMAT_VERSION = 1
-# The largest length, count or index seen in real values; above it the encoding is unknown.
+# The largest array count or reference index seen in real values; above it the encoding is
+# unknown.
 MAX_CONFIRMED_SHORT = 0x7F
 MAX_SHORT = 0x7FFF_FFFF
+# A string length in the `0x04` form is one unsigned byte; longer strings use `0x84`.
+MAX_STRING_BYTE_LENGTH = 0xFF
 
 MAX_ENCODED_CHARS = 1_400_000
 MAX_BYTES = 1_000_000
 MAX_DEPTH = 16
 MAX_OBJECTS = 200_000
 
-# Hypotheses for a length, count or index of 128 or more (none is confirmed by a sample):
+# Hypotheses for an array count or reference index of 128 or more (none is confirmed by a
+# sample; for string lengths `byte` was confirmed and the others ruled out):
 LENGTH_SCHEMES = (
     "leb128",  # 7-bit groups, least significant first, high bit = more follow (protobuf)
     "vlq",  # 7-bit groups, most significant first, high bit = more follow
@@ -332,6 +345,8 @@ class _Reader:
         tag = self.byte()
         if tag == TAG_STRING:
             return self._string(offset)
+        if tag == TAG_LONG_STRING:
+            return self._long_string(offset)
         if tag == TAG_REFERENCE:
             return self._reference(offset)
         if tag == TAG_INTEGER:
@@ -347,7 +362,18 @@ class _Reader:
         raise IDataBinaryError("unsupported_tag", f"type tag 0x{tag:02x} is not supported", offset)
 
     def _string(self, offset: int) -> str:
-        length = self.short("string length")
+        return self._text(self.byte(), offset)  # 0..255, one unsigned byte
+
+    def _long_string(self, offset: int) -> str:
+        length = int.from_bytes(self.take(4), "big", signed=True)
+        if length < 0:
+            raise IDataBinaryError("invalid_length", "a long string length is negative", offset)
+        if 2 * length > len(self.raw) - self.position:
+            # Checked before reading: a length is never trusted beyond the bytes present.
+            raise IDataBinaryError("truncated", "the value ends early", self.position)
+        return self._text(length, offset)
+
+    def _text(self, length: int, offset: int) -> str:
         data = self.take(2 * length)
         try:
             text = data.decode("utf-16-be")
@@ -458,9 +484,10 @@ def encode_idata(
 ) -> bytes:
     """The binary form of `document` (synthetic packages and tests only).
 
-    By default only the confirmed layout is written: every string in full and every length
-    and count below 128 (anything else raises IDataBinaryError). `long_lengths` writes
-    lengths, counts and indexes of 128 or more by one of the `LENGTH_SCHEMES` hypotheses, and
+    By default only the confirmed layout is written: every string in full (up to 255 code
+    units in `0x04`, longer ones in `0x84`), and every array count and reference index below
+    128 (anything else raises IDataBinaryError). `long_lengths` writes counts and indexes of
+    128 or more by one of the `LENGTH_SCHEMES` hypotheses (strings are always confirmed), and
     `references` writes a repeated string as a reference to its first occurrence, numbering
     objects by the `numbering` hypothesis after a nested document's end.
     """
@@ -516,8 +543,14 @@ class _Writer:
                 self.short(self.seen[value])
             else:
                 data = value.encode("utf-16-be")
-                self.out.append(TAG_STRING)
-                self.short(len(data) // 2)
+                units = len(data) // 2
+                if units <= MAX_STRING_BYTE_LENGTH:
+                    self.out += bytes([TAG_STRING, units])
+                elif units <= MAX_SHORT:
+                    self.out.append(TAG_LONG_STRING)
+                    self.out += units.to_bytes(4, "big")
+                else:
+                    raise IDataBinaryError("unsupported_length", "a string is too long")
                 self.out += data
                 self.seen.setdefault(value, self.count)
             self.count += 1
