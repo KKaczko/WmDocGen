@@ -24,6 +24,21 @@ test("an approved description is labelled and links the services it names", asyn
   await expect(adapter.getByText("Oracle")).toBeVisible();
 });
 
+test("a DynamicSQL adapter shows its SQL as text, its parameters and findings", async ({
+  page,
+}) => {
+  await open(page, "orders.db:selectOrder");
+  const adapter = page.getByRole("region", { name: "Adapter configuration" });
+  const sql = adapter.getByLabel("SQL template");
+  await expect(sql).toHaveText(
+    "SELECT o.ID, o.STATUS, o.TOTAL FROM ORDERS o WHERE o.ID = ? AND o.STATUS IN (${STATUSES}) ORDER BY o.ID",
+  );
+  expect(await sql.evaluate((element) => element.tagName)).toBe("PRE");
+  await expect(adapter.getByRole("row", { name: /orderId/ })).toContainText("= o.ID");
+  await expect(adapter.getByText("Potential risk:").first()).toBeVisible();
+  await expect(adapter.getByText(/Potential SQL injection exposure/)).toBeVisible();
+});
+
 test("stale, draft, edited and unverified descriptions say so", async ({ page }) => {
   await open(page, "orders.api:getOrder");
   await expect(
@@ -92,6 +107,7 @@ for (const [label, path] of [
   ["home", "/"],
   ["a FLOW service", service("orders.api:createOrder")],
   ["an adapter service", service("orders.db:insertOrder")],
+  ["a DynamicSQL adapter service", service("orders.db:selectOrder")],
   ["a hostile description", service("customers.api:updateCustomer")],
 ] as const) {
   test(`no serious accessibility violations on ${label}`, async ({ page }) => {

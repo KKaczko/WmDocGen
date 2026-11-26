@@ -335,6 +335,32 @@ M12 then migrates to `analysis.v11` for the approved readers:
 - Entry points also come from legacy REST v1 handlers (`_get`, `_post`, ... at
   `/rest/<namespace as path>`).
 
+M15 (owner-approved) migrates to `analysis.v13` for JDBC DynamicSQL and CustomSQL adapter
+services:
+
+- `idata_binary.py` decodes the binary IData value of `IRTNODE_PROPERTY` completely (only the
+  layout confirmed on real IS 10.15 samples; see `docs/idata-binary-format.md`). It knows
+  nothing about adapters and returns `BinaryDocument` / `BinaryArray` / strings / Integers, or an
+  `IDataBinaryError` with a code and a byte offset.
+- `adapters.py` interprets the decoded document: identity for every JDBC template, and for
+  DynamicSQL and CustomSQL the normalized `AdapterDetails.jdbc` (`JdbcServiceConfig`: SQL as a
+  policy `TextValue`, variables, parallel input/output arrays by position, settings, property
+  names not interpreted, structure issues). `AdapterDetails.decoding` is `decoded` or
+  `partial` (the M12 token reader was used because the structure is not supported).
+- `sql_analysis.py` reads the SQL template at analysis time into `SqlAnalysis` (statement,
+  tables with access, binds, substitutions, clauses, notes); only identifiers are stored.
+- `jdbc_facts.py` derives findings and caller uses on demand (never stored); `effects.py`
+  turns the SQL tables into data effects that callers inherit, and `ServiceFacts.database_calls`
+  carries the direct adapter calls into prompts and the facts hash;
+  `render/jdbc_markdown.py` renders the adapter page section and the description facts block.
+
+```
+node.ndf -> IRTNODE_PROPERTY (base64) -> idata_binary (generic document)
+         -> adapters (JdbcServiceConfig) -> sql_analysis (SqlAnalysis)   [stored in analysis.json]
+         -> effects / jdbc_facts (effects, findings, caller uses)       [derived on demand]
+         -> pages, prompts, description facts, Explorer tables
+```
+
 M14 stage 5 (owner-approved) migrates to `analysis.v12` for disclosure hardening of FLOW
 labels:
 

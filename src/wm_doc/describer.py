@@ -71,11 +71,14 @@ from wm_doc.ollama_provider import (
 )
 from wm_doc.pseudocode import (
     FULL_DETAIL,
+    CalleeAdapters,
+    callee_adapters_lookup,
     callee_outputs_lookup,
     load_flow_comments,
     render_pseudocode,
 )
 from wm_doc.render.flow_markdown import render_decision_facts
+from wm_doc.render.jdbc_markdown import render_jdbc_section
 from wm_doc.render.service_markdown import render_effects_table, render_entry_points_table
 from wm_doc.render.service_summary import adapter_sentence
 from wm_doc.service_docs import (
@@ -216,6 +219,28 @@ OPAQUE_PROMPT_TEMPLATE = (
     "- usage: one or two sentences on who or what uses it, from `used by`.\n"
     "- data_effects: one or two sentences on the data it reads or changes and where, from "
     "`data and systems touched`.\n"
+    "- steps: an empty list.\n"
+    "- detailed_steps: an empty list.\n"
+    "- error_handling: an empty string.\n"
+    "- designer_comment: plain text of at most 600 characters, without Markdown, for the "
+    "service's Comments field in Designer: purpose, main inputs and outputs, and effects."
+)
+# Decoded DynamicSQL/CustomSQL services: the SQL template is in the facts, so the model
+# explains the business rules it implements; the tool still writes steps and error handling.
+JDBC_PROMPT_TEMPLATE = (
+    "Facts:\n```\n{facts}\n```\n"
+    "This service is a JDBC adapter service: its implementation is the configured SQL "
+    "statement in the facts (no FLOW or Java steps). Read the SQL template and explain the "
+    "business rules it implements: which rows it selects or changes, the filter, status and "
+    "validity conditions, joins, ordering and pagination. Use only table, column and field "
+    "names that occur in the facts, and do not state values the facts do not show. A "
+    "potential risk in the findings stays potential: never call it confirmed.\n"
+    "Return JSON with these fields, in English:\n"
+    "- purpose: one or two sentences saying what the service is for, from its name, "
+    "signature and SQL. Start with a verb.\n"
+    "- usage: one or two sentences on who or what uses it, from `used by`.\n"
+    "- data_effects: one to three sentences on the tables it reads or changes and the "
+    "conditions in the SQL that decide which rows.\n"
     "- steps: an empty list.\n"
     "- detailed_steps: an empty list.\n"
     "- error_handling: an empty string.\n"
@@ -469,11 +494,13 @@ def deterministic_facts(
     comments: dict[str, str],
     external_note: Callable[[str], str | None],
     callee_outputs: Callable[[str], str | None] | None = None,
+    callee_adapters: CalleeAdapters | None = None,
 ) -> str:
     """Everything known about a service without callee descriptions: the basis of its hash.
 
     Callee wording is left out on purpose, so rewording a callee's description does not mark
-    every approved caller as "facts changed".
+    every approved caller as "facts changed". The configuration of a called JDBC adapter
+    (`callee_adapters`) is a fact, not wording: a changed SQL changes its callers' hash.
     """
     return render_pseudocode(
         service,
@@ -483,6 +510,7 @@ def deterministic_facts(
         facts_text=facts.text(),
         external_note=external_note,
         callee_outputs=callee_outputs,
+        callee_adapters=callee_adapters,
     )
 
 
@@ -520,7 +548,9 @@ def current_facts_hashes(
         system = external_systems.match(target)
         return system_label(system) if system is not None else None
 
-    outputs = callee_outputs_lookup({s.identity.full_name: s for s in analysis.services})
+    by_name = {s.identity.full_name: s for s in analysis.services}
+    outputs = callee_outputs_lookup(by_name)
+    adapters = callee_adapters_lookup(by_name)
     hashes: dict[str, str] = {}
     for package in analysis.packages:
         for service in package.services:
@@ -529,7 +559,7 @@ def current_facts_hashes(
                 continue
             comments = load_flow_comments(scan_root, service, config)
             deterministic = deterministic_facts(
-                service, facts[name], comments, external_note, outputs
+                service, facts[name], comments, external_note, outputs, adapters
             )
             basis = bases.get(name, 1) if bases is not None else 1
             hashes[name] = facts_hash_for(deterministic, service, basis)
@@ -757,6 +787,9 @@ def render_facts_block(
     decisions = render_decision_facts(logic, lineage)
     if decisions:
         lines += ["", decisions]
+    jdbc = render_jdbc_section(service)
+    if jdbc:
+        lines += ["", "### JDBC configuration", jdbc]
     return "\n".join(lines)
 
 
@@ -1011,6 +1044,7 @@ class _Run:
         self.services = services
         self.facts = facts
         self.callee_outputs = callee_outputs_lookup(services)
+        self.callee_adapters = callee_adapters_lookup(services)
         self.signatures = {name: item.signature for name, item in services.items()}
         self.writes = compute_pipeline_writes(services.values())
         self.session = session
@@ -1080,7 +1114,12 @@ class _Run:
         facts = self.facts[name]
         comments = load_flow_comments(self.options.scan_root, service, self.options.config)
         deterministic = deterministic_facts(
-            service, facts, comments, self.external_note, self.callee_outputs
+            service,
+            facts,
+            comments,
+            self.external_note,
+            self.callee_outputs,
+            self.callee_adapters,
         )
         logic = compute_flow_logic(service)
         hashed = basis_facts(deterministic, logic)
@@ -1119,7 +1158,11 @@ class _Run:
         opaque = service.service_type is ServiceType.OPAQUE
         detail = self.options.detail
         spec = DESCRIBE_SPECS[detail]
-        if opaque:
+        if opaque and service.adapter is not None and service.adapter.jdbc is not None and (
+            service.adapter.jdbc.supported
+        ):
+            template = JDBC_PROMPT_TEMPLATE
+        elif opaque:
             template = OPAQUE_PROMPT_TEMPLATE
         elif detail is DetailLevel.BRIEF:
             template = BRIEF_PROMPT_TEMPLATE
@@ -1140,6 +1183,7 @@ class _Run:
             overhead_chars=len(system) + len(template),
             num_predict=spec.num_predict,
             callee_outputs=self.callee_outputs,
+            callee_adapters=self.callee_adapters,
             flow=flow,
             flow_block=decisions_block(flow) if flow is not None else "",
         )
@@ -1244,7 +1288,37 @@ def opaque_steps(service: FlowService) -> tuple[str, ...]:
         return (f"Not analysed: the implementation of this `{source_type}` service is not read.",)
     # "JDBC adapter service (template `Select`): selects rows from ..." -> "Selects rows from ..."
     operation = (adapter_sentence(service) or "").split(": ", 1)[-1]
-    return (operation[:1].upper() + operation[1:],)
+    steps = [operation[:1].upper() + operation[1:]]
+    config = service.adapter.jdbc
+    if config is None or not config.supported:
+        return tuple(steps)
+    analysis = config.sql_analysis
+    binds = analysis.binds if analysis is not None else []
+    placeholders = {item.name: item for item in analysis.placeholders} if analysis else {}
+    for variable in config.variables:
+        where = placeholders.get(variable.name)
+        target = f" ({', '.join(where.contexts)}" + (
+            f" for `{where.column}`)" if where.column else ")"
+        ) if where is not None else ""
+        steps.append(
+            f"Replaces `${{{variable.name}}}` in the SQL text with the text of "
+            f"`{variable.field or variable.name}`{target}."
+        )
+    bound = []
+    for item in config.inputs:
+        bind = binds[item.position - 1] if item.position <= len(binds) else None
+        compared = (
+            f" ({bind.operator} `{bind.column}`)" if bind is not None and bind.column else ""
+        )
+        bound.append(f"`{item.field or '?'}` to `?` {item.position}{compared}")
+    if bound:
+        steps.append("Binds " + ", ".join(bound) + ".")
+    results = [f"`{item.result_field}`" for item in config.outputs if item.result_field]
+    if results:
+        steps.append("Returns the rows in " + ", ".join(results) + ".")
+    if config.sql_output_field:
+        steps.append(f"Returns the statement as run in `{config.sql_output_field}`.")
+    return tuple(steps)
 
 
 def parse_narrative(content: str) -> Narrative | None:

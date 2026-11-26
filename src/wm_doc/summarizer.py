@@ -21,6 +21,7 @@ from wm_doc.pseudocode import (
     DETAIL_LADDER,
     FULL_DETAIL,
     MINIMAL_DETAIL,
+    CalleeAdapters,
     render_pseudocode,
 )
 
@@ -63,14 +64,17 @@ def fit_facts(
     callee_outputs: Callable[[str], str | None] | None = None,
     flow: FlowLogic | None = None,
     flow_block: str = "",
+    callee_adapters: CalleeAdapters | None = None,
 ) -> tuple[str, bool]:
     """Render the richest pseudo-code that fits the context window.
 
     `overhead_chars` is the size of the instructions sent around the facts and
     `num_predict` the tokens reserved for the answer. With `flow` (the control model) the
     pseudo-code carries decision, case and call ids at every detail level, and `flow_block`
-    (the decisions it describes) follows it in full. Returns the facts and whether anything
-    was left out to make them fit.
+    (the decisions it describes) follows it in full. SQL templates (an adapter's own, and
+    those of the adapters a service calls, `callee_adapters`) shrink with the detail level
+    before anything else is cut. Returns the facts and whether anything was left out to make
+    them fit.
     """
     budget_tokens = num_ctx - num_predict - PROMPT_MARGIN_TOKENS
     tail = f"\n{flow_block}" if flow_block else ""
@@ -85,6 +89,7 @@ def fit_facts(
             external_note=external_note,
             callee_outputs=callee_outputs,
             logic=flow,
+            callee_adapters=callee_adapters,
         )
         if len(facts) <= budget_chars:
             return facts + tail, detail is not FULL_DETAIL
@@ -97,6 +102,7 @@ def fit_facts(
         external_note=external_note,
         callee_outputs=callee_outputs,
         logic=flow,
+        callee_adapters=callee_adapters,
     )
     lines = facts.splitlines()
     kept: list[str] = []

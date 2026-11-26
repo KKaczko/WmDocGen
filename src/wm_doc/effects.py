@@ -9,7 +9,8 @@ For every service this answers, from analysed facts only:
 - **Data and systems touched**: documents in its signature; platform calls that move data
   (publish, JMS, HTTP, SOAP, files, FTP/SFTP, email, storage) with the object and location
   read from the literal or mapped value of the documented input field; JDBC adapter
-  services with the operation, tables and connection decoded from their configuration;
+  services with the operation, tables and connection decoded from their configuration (for
+  DynamicSQL and CustomSQL each table their SQL template reads or writes, `sql_analysis`);
   other opaque services, with the connections their node.ndf names; calls that
   leave the analysed packages, named after a declared external system when one matches.
   Effects of local callees are included with the call chain ("via").
@@ -21,10 +22,9 @@ nothing is inferred from names.
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
-from wm_doc.adapters import operation_phrase
+from wm_doc.adapters import operation_phrase, sql_action
 from wm_doc.builtins import BuiltinEffect, builtin_effect, is_builtin_name
 from wm_doc.callgraph import summary_order
 from wm_doc.external_systems import EMPTY_CATALOG, ExternalSystemCatalog, system_label
@@ -34,15 +34,13 @@ from wm_doc.ir import (
     AnalysisResult,
     FlowService,
     Importance,
-    LiteralDisclosure,
-    MappingOperation,
-    MappingOperationType,
     ReferenceTargetKind,
     ServiceDocumentUsageRole,
     ServiceType,
     TriggerDetails,
 )
-from wm_doc.pseudocode import clean_pipeline_path
+from wm_doc.jdbc_facts import caller_lines
+from wm_doc.pseudocode import call_inputs
 from wm_doc.triggers import trigger_summary
 
 MAX_VIA_DEPTH = 6
@@ -51,8 +49,10 @@ MAX_ENTRY_POINTS = 15
 MAX_ENTRY_POINTS_IN_TEXT = 6
 MAX_ENTRY_DEPTH = 12
 MAX_CALLERS_SHOWN = 10
-INPUT_MAP_MODES = {"INPUT", "INVOKEINPUT"}
 ADAPTER_KNOWN_FROM = "adapter service configuration"
+# Tables read from a decoded DynamicSQL/CustomSQL template (`sql_analysis.py`).
+ADAPTER_SQL_KNOWN_FROM = "adapter SQL template"
+ADAPTER_KNOWN_FROM_ALL = (ADAPTER_KNOWN_FROM, ADAPTER_SQL_KNOWN_FROM)
 REST_V1_KIND = "REST v1 handler"
 # IS REST v1: a folder is a resource at /rest/<folder path>; services with these names
 # handle the HTTP methods.
@@ -96,6 +96,9 @@ class ServiceFacts:
     entry_points: tuple[EntryPoint, ...]
     effects: tuple[DataEffect, ...]
     hidden_effects: int = 0
+    # Calls of decoded DynamicSQL/CustomSQL adapter services: loops around them and what
+    # their input maps pass into text substitutions and `$connectionName` (`jdbc_facts`).
+    database_calls: tuple[str, ...] = ()
 
     def text(self) -> str:
         """Deterministic plain-text form, used in prompts and for change detection."""
@@ -123,6 +126,9 @@ class ServiceFacts:
             )
         if self.hidden_effects:
             lines.append(f"  ... and {self.hidden_effects} more")
+        if self.database_calls:
+            lines.append("JDBC adapter calls (direct):")
+            lines += [f"  {line}" for line in self.database_calls]
         return "\n".join(lines)
 
 
@@ -157,6 +163,7 @@ def compute_service_facts(
             entry_points=_entry_points(name, callers, entries),
             effects=tuple(all_effects[:MAX_EFFECTS]),
             hidden_effects=max(len(all_effects) - MAX_EFFECTS, 0),
+            database_calls=caller_lines(services[name], services, call_inputs),
         )
     return facts
 
@@ -181,7 +188,7 @@ def _own_effects(
 ) -> list[DataEffect]:
     effects: list[DataEffect] = []
     if service.adapter is not None:
-        effects.append(adapter_effect(service.adapter, adapter_connections or {}))
+        effects.extend(adapter_effects(service.adapter, adapter_connections or {}))
     for dependency in sorted(
         service.service_document_dependencies, key=lambda item: item.target_document.casefold()
     ):
@@ -279,42 +286,7 @@ def _platform_effect(service: FlowService, call_id: str, effect: BuiltinEffect) 
 
 def _input_values(service: FlowService, call_id: str) -> dict[str, tuple[str, str]]:
     """Top-level input fields set or mapped into one call: field -> (display, how known)."""
-    map_ids = {
-        flow_map.id
-        for flow_map in service.flow_maps
-        if flow_map.parent_call_occurrence_id == call_id
-        and (flow_map.mode or "").upper() in INPUT_MAP_MODES
-    }
-    values: dict[str, tuple[str, str]] = {}
-    operations: Iterable[MappingOperation] = sorted(
-        (op for op in service.mapping_operations if op.flow_map_id in map_ids),
-        key=lambda op: op.map_operation_order,
-    )
-    for operation in operations:
-        target = clean_pipeline_path(
-            operation.target_endpoint.raw_path if operation.target_endpoint else None
-        )
-        if not target:
-            continue
-        segments = [segment for segment in target.split("/") if segment]
-        if len(segments) != 1:
-            continue
-        field = segments[0].casefold()
-        if operation.operation_type is MappingOperationType.SET:
-            literal = operation.literal
-            if literal is None or not literal.present or literal.is_null_like:
-                values[field] = ("(empty)", "literal")
-            elif literal.disclosure is LiteralDisclosure.INCLUDED and literal.value is not None:
-                values[field] = (f"`{_short(literal.value)}`", "literal")
-            else:
-                values[field] = ("(value withheld)", "literal")
-        elif operation.operation_type is MappingOperationType.COPY:
-            source = clean_pipeline_path(
-                operation.source_endpoint.raw_path if operation.source_endpoint else None
-            )
-            if source:
-                values.setdefault(field, (f"from `{source}`", "mapped from pipeline"))
-    return values
+    return {path: value for path, value in call_inputs(service, call_id).items() if "/" not in path}
 
 
 def _short(text: str, limit: int = 120) -> str:
@@ -322,10 +294,58 @@ def _short(text: str, limit: int = 120) -> str:
     return flat if len(flat) <= limit else flat[: limit - 3] + "..."
 
 
+def adapter_effects(
+    details: AdapterDetails, adapter_connections: dict[str, AdapterDetails]
+) -> list[DataEffect]:
+    """What a JDBC adapter service does, from its decoded configuration.
+
+    A DynamicSQL or CustomSQL service whose SQL was read names each table it reads or writes
+    (known from the SQL template); every other service names its configured tables.
+    """
+    where = connection_label(details.connection, adapter_connections)
+    analysis = details.jdbc.sql_analysis if details.jdbc is not None else None
+    if analysis is not None and analysis.status != "not_analysed":
+        effects: list[DataEffect] = []
+        statement = analysis.statement
+        kind = details.jdbc.template_kind if details.jdbc is not None else ""
+        for item in analysis.objects:
+            name = f"{item.schema_name}.{item.name}" if item.schema_name else item.name
+            effects.append(
+                DataEffect(
+                    f"table `{name}`",
+                    f"{sql_action(statement, item.access)} ({statement} in {kind})",
+                    where,
+                    ADAPTER_SQL_KNOWN_FROM,
+                )
+            )
+        for placeholder in analysis.placeholders:
+            if "object name" in placeholder.contexts:
+                effects.append(
+                    DataEffect(
+                        f"a table named at run time by `${{{placeholder.name}}}`",
+                        f"reads or changes ({statement} in {kind})",
+                        where,
+                        ADAPTER_SQL_KNOWN_FROM,
+                    )
+                )
+        if analysis.procedure:
+            effects.append(
+                DataEffect(
+                    f"procedure `{analysis.procedure}`",
+                    f"calls ({kind})",
+                    where,
+                    ADAPTER_SQL_KNOWN_FROM,
+                )
+            )
+        if effects:
+            return effects
+    return [adapter_effect(details, adapter_connections)]
+
+
 def adapter_effect(
     details: AdapterDetails, adapter_connections: dict[str, AdapterDetails]
 ) -> DataEffect:
-    """What a JDBC adapter service does, from its decoded configuration."""
+    """The configured operation of a JDBC adapter service and its configured tables."""
     tables = details.tables
     if not tables:
         target = "database"

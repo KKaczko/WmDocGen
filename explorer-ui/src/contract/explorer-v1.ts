@@ -47,6 +47,7 @@ export interface Disclosure {
   designerComments: "excluded";
   literals: "excluded";
   notes: "excluded";
+  sql: "included" | "excluded";
   withheldStrings: number;
 }
 /**
@@ -130,10 +131,118 @@ export interface AdapterInfo {
   connection: string | null;
   databaseName: string | null;
   databaseProduct: string | null;
+  decoding: ("decoded" | "partial") | null;
+  jdbc: JdbcInfo | null;
   operation: string | null;
   tables: string[];
   template: string | null;
   transactionType: string | null;
+}
+/**
+ * A decoded JDBC adapter service's configuration and SQL (owner decision, M15 extension).
+ *
+ * `sql` is the template exactly as configured when the analysis kept it and the build did
+ * not exclude it; `sql_state` says which. Everything else is identifiers and structure.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "JdbcInfo".
+ */
+export interface JdbcInfo {
+  binds: JdbcBind[];
+  findings: JdbcFinding[];
+  hypotheses: string[];
+  maxRows: string | null;
+  notes: string[];
+  procedure: string | null;
+  queryTimeout: string | null;
+  readStatus: string | null;
+  results: JdbcResult[];
+  shape: string[];
+  sql: string | null;
+  sqlLength: number | null;
+  sqlState: "included" | "withheld" | "excluded" | "absent";
+  statement: string | null;
+  statementOutput: string | null;
+  substitutions: JdbcSubstitution[];
+  supported: boolean;
+  tables: JdbcTable[];
+  templateKind: string;
+}
+/**
+ * One `?` of the SQL and the input bound to it, by position.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "JdbcBind".
+ */
+export interface JdbcBind {
+  column: string | null;
+  field: string | null;
+  javaType: string | null;
+  jdbcType: string | null;
+  operator: string | null;
+  position: number;
+  role: string;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "JdbcFinding".
+ */
+export interface JdbcFinding {
+  basis: string;
+  code: string;
+  kind: "fact" | "inferred" | "risk" | "unknown";
+  text: (TextSegment | CodeSegment)[];
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "TextSegment".
+ */
+export interface TextSegment {
+  kind: "text";
+  text: string;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "CodeSegment".
+ */
+export interface CodeSegment {
+  code: string;
+  kind: "code";
+  ref: string | null;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "JdbcResult".
+ */
+export interface JdbcResult {
+  field: string | null;
+  jdbcType: string | null;
+  position: number;
+  resultField: string | null;
+  resultType: string | null;
+}
+/**
+ * A DynamicSQL `${name}`: replaced by the text of an input before the statement runs.
+ *
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "JdbcSubstitution".
+ */
+export interface JdbcSubstitution {
+  column: string | null;
+  contexts: string[];
+  field: string | null;
+  javaType: string | null;
+  name: string;
+}
+/**
+ * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
+ * via the `definition` "JdbcTable".
+ */
+export interface JdbcTable {
+  access: "read" | "write" | "read-write";
+  clauses: string[];
+  name: string;
+  schemaName: string | null;
 }
 /**
  * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
@@ -219,23 +328,6 @@ export interface DescriptionSection {
     | "entryPoints"
     | "systemsAndData";
   paragraphs: (TextSegment | CodeSegment)[][];
-}
-/**
- * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
- * via the `definition` "TextSegment".
- */
-export interface TextSegment {
-  kind: "text";
-  text: string;
-}
-/**
- * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema
- * via the `definition` "CodeSegment".
- */
-export interface CodeSegment {
-  code: string;
-  kind: "code";
-  ref: string | null;
 }
 /**
  * This interface was referenced by `ExplorerContractFiles`'s JSON-Schema

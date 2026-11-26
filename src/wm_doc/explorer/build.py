@@ -23,7 +23,7 @@ from wm_doc.call_targets import (
     classify_target,
     placeholder_target,
 )
-from wm_doc.effects import DataEffect, ServiceFacts
+from wm_doc.effects import DataEffect, ServiceFacts, call_inputs
 from wm_doc.explorer.contract import (
     AdapterInfo,
     AnalysisInfo,
@@ -47,6 +47,13 @@ from wm_doc.explorer.contract import (
     GraphData,
     GraphEdge,
     GraphTarget,
+    JdbcBind,
+    JdbcFinding,
+    JdbcFindingKind,
+    JdbcInfo,
+    JdbcResult,
+    JdbcSubstitution,
+    JdbcTable,
     Manifest,
     PackageDetail,
     PackageEffect,
@@ -70,6 +77,8 @@ from wm_doc.explorer.contract import (
     SignatureField,
     SkippedPackage,
     SourceRef,
+    SqlShown,
+    SqlTextState,
     TextSegment,
     dump_json,
 )
@@ -97,8 +106,11 @@ from wm_doc.ir import (
     ServiceType,
     SignatureOrigin,
     SourceReference,
+    SqlAnalysis,
+    TextDisclosure,
 )
 from wm_doc.ir import SignatureField as IrSignatureField
+from wm_doc.jdbc_facts import adapter_findings, adapter_uses, use_findings
 from wm_doc.overviews import PackageSummary, summarize_packages
 from wm_doc.service_docs import DETAIL_KEY, SERVER_OVERVIEW, DocState, ServiceDoc
 
@@ -151,6 +163,8 @@ class ExplorerOptions:
     descriptions: DescriptionsShown = "approved"
     # Branch condition values in flows/ (owner decision, M14); "excluded" withholds them.
     condition_values: ConditionValues = "included"
+    # JDBC adapter SQL templates (owner decision, M15 extension); "excluded" withholds them.
+    sql: SqlShown = "included"
 
 
 @dataclass(frozen=True)
@@ -227,6 +241,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
     details: dict[str, ServiceDetail] = {}
     flows: dict[str, bytes] = {}
     signatures = {item.identity.full_name: item.signature for item in services}
+    by_name = {item.identity.full_name: item for item in services}
     writes = compute_pipeline_writes(services)
     search_services: list[SearchService] = []
     call_count = 0
@@ -332,7 +347,14 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
             effects=[_effect(item, refs, guard) for item in effects[:MAX_LIST_ITEMS]],
             effects_hidden=hidden_effects + max(0, len(effects) - MAX_LIST_ITEMS),
             documents=_documents(service, guard),
-            adapter=_adapter(service.adapter, connections, guard),
+            adapter=_adapter(
+                service,
+                connections,
+                guard,
+                refs,
+                options.sql,
+                [by_name[name] for name in (facts.callers if facts else ()) if name in by_name],
+            ),
             description=(
                 _description(doc, state, refs, guard)
                 if doc is not None and state != "none"
@@ -410,6 +432,7 @@ def build_bundle(inputs: ExplorerInputs, options: ExplorerOptions) -> ExplorerBu
             descriptions=options.descriptions,
             withheld_strings=0,
             condition_values=options.condition_values,
+            sql=options.sql,
         ),
         counts=Counts(
             packages=len(analysis.packages),
@@ -506,10 +529,14 @@ def _documents(service: FlowService, guard: TextGuard) -> list[DocumentUse]:
 
 
 def _adapter(
-    details: AdapterDetails | None,
+    service: FlowService,
     connections: Mapping[str, AdapterDetails],
     guard: TextGuard,
+    refs: Mapping[str, str],
+    sql_shown: SqlShown,
+    callers: list[FlowService],
 ) -> AdapterInfo | None:
+    details = service.adapter
     if details is None:
         return None
     connection = connections.get(details.connection or "")
@@ -522,11 +549,177 @@ def _adapter(
         operation=clean(details.operation),
         template=clean(details.template),
         connection=clean(details.connection),
-        tables=[guard.name(table) for table in details.tables][:MAX_LIST_ITEMS],
+        tables=[guard.name(table) for table in _adapter_tables(details)][:MAX_LIST_ITEMS],
         database_product=clean(connection.database_product) if connection else None,
         database_name=clean(connection.database_name) if connection else None,
         transaction_type=clean(connection.transaction_type) if connection else None,
+        decoding=details.decoding.value if details.decoding is not None else None,
+        jdbc=_jdbc(service, guard, refs, sql_shown, callers),
     )
+
+
+def _jdbc(
+    service: FlowService,
+    guard: TextGuard,
+    refs: Mapping[str, str],
+    sql_shown: SqlShown,
+    callers: list[FlowService],
+) -> JdbcInfo | None:
+    """The decoded JDBC configuration; the SQL as the analysis kept it, through TextGuard."""
+    details = service.adapter
+    config = details.jdbc if details is not None else None
+    if details is None or config is None:
+        return None
+
+    def clean(value: str | None) -> str | None:
+        return guard.name(value) if value else None
+
+    hypotheses = [guard.name(item) for item in details.decode_hypotheses]
+    if not config.supported:
+        return JdbcInfo(
+            template_kind=guard.name(config.template_kind), supported=False, hypotheses=hypotheses
+        )
+    sql_state: SqlTextState = "absent"
+    sql_text: str | None = None
+    sql = config.sql
+    if sql is not None:
+        if sql.disclosure is not TextDisclosure.INCLUDED or sql.value is None:
+            sql_state = "withheld"
+            guard.withheld += 1
+        elif sql_shown == "excluded":
+            sql_state = "excluded"
+        else:
+            shown = guard.sql(sql.value)
+            if shown.startswith("[withheld:"):
+                sql_state = "withheld"
+            else:
+                sql_state, sql_text = "included", shown
+    analysis = config.sql_analysis
+    binds = analysis.binds if analysis is not None else []
+    placeholders = {item.name: item for item in analysis.placeholders} if analysis else {}
+    uses, _ = adapter_uses(service, callers, call_inputs)
+    findings = adapter_findings(service) + use_findings(uses)
+    bind_rows = []
+    for item in config.inputs:
+        bind = binds[item.position - 1] if item.position <= len(binds) else None
+        bind_rows.append(
+            JdbcBind(
+                position=item.position,
+                field=clean(item.field),
+                java_type=clean(item.field_type),
+                jdbc_type=clean(item.jdbc_type),
+                column=clean(bind.column) if bind is not None else None,
+                operator=clean(bind.operator) if bind is not None else None,
+                role=bind.role if bind is not None else "value",
+            )
+        )
+    substitutions = []
+    for variable in config.variables:
+        found = placeholders.get(variable.name)
+        substitutions.append(
+            JdbcSubstitution(
+                name=guard.name(variable.name),
+                field=clean(variable.field),
+                java_type=clean(variable.field_type),
+                contexts=list(found.contexts) if found is not None else ["not in the SQL"],
+                column=clean(found.column) if found is not None else None,
+            )
+        )
+    return JdbcInfo(
+        template_kind=guard.name(config.template_kind),
+        supported=True,
+        hypotheses=hypotheses,
+        sql=sql_text,
+        sql_state=sql_state,
+        sql_length=sql.length if sql is not None else None,
+        statement=clean(analysis.statement) if analysis is not None else None,
+        read_status=analysis.status if analysis is not None else None,
+        tables=[
+            JdbcTable(
+                name=guard.name(item.name),
+                schema_name=clean(item.schema_name),
+                access=_ACCESS[item.access],
+                clauses=[guard.name(clause) for clause in item.clauses],
+            )
+            for item in (analysis.objects if analysis is not None else [])
+        ][:MAX_LIST_ITEMS],
+        procedure=clean(analysis.procedure) if analysis is not None else None,
+        shape=_sql_shape(analysis) if analysis is not None else [],
+        binds=bind_rows[:MAX_LIST_ITEMS],
+        substitutions=substitutions[:MAX_LIST_ITEMS],
+        results=[
+            JdbcResult(
+                position=item.position,
+                field=clean(item.field),
+                jdbc_type=clean(item.jdbc_type),
+                result_field=clean(item.result_field),
+                result_type=clean(item.result_type),
+            )
+            for item in config.outputs
+        ][:MAX_LIST_ITEMS],
+        statement_output=clean(config.sql_output_field),
+        max_rows=config.max_rows,
+        query_timeout=config.query_timeout,
+        findings=[
+            JdbcFinding(
+                kind=_FINDING_KINDS[item.kind],
+                code=item.code,
+                text=guard.segments(item.text, refs, prose=False, limit=800),
+                basis=item.basis,
+            )
+            for item in findings
+        ][:MAX_LIST_ITEMS],
+        notes=[
+            note
+            for item in (analysis.notes if analysis is not None else [])
+            if (note := guard.free_text(item, 400))
+        ],
+    )
+
+
+_ACCESS: dict[str, Literal["read", "write", "read-write"]] = {
+    "read": "read",
+    "write": "write",
+    "read-write": "read-write",
+}
+_FINDING_KINDS: dict[str, JdbcFindingKind] = {
+    "fact": "fact",
+    "inferred": "inferred",
+    "risk": "risk",
+    "unknown": "unknown",
+}
+
+
+def _sql_shape(analysis: SqlAnalysis) -> list[str]:
+    shape = [
+        f"WHERE: {'yes' if analysis.where else 'no'}",
+        f"ORDER BY: {analysis.order_by or 'none'}",
+        "pagination: " + (", ".join(analysis.pagination) or "none"),
+    ]
+    if analysis.joins:
+        shape.append(f"joins: {analysis.joins}")
+    if analysis.subqueries:
+        shape.append(f"subqueries: {analysis.subqueries}")
+    if analysis.group_by:
+        shape.append("GROUP BY: yes")
+    if analysis.set_operations:
+        shape.append("set operations: " + ", ".join(analysis.set_operations))
+    if analysis.for_update:
+        shape.append("locks rows: FOR UPDATE")
+    return shape
+
+
+def _adapter_tables(details: AdapterDetails) -> list[str]:
+    """Configured tables, or the tables a decoded SQL template names (never the SQL text)."""
+    if details.tables:
+        return list(details.tables)
+    analysis = details.jdbc.sql_analysis if details.jdbc is not None else None
+    if analysis is None:
+        return []
+    return [
+        f"{item.schema_name}.{item.name}" if item.schema_name else item.name
+        for item in analysis.objects
+    ]
 
 
 def _package_detail(

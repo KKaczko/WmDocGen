@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from wm_doc.adapters import sql_objects_phrase
 from wm_doc.describer import (
     AnswerSpec,
     DescribeError,
@@ -39,7 +40,7 @@ from wm_doc.describer import (
     system_prompt,
 )
 from wm_doc.effects import ServiceFacts, compute_service_facts, entry_markers
-from wm_doc.ir import AnalysisResult, ServiceType
+from wm_doc.ir import AnalysisResult, FlowService, ServiceType
 from wm_doc.ollama_provider import ModelProvider
 from wm_doc.render.service_summary import render_service_summary
 from wm_doc.service_docs import (
@@ -136,6 +137,8 @@ class PackageSummary:
     effects: tuple[EffectRow, ...]
     calls_into: tuple[tuple[str, int], ...]
     called_from: tuple[tuple[str, int], ...]
+    # Decoded DynamicSQL/CustomSQL adapter services: one short line each from their SQL.
+    adapter_statements: tuple[str, ...] = ()
 
     def type_counts(self) -> Counter[str]:
         return Counter(self.service_types.values())
@@ -219,8 +222,34 @@ def summarize_packages(
             effects=tuple(effects),
             calls_into=_sorted_counts(calls_into),
             called_from=_sorted_counts(called_from),
+            adapter_statements=tuple(
+                line for line in (adapter_statement(service) for service in services) if line
+            ),
         )
     return summaries
+
+
+def adapter_statement(service: FlowService) -> str | None:
+    """`name (CustomSQL): SELECT reading table `T`; binds `t.a`; substitutes `${x}``."""
+    details = service.adapter
+    config = details.jdbc if details is not None else None
+    if details is None or config is None or not config.supported:
+        return None
+    analysis = config.sql_analysis
+    head = (analysis.statement or "SQL") if analysis is not None else "SQL not read"
+    objects = sql_objects_phrase(details)
+    parts = [f"{head} {objects}" if objects else head]
+    if analysis is not None:
+        columns = [f"`{bind.column}`" for bind in analysis.binds if bind.column]
+        if columns:
+            parts.append("binds " + ", ".join(dict.fromkeys(columns)))
+        if analysis.pagination:
+            parts.append("paged by " + ", ".join(analysis.pagination))
+    if config.variables:
+        parts.append(
+            "substitutes " + ", ".join(f"`${{{item.name}}}`" for item in config.variables)
+        )
+    return f"{service.identity.full_name} ({config.template_kind}): " + "; ".join(parts)
 
 
 def service_purposes(
@@ -281,7 +310,15 @@ def package_facts_text(
         ("services:", services),
         ("data and systems touched by the package's own services:", effects),
     ]
-    return _fit_sections(header, sections, tail, max_chars, trim_order=(1, 2, 0))
+    if summary.adapter_statements:
+        sections.append(
+            (
+                "JDBC adapter statements (from their SQL templates):",
+                [f"  {line}" for line in summary.adapter_statements],
+            )
+        )
+    trim = (1, 3, 2, 0) if summary.adapter_statements else (1, 2, 0)
+    return _fit_sections(header, sections, tail, max_chars, trim_order=trim)
 
 
 def server_facts_text(

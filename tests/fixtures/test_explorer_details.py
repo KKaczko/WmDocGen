@@ -227,8 +227,74 @@ def test_adapter_configuration_is_the_allow_listed_one(built: dict[str, bytes]) 
         "tables": ["ORDERS", "ORDER_LINES"],
         "template": "com.wm.adapter.wmjdbc.services.Insert",
         "transactionType": "LOCAL_TRANSACTION",
+        "decoding": "decoded",
+        # Insert is decoded but not interpreted: no SQL, parameters or findings.
+        "jdbc": {
+            "binds": [],
+            "findings": [],
+            "hypotheses": [],
+            "maxRows": None,
+            "notes": [],
+            "procedure": None,
+            "queryTimeout": None,
+            "readStatus": None,
+            "results": [],
+            "shape": [],
+            "sql": None,
+            "sqlLength": None,
+            "sqlState": "absent",
+            "statement": None,
+            "statementOutput": None,
+            "substitutions": [],
+            "supported": False,
+            "tables": [],
+            "templateKind": "Insert",
+        },
     }
     assert _detail(built, "orders.api:createOrder")["adapter"] is None
+
+
+def test_a_dynamic_sql_adapter_shows_its_sql_parameters_and_findings(
+    built: dict[str, bytes],
+) -> None:
+    jdbc = _detail(built, "orders.db:selectOrder")["adapter"]["jdbc"]
+    assert jdbc["sqlState"] == "included"
+    assert jdbc["sql"] == (
+        "SELECT o.ID, o.STATUS, o.TOTAL FROM ORDERS o "
+        "WHERE o.ID = ? AND o.STATUS IN (${STATUSES}) ORDER BY o.ID"
+    )
+    assert [(b["position"], b["field"], b["column"]) for b in jdbc["binds"]] == [
+        (1, "orderId", "o.ID")
+    ]
+    assert [(s["name"], s["contexts"], s["column"]) for s in jdbc["substitutions"]] == [
+        ("STATUSES", ["value list"], "o.STATUS")
+    ]
+    assert [r["resultField"] for r in jdbc["results"]] == [
+        "results[].id",
+        "results[].status",
+        "results[].total",
+    ]
+    kinds = {f["code"]: f["kind"] for f in jdbc["findings"]}
+    assert kinds["sql-injection-exposure"] == "risk"
+    assert kinds["text-substitution"] == "inferred"
+    assert jdbc["tables"] == [
+        {"access": "read", "clauses": ["FROM"], "name": "ORDERS", "schemaName": None}
+    ]
+    manifest = json.loads(built["manifest.json"])
+    assert manifest["disclosure"]["sql"] == "included"
+
+
+def test_the_sql_option_withholds_only_the_sql_text(
+    packages: Path, analysis: AnalysisResult, docs_dir: Path
+) -> None:
+    inputs = explorer_inputs(analysis, packages, load_config(None), docs_dir=docs_dir)
+    options = ExplorerOptions(dataset_kind="synthetic", descriptions="all", sql="excluded")
+    files = render_data_files(build_bundle(inputs, options))
+    jdbc = _detail(files, "orders.db:selectOrder")["adapter"]["jdbc"]
+    assert (jdbc["sql"], jdbc["sqlState"], jdbc["sqlLength"]) == (None, "excluded", 103)
+    assert jdbc["binds"] and jdbc["findings"]
+    assert "o.STATUS IN" not in b"".join(files.values()).decode("utf-8")
+    assert json.loads(files["manifest.json"])["disclosure"]["sql"] == "excluded"
 
 
 @pytest.mark.parametrize(

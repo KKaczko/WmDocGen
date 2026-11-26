@@ -70,8 +70,8 @@ def _nodes(node: FlowNode | None, kind: FlowNodeType) -> list[FlowNode]:
     return found
 
 
-def test_the_schema_is_analysis_v12() -> None:
-    assert ANALYSIS_SCHEMA_VERSION == "analysis.v12"
+def test_the_schema_is_analysis_v13() -> None:
+    assert ANALYSIS_SCHEMA_VERSION == "analysis.v13"
 
 
 # --- case labels -----------------------------------------------------------------------------

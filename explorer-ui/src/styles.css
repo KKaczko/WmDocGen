@@ -634,6 +634,20 @@ details ol {
   max-width: 100%;
 }
 
+/* An SQL template: plain text, line breaks kept, long lines wrap. */
+.sql {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 .facts {
   grid-template-columns: max-content minmax(0, 1fr);
 }

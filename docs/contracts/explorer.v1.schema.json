@@ -52,6 +52,33 @@
           "default": null,
           "title": "Databaseproduct"
         },
+        "decoding": {
+          "anyOf": [
+            {
+              "enum": [
+                "decoded",
+                "partial"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decoding"
+        },
+        "jdbc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JdbcInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "operation": {
           "anyOf": [
             {
@@ -104,7 +131,9 @@
         "tables",
         "databaseProduct",
         "databaseName",
-        "transactionType"
+        "transactionType",
+        "decoding",
+        "jdbc"
       ],
       "title": "AdapterInfo",
       "type": "object"
@@ -534,6 +563,15 @@
           "title": "Notes",
           "type": "string"
         },
+        "sql": {
+          "default": "included",
+          "enum": [
+            "included",
+            "excluded"
+          ],
+          "title": "Sql",
+          "type": "string"
+        },
         "withheldStrings": {
           "title": "Withheldstrings",
           "type": "integer"
@@ -545,7 +583,8 @@
         "notes",
         "descriptions",
         "withheldStrings",
-        "conditionValues"
+        "conditionValues",
+        "sql"
       ],
       "title": "Disclosure",
       "type": "object"
@@ -1909,6 +1948,517 @@
         "note"
       ],
       "title": "GraphTarget",
+      "type": "object"
+    },
+    "JdbcBind": {
+      "additionalProperties": false,
+      "description": "One `?` of the SQL and the input bound to it, by position.",
+      "properties": {
+        "column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "javaType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Javatype"
+        },
+        "jdbcType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Jdbctype"
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operator"
+        },
+        "position": {
+          "title": "Position",
+          "type": "integer"
+        },
+        "role": {
+          "default": "value",
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "position",
+        "field",
+        "javaType",
+        "jdbcType",
+        "column",
+        "operator",
+        "role"
+      ],
+      "title": "JdbcBind",
+      "type": "object"
+    },
+    "JdbcFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "title": "Basis",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "fact",
+            "inferred",
+            "risk",
+            "unknown"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "code": "#/$defs/CodeSegment",
+                "text": "#/$defs/TextSegment"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextSegment"
+              },
+              {
+                "$ref": "#/$defs/CodeSegment"
+              }
+            ]
+          },
+          "title": "Text",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "code",
+        "text",
+        "basis"
+      ],
+      "title": "JdbcFinding",
+      "type": "object"
+    },
+    "JdbcInfo": {
+      "additionalProperties": false,
+      "description": "A decoded JDBC adapter service's configuration and SQL (owner decision, M15 extension).\n\n`sql` is the template exactly as configured when the analysis kept it and the build did\nnot exclude it; `sql_state` says which. Everything else is identifiers and structure.",
+      "properties": {
+        "binds": {
+          "items": {
+            "$ref": "#/$defs/JdbcBind"
+          },
+          "title": "Binds",
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/JdbcFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "hypotheses": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hypotheses",
+          "type": "array"
+        },
+        "maxRows": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maxrows"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "procedure": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Procedure"
+        },
+        "queryTimeout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Querytimeout"
+        },
+        "readStatus": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Readstatus"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/JdbcResult"
+          },
+          "title": "Results",
+          "type": "array"
+        },
+        "shape": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Shape",
+          "type": "array"
+        },
+        "sql": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sql"
+        },
+        "sqlLength": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sqllength"
+        },
+        "sqlState": {
+          "default": "absent",
+          "enum": [
+            "included",
+            "withheld",
+            "excluded",
+            "absent"
+          ],
+          "title": "Sqlstate",
+          "type": "string"
+        },
+        "statement": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Statement"
+        },
+        "statementOutput": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Statementoutput"
+        },
+        "substitutions": {
+          "items": {
+            "$ref": "#/$defs/JdbcSubstitution"
+          },
+          "title": "Substitutions",
+          "type": "array"
+        },
+        "supported": {
+          "title": "Supported",
+          "type": "boolean"
+        },
+        "tables": {
+          "items": {
+            "$ref": "#/$defs/JdbcTable"
+          },
+          "title": "Tables",
+          "type": "array"
+        },
+        "templateKind": {
+          "title": "Templatekind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "templateKind",
+        "supported",
+        "hypotheses",
+        "sql",
+        "sqlState",
+        "sqlLength",
+        "statement",
+        "readStatus",
+        "tables",
+        "procedure",
+        "shape",
+        "binds",
+        "substitutions",
+        "results",
+        "statementOutput",
+        "maxRows",
+        "queryTimeout",
+        "findings",
+        "notes"
+      ],
+      "title": "JdbcInfo",
+      "type": "object"
+    },
+    "JdbcResult": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "jdbcType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Jdbctype"
+        },
+        "position": {
+          "title": "Position",
+          "type": "integer"
+        },
+        "resultField": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resultfield"
+        },
+        "resultType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resulttype"
+        }
+      },
+      "required": [
+        "position",
+        "field",
+        "jdbcType",
+        "resultField",
+        "resultType"
+      ],
+      "title": "JdbcResult",
+      "type": "object"
+    },
+    "JdbcSubstitution": {
+      "additionalProperties": false,
+      "description": "A DynamicSQL `${name}`: replaced by the text of an input before the statement runs.",
+      "properties": {
+        "column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column"
+        },
+        "contexts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Contexts",
+          "type": "array"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "javaType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Javatype"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "field",
+        "javaType",
+        "contexts",
+        "column"
+      ],
+      "title": "JdbcSubstitution",
+      "type": "object"
+    },
+    "JdbcTable": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "enum": [
+            "read",
+            "write",
+            "read-write"
+          ],
+          "title": "Access",
+          "type": "string"
+        },
+        "clauses": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clauses",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "schemaName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schemaname"
+        }
+      },
+      "required": [
+        "name",
+        "schemaName",
+        "access",
+        "clauses"
+      ],
+      "title": "JdbcTable",
       "type": "object"
     },
     "Manifest": {

@@ -98,7 +98,7 @@ class DependencyKind(StrEnum):
     USES_TRANSFORMER = "USES_TRANSFORMER"
 
 
-ANALYSIS_SCHEMA_VERSION = "analysis.v12"
+ANALYSIS_SCHEMA_VERSION = "analysis.v13"
 
 
 class SignatureOrigin(StrEnum):
@@ -1002,13 +1002,154 @@ class AdapterRole(StrEnum):
     NOTIFICATION = "NOTIFICATION"
 
 
+class AdapterDecoding(StrEnum):
+    """How an adapter service's `IRTNODE_PROPERTY` value was read (`adapters.py`)."""
+
+    # The binary document was decoded completely (`idata_binary.py`).
+    DECODED = "decoded"
+    # The document uses a structure the decoder does not support; only the M12 allow-listed
+    # identity fields (template, connection, adapter type, tables) were read by scanning
+    # for them, and `AdapterDetails.decode_problem` says why.
+    PARTIAL = "partial"
+
+
+class JdbcField(BaseModel):
+    """One position of the parallel input or output arrays of a JDBC adapter service.
+
+    Inputs: `inputField[i]`, `inputFieldType[i]`, `inputJDBCType[i]` (the i-th `?` of the
+    SQL). Outputs: `outputField[i]`, `outputFieldType[i]`, `outputJDBCType[i]`,
+    `resultField[i]`, `resultFieldType[i]`. None marks a position the array does not have.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    position: int  # 1-based, the order in the configuration
+    field: str | None = None
+    field_type: str | None = None  # Java type in the pipeline
+    jdbc_type: str | None = None
+    result_field: str | None = None  # outputs: where the value lands (`results[].x`)
+    result_type: str | None = None
+
+
+class JdbcVariable(BaseModel):
+    """A DynamicSQL variable: `${name}` in the SQL, replaced by the text of an input field."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    field: str | None = None  # `sqlInputFields[i]`
+    field_type: str | None = None  # `sqlInputFieldTypes[i]`
+
+
+class SqlObject(BaseModel):
+    """A table or view the SQL names, as written (quotes removed)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    schema_name: str | None = None
+    access: str  # read, write or read-write
+    clauses: list[str] = Field(default_factory=list)  # FROM, JOIN, INTO, UPDATE, ...
+
+
+class SqlBind(BaseModel):
+    """One JDBC bind parameter (`?`) in the order the SQL text holds them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    position: int
+    # The column it is compared with or assigned to, when the SQL shows `column op ?`,
+    # `column IN (?)`, `SET column = ?` or an INSERT column list; None otherwise.
+    column: str | None = None
+    operator: str | None = None
+    role: str = "value"  # value, row offset or row limit
+
+
+class SqlPlaceholder(BaseModel):
+    """A DynamicSQL `${name}` substitution in the SQL text."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    occurrences: int
+    # Where it stands: value list (`IN (${x})`), comparison, object name, ordering, other.
+    contexts: list[str] = Field(default_factory=list)
+    column: str | None = None
+
+
+class SqlAnalysis(BaseModel):
+    """What the SQL template shows, read by `sql_analysis.py` (never executed).
+
+    Only identifiers and structure are kept: literal values in the SQL are never copied
+    here. `status` is `analysed` when the statement was read completely, `partial` when
+    `notes` name parts that were not understood, `not_analysed` when nothing was read.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: str
+    statement: str | None = None  # SELECT, INSERT, UPDATE, DELETE, MERGE, CALL, OTHER
+    objects: list[SqlObject] = Field(default_factory=list)
+    procedure: str | None = None
+    ctes: list[str] = Field(default_factory=list)
+    joins: int = 0
+    subqueries: int = 0
+    where: bool = False
+    group_by: bool = False
+    order_by: str | None = None  # top level, subquery only, or None
+    pagination: list[str] = Field(default_factory=list)  # OFFSET ROWS, FETCH FIRST, ROWNUM ...
+    set_operations: list[str] = Field(default_factory=list)  # UNION, MINUS, ...
+    for_update: bool = False
+    binds: list[SqlBind] = Field(default_factory=list)
+    placeholders: list[SqlPlaceholder] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class JdbcServiceConfig(BaseModel):
+    """The normalized configuration of a JDBC adapter service (`adapters.py`).
+
+    Only templates whose layout was checked on real samples (`DynamicSQL`, `CustomSQL`) are
+    `supported`; for any other template only the identity on AdapterDetails is kept and
+    `uninterpreted` lists the property names. Credentials and the user/password override
+    settings are never read; `uninterpreted` never lists them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    template_kind: str  # simple name of the template class
+    supported: bool
+    metadata_version: int | None = None
+    node_version: int | None = None  # `adapterServiceNodeVersion`
+    input_record: str | None = None
+    output_record: str | None = None
+    # The SQL template exactly as configured, under the free-text policy (secret guard first).
+    sql: TextValue | None = None
+    sql_field_type: str | None = None
+    # DynamicSQL: the output field that returns the statement as run (a technical output).
+    sql_output_field: str | None = None
+    variables: list[JdbcVariable] = Field(default_factory=list)
+    inputs: list[JdbcField] = Field(default_factory=list)
+    outputs: list[JdbcField] = Field(default_factory=list)
+    # Execution settings as stored (text): "0" rows means no limit set, "-1" the default
+    # timeout (IBM JDBC Adapter documentation); "" is kept apart from a missing value.
+    max_rows: str | None = None
+    query_timeout: str | None = None
+    result_row_field: str | None = None
+    result_row_field_type: str | None = None
+    uninterpreted: list[str] = Field(default_factory=list)
+    # Structure problems seen while normalizing (e.g. parallel arrays of different lengths).
+    issues: list[str] = Field(default_factory=list)
+    sql_analysis: SqlAnalysis | None = None
+
+
 class AdapterDetails(BaseModel):
     """Allow-listed fields decoded from a JDBC adapter node's `IRTNODE_PROPERTY` (`adapters.py`).
 
-    Services: operation template, connection and tables. Connections: datasource class
-    (database product), database name and transaction type. Notifications: notification
-    type, connection, tables and published document. Server, host, port, user, password,
-    URL, SQL text and every other property are never read.
+    Services: operation template, connection and tables, and for decoded DynamicSQL and
+    CustomSQL services the normalized configuration in `jdbc` (owner decision, M15).
+    Connections: datasource class (database product), database name and transaction type.
+    Notifications: notification type, connection, tables and published document. Server,
+    host, port, user, password, URL and every other connection property are never read.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -1024,6 +1165,13 @@ class AdapterDetails(BaseModel):
     database_name: str | None = None
     transaction_type: str | None = None
     published_document: str | None = None
+    # Adapter services only.
+    decoding: AdapterDecoding | None = None
+    decode_problem: str | None = None  # PARTIAL: the decoder's reason, without any content
+    # DECODED with unconfirmed readings (`idata_binary.decode_idata_hypotheses`, owner decision
+    # M15 extension): e.g. `length:leb128`; empty when only confirmed rules were needed.
+    decode_hypotheses: list[str] = Field(default_factory=list)
+    jdbc: JdbcServiceConfig | None = None
 
 
 class FlowService(BaseModel):

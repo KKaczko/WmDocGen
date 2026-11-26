@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from jinja2 import Template
 
+from wm_doc.adapters import sql_objects_phrase
 from wm_doc.builtins import builtin_effect, is_builtin_name
 from wm_doc.flow_callers import compute_decision_inputs
 from wm_doc.flow_lineage import compute_flow_lineage
@@ -42,6 +43,7 @@ from wm_doc.ir import (
 )
 from wm_doc.render.document_markdown import document_markdown_filename
 from wm_doc.render.flow_markdown import render_decisions_section
+from wm_doc.render.jdbc_markdown import render_jdbc_section
 from wm_doc.render.service_summary import derived_layer, render_service_summary
 
 if TYPE_CHECKING:
@@ -88,7 +90,10 @@ _TEMPLATE = Template(
 
 ## Analysis Support
 
-{% if service.analysis_status.value == "OPAQUE" -%}
+{% if service.adapter and service.adapter.jdbc and service.adapter.jdbc.supported -%}
+The artifact is a JDBC adapter service: it has no FLOW or Java steps, and its decoded
+configuration is shown under Adapter Configuration.
+{% elif service.analysis_status.value == "OPAQUE" -%}
 The artifact was identified as a service, but its implementation-specific format was not analyzed.
 Only common service metadata is represented.
 {% elif service.analysis_status.value == "PARTIAL" -%}
@@ -101,8 +106,23 @@ The artifact was analyzed by the supported parser for its service type.
 
 ## Adapter Configuration
 
+{% if service.adapter.jdbc and service.adapter.jdbc.supported -%}
+Decoded from the JDBC adapter service's configuration (`IRTNODE_PROPERTY`). Server, user,
+password and the credential override settings are never read; the SQL text follows the
+free-text policy.
+{% elif service.adapter.decoding and service.adapter.decoding.value == "partial" -%}
+Read from the JDBC adapter service's configuration (allow-listed fields only). The
+configuration uses a binary structure the decoder does not support
+({{ service.adapter.decode_problem }}), so only these fields were read.
+{% else -%}
 Read from the JDBC adapter service's configuration (allow-listed fields only; the SQL text,
 server and credentials are not read).
+{% endif %}
+{% if service.adapter.decode_hypotheses %}
+**Unconfirmed reading.** This configuration was decoded with readings no sample has confirmed
+yet ({{ service.adapter.decode_hypotheses | join(", ") }}). Compare it with the document
+Integration Server exports for this service (`uv run python scripts/decode_adapter.py`).
+{% endif %}
 
 | Field | Value |
 | --- | --- |
@@ -110,6 +130,7 @@ server and credentials are not read).
 | Template | `{{ service.adapter.template or "not determined" }}` |
 | Tables | {{ adapter_tables }} |
 | Connection | `{{ service.adapter.connection or "not determined" }}` |
+{{ jdbc_section }}
 {% endif %}
 {% if service.disabled_steps %}
 
@@ -408,11 +429,15 @@ def render_service_markdown(
         layer_text=derived_layer(service) or service.classification.layer,
         description_text=description_text,
         source_service_type=service.source_service_type or "<not declared>",
-        adapter_tables=(
-            ", ".join(f"`{table}`" for table in service.adapter.tables) or "not determined"
-            if service.adapter is not None
-            else ""
+        jdbc_section=render_jdbc_section(
+            service,
+            [
+                analysed[dependency.source_service]
+                for dependency in incoming_dependencies
+                if analysed is not None and dependency.source_service in analysed
+            ],
         ),
+        adapter_tables=_adapter_tables(service),
         incoming_dependencies=incoming_dependencies,
         process_memberships=process_memberships,
         process_definitions=process_definitions,
@@ -470,6 +495,16 @@ def service_markdown_filenames(services: list[FlowService]) -> dict[str, str]:
     return filenames
 
 
+def _adapter_tables(service: FlowService) -> str:
+    details = service.adapter
+    if details is None:
+        return ""
+    if details.tables:
+        return ", ".join(f"`{table}`" for table in details.tables)
+    objects = sql_objects_phrase(details)
+    return f"{objects} (from the SQL template)" if objects else "not determined"
+
+
 def _chain(names: tuple[str, ...]) -> str:
     return " → ".join(f"`{name}`" for name in names)
 
@@ -490,6 +525,9 @@ def render_effects_table(facts: ServiceFacts) -> str:
         )
     if facts.hidden_effects:
         lines.append(f"| ... {facts.hidden_effects} more | | | | |")
+    if facts.database_calls:
+        lines += ["", "JDBC adapter calls (direct; from each call's input map):", ""]
+        lines += [f"- {line}" for line in facts.database_calls]
     return "\n".join(lines) + "\n"
 
 

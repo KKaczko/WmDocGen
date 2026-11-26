@@ -22,6 +22,7 @@ from wm_doc.config import AppConfig, ExtractionMode, classify_service
 from wm_doc.discovery import scan_path
 from wm_doc.flow_paths import expression_refs
 from wm_doc.ir import (
+    AdapterDecoding,
     AdapterDetails,
     AnalysisFinding,
     AnalysisMetrics,
@@ -686,6 +687,71 @@ def _artifact_details(
         findings.append(_adapter_unreadable(node_path, scan_root))
         return None, None
     return None, details if is_jdbc(details) else None
+
+
+def _adapter_service(
+    blob: str,
+    node_path: Path,
+    scan_root: Path,
+    config: AppConfig,
+    findings: list[AnalysisFinding],
+) -> AdapterDetails | None:
+    """A JDBC adapter service's configuration; the SQL text follows the free-text policy."""
+    source = _node_value_source(node_path, scan_root, "adapter", "IRTNODE_PROPERTY")
+
+    def sql_text(sql: str) -> TextValue | None:
+        return _apply_free_text_policy(sql, "adapter.sql", source, config)
+
+    try:
+        decoded = decode_adapter_service(blob, sql_text=sql_text)
+    except AdapterDecodeError:
+        findings.append(_adapter_unreadable(node_path, scan_root))
+        return None
+    if not is_jdbc(decoded):
+        return None
+    if decoded.decoding is AdapterDecoding.PARTIAL:
+        findings.append(
+            AnalysisFinding(
+                status=FindingStatus.PARTIALLY_SUPPORTED,
+                code="ADAPTER_CONFIGURATION_PARTIALLY_DECODED",
+                message=(
+                    "The adapter configuration uses a binary structure the decoder does not "
+                    f"support ({decoded.decode_problem}); only the template, connection, "
+                    "adapter type and tables were read."
+                ),
+                source=source,
+                severity=FindingSeverity.INFO,
+            )
+        )
+    if decoded.decode_hypotheses:
+        findings.append(
+            AnalysisFinding(
+                status=FindingStatus.PARTIALLY_SUPPORTED,
+                code="ADAPTER_LONG_ENCODING_UNCONFIRMED",
+                message=(
+                    "The adapter configuration was decoded with readings no sample has confirmed "
+                    f"yet ({', '.join(decoded.decode_hypotheses)}); compare it with the document "
+                    "Integration Server exports for this service."
+                ),
+                source=source,
+                severity=FindingSeverity.INFO,
+            )
+        )
+    if decoded.decoding is not AdapterDecoding.PARTIAL and decoded.jdbc is not None and (
+        decoded.jdbc.issues
+    ):
+        findings.append(
+            AnalysisFinding(
+                status=FindingStatus.PARTIALLY_SUPPORTED,
+                code="ADAPTER_CONFIGURATION_ISSUES",
+                message="The adapter configuration is unusual: " + "; ".join(
+                    decoded.jdbc.issues[:5]
+                ) + ".",
+                source=source,
+                severity=FindingSeverity.INFO,
+            )
+        )
+    return decoded
 
 
 def _adapter_unreadable(node_path: Path, scan_root: Path) -> AnalysisFinding:
@@ -1443,11 +1509,7 @@ def _parse_opaque_service(
         specification = _normalized_scalar_value(values, "svc_spec")
         blob = scalar_value(values, "IRTNODE_PROPERTY")
         if source_service_type == ADAPTER_SERVICE_TYPE and blob:
-            try:
-                decoded = decode_adapter_service(blob)
-                adapter = decoded if is_jdbc(decoded) else None
-            except AdapterDecodeError:
-                findings.append(_adapter_unreadable(node_path, scan_root))
+            adapter = _adapter_service(blob, node_path, scan_root, config, findings)
         node_root = parse_xml_file(node_path)
         description, description_status, description_findings = _service_description(
             values, node_root, node_path, scan_root, config
@@ -1463,8 +1525,12 @@ def _parse_opaque_service(
             status=FindingStatus.PARTIALLY_SUPPORTED,
             code="OPAQUE_SERVICE_IMPLEMENTATION_NOT_ANALYZED",
             message=(
-                "Service identity and common metadata were retained, but source service type "
-                f"{source_service_type or '<unknown>'!r} has no implementation-specific parser."
+                "JDBC adapter service: its configuration was decoded (see the adapter "
+                "configuration); it has no FLOW or Java implementation to analyse."
+                if adapter is not None and adapter.jdbc is not None and adapter.jdbc.supported
+                else "Service identity and common metadata were retained, but source service "
+                f"type {source_service_type or '<unknown>'!r} has no implementation-specific "
+                "parser."
             ),
             source=_node_value_source(node_path, scan_root, "service_type", "svc_type"),
             severity=FindingSeverity.INFO,

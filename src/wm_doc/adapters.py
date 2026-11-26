@@ -2,22 +2,38 @@
 
 JDBC adapter services (`svc_type` AdapterService), connections (`node_type` ConnectionData)
 and notifications (`node_type` AdapterRuntimeNotification) keep their configuration as a
-base64 binary value. Inside it, every string is the byte 0x04, a one-byte length and that
-many UTF-16BE characters; a property's value is the string right after its key, and a
-string array (the `tables.*` keys) puts `0a <count> 00 <byte>` between the key and its
-items.
+base64 binary IData document.
 
-Only these keys are read, and each value must look like what the key names (a Java class,
-a node name, a table name...), or it is dropped:
+Adapter services are decoded completely by `wm_doc.idata_binary` (checked against the
+documents Integration Server 10.15 itself decodes, `samples/jdbcadapter/`) and then
+interpreted here (owner decision, M15):
 
-- services: `serviceTemplateName`, `connectionName`, `adapterType`, `tables.tableName`,
-  `tables.schemaName`;
+- every template: `serviceTemplateName`, `connectionName`, `adapterType`, `tables.tableName`,
+  `tables.schemaName`, the metadata and node versions and the record names;
+- `DynamicSQL` and `CustomSQL` (the templates checked on real samples) also: the SQL template
+  (under the free-text policy, secret guard first), the DynamicSQL variables, the parallel
+  input and output arrays (field, Java type, JDBC type, result field), the maximum rows,
+  query timeout and row-count field, and a structural reading of the SQL
+  (`wm_doc.sql_analysis`). Other templates keep the identity only and list their property
+  names as not interpreted.
+
+The user and password override settings (`userid`, `password` and their `*Type` / `input*Sign`
+companions) and any secret-like key are never read. When the decoder meets a structure it
+does not support, the M12 reader below is used instead: it scans for the allow-listed
+identity keys only (every string is the byte 0x04, a one-byte length and that many UTF-16BE
+characters; a value is the string right after its key; `tables.*` arrays put
+`0a <count> 00 <byte>` before their items), and the result is marked `partial`.
+
+Connections and notifications are read by that M12 reader (no real sample of their documents
+has been checked yet). Only these keys are read, and each value must look like what the key
+names (a Java class, a node name, a table name...), or it is dropped:
+
 - connections: `adapterTypeName`, `datasourceClass`, `databaseName`, `transactionType`;
 - notifications: `notificationClassName`, `adapterTypeName`, `connDataNodeName`,
   `publishableDocumentName`, `tables.tableName`, `tables.schemaName`.
 
-Server, host, port, user, password, URL, SQL and every other property are skipped without
-being decoded into text that is kept anywhere.
+Server, host, port, user, password, URL and every other connection property are skipped
+without being decoded into text that is kept anywhere.
 """
 
 from __future__ import annotations
@@ -28,7 +44,27 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from wm_doc.ir import AdapterDetails, AdapterRole
+from wm_doc.idata_binary import (
+    BinaryArray,
+    BinaryDocument,
+    IDataBinaryError,
+    Value,
+    decode_base64,
+    decode_idata_hypotheses,
+    walk,
+)
+from wm_doc.ir import (
+    AdapterDecoding,
+    AdapterDetails,
+    AdapterRole,
+    JdbcField,
+    JdbcServiceConfig,
+    JdbcVariable,
+    TextDisclosure,
+    TextValue,
+)
+from wm_doc.secret_guard import is_secret_name
+from wm_doc.sql_analysis import analyze_sql
 
 STRING_TOKEN = 0x04
 ARRAY_MARKER = 0x0A
@@ -132,17 +168,305 @@ class AdapterDecodeError(ValueError):
     """The value is not the expected base64 binary layout."""
 
 
-def decode_adapter_service(blob: str) -> AdapterDetails:
-    values, tables = _read(blob, _SERVICE_KEYS, with_tables=True)
-    template = values.get("serviceTemplateName")
+# Templates whose document layout was checked against real IS 10.15 samples.
+SUPPORTED_TEMPLATES = ("DynamicSQL", "CustomSQL")
+
+# Never read: the user/password override settings of a service.
+_CREDENTIAL_KEYS = frozenset(
+    {"userid", "useridType", "inputUseridSign", "password", "passwordType", "inputPasswordSign"}
+)
+# Template properties read for DynamicSQL and CustomSQL.
+_INTERPRETED = frozenset(
+    {
+        "sql", "sqlFieldType", "sqlOutputField", "sqlVariables", "sqlInputFields",
+        "sqlInputFieldTypes", "inputField", "inputFieldType", "inputJDBCType", "outputField",
+        "outputFieldType", "outputJDBCType", "resultField", "resultFieldType", "maxRow",
+        "queryTimeOut", "resultRowField", "resultRowFieldType",
+    }
+)
+MAX_NAME_CHARS = 256
+MAX_FIELDS = 500
+_JAVA_TYPE_RE = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\[\])*$")
+_JDBC_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_ ]{0,63}$")
+_NUMBER_TEXT_RE = re.compile(r"^-?\d{1,10}$")
+
+SqlText = Callable[[str], TextValue | None]
+
+
+def _sql_withheld(sql: str) -> TextValue:
+    return TextValue(
+        present=True, role="adapter.sql", disclosure=TextDisclosure.OMITTED, length=len(sql)
+    )
+
+
+def decode_adapter_service(blob: str, *, sql_text: SqlText | None = None) -> AdapterDetails:
+    """The configuration of an adapter service node.
+
+    `sql_text` applies the free-text policy to the SQL template (`analysis.py` passes it);
+    without it the SQL text is not kept. AdapterDecodeError: the value is not base64.
+    """
+    try:
+        raw = decode_base64(blob)
+    except IDataBinaryError as exc:
+        raise AdapterDecodeError(exc.code) from exc
+    try:
+        decoded = decode_idata_hypotheses(raw)
+    except IDataBinaryError as exc:
+        # A structure the decoder does not support: the M12 reader finds the identity keys.
+        values, tables = _read_raw(raw, _SERVICE_KEYS, with_tables=True)
+        template = values.get("serviceTemplateName")
+        return AdapterDetails(
+            role=AdapterRole.SERVICE,
+            adapter_type=values.get("adapterType"),
+            template=template,
+            operation=_simple_name(template),
+            connection=values.get("connectionName"),
+            tables=tables,
+            decoding=AdapterDecoding.PARTIAL,
+            decode_problem=f"{exc.code}: {exc}",
+        )
+    details = _service_from_document(decoded.document, sql_text or _sql_withheld)
+    if decoded.hypotheses:
+        details = details.model_copy(update={"decode_hypotheses": list(decoded.hypotheses)})
+    return details
+
+
+def _service_from_document(document: BinaryDocument, sql_text: SqlText) -> AdapterDetails:
+    template = _checked(document.get("serviceTemplateName"), _SERVICE_KEYS["serviceTemplateName"])
+    operation = _simple_name(template)
+    jdbc = (
+        _jdbc_config(document, operation, sql_text)
+        if operation and template and template.startswith(JDBC_TEMPLATE_PREFIX)
+        else None
+    )
     return AdapterDetails(
         role=AdapterRole.SERVICE,
-        adapter_type=values.get("adapterType"),
+        adapter_type=_checked(document.get("adapterType"), _SERVICE_KEYS["adapterType"]),
         template=template,
-        operation=_simple_name(template),
-        connection=values.get("connectionName"),
-        tables=tables,
+        operation=operation,
+        connection=_checked(document.get("connectionName"), _SERVICE_KEYS["connectionName"]),
+        tables=_document_tables(document),
+        decoding=AdapterDecoding.DECODED,
+        jdbc=jdbc,
     )
+
+
+def _checked(value: Value | None, validator: Validator) -> str | None:
+    return validator(value) if isinstance(value, str) else None
+
+
+def _document_tables(document: BinaryDocument) -> list[str]:
+    """`tables.tableName` / `tables.schemaName` arrays, wherever the document holds them."""
+    parts: dict[str, list[str]] = {}
+    for key, value in walk(document):
+        if key in _TABLE_KEYS and key not in parts and isinstance(value, BinaryArray):
+            parts[key] = [
+                item.strip() for item in value.items[:MAX_TABLES] if isinstance(item, str)
+            ]
+    return _tables(parts)
+
+
+def _jdbc_config(
+    document: BinaryDocument, kind: str, sql_text: SqlText
+) -> JdbcServiceConfig:
+    issues: list[str] = []
+    properties = document.get("templateProperties")
+    metadata_version = _integer(document.get("metadataVersion"))
+    node_version = _integer(document.get("adapterServiceNodeVersion"))
+    input_record = _name(document.get("inputRecordName"), "inputRecordName", issues)
+    output_record = _name(document.get("outputRecordName"), "outputRecordName", issues)
+    if not isinstance(properties, BinaryDocument):
+        issues.append("the configuration has no `templateProperties` document")
+        return JdbcServiceConfig(
+            template_kind=kind,
+            supported=False,
+            metadata_version=metadata_version,
+            node_version=node_version,
+            input_record=input_record,
+            output_record=output_record,
+            issues=_unique(issues),
+        )
+    readable = [key for key, _ in properties.entries if _readable_key(key)]
+    if kind not in SUPPORTED_TEMPLATES:
+        return JdbcServiceConfig(
+            template_kind=kind,
+            supported=False,
+            metadata_version=metadata_version,
+            node_version=node_version,
+            input_record=input_record,
+            output_record=output_record,
+            uninterpreted=sorted(set(readable), key=str.casefold),
+            issues=_unique(issues),
+        )
+    sql_value = properties.get("sql")
+    sql = sql_value if isinstance(sql_value, str) else None
+    if sql_value is not None and sql is None:
+        issues.append("`sql` is not text")
+    variables = _parallel(
+        properties, ("sqlVariables", "sqlInputFields", "sqlInputFieldTypes"), issues
+    )
+    inputs = _parallel(properties, ("inputField", "inputFieldType", "inputJDBCType"), issues)
+    outputs = _parallel(
+        properties,
+        ("outputField", "outputFieldType", "outputJDBCType", "resultField", "resultFieldType"),
+        issues,
+    )
+    return JdbcServiceConfig(
+        template_kind=kind,
+        supported=True,
+        metadata_version=metadata_version,
+        node_version=node_version,
+        input_record=input_record,
+        output_record=output_record,
+        sql=sql_text(sql) if sql is not None else None,
+        sql_field_type=_java_type(properties.get("sqlFieldType"), "sqlFieldType", issues),
+        sql_output_field=_name(properties.get("sqlOutputField"), "sqlOutputField", issues),
+        variables=[
+            JdbcVariable(
+                name=name,
+                field=_name(row[1], "sqlInputFields", issues),
+                field_type=_java_type(row[2], "sqlInputFieldTypes", issues),
+            )
+            for row in variables
+            if (name := _name(row[0], "sqlVariables", issues)) is not None
+        ],
+        inputs=[
+            JdbcField(
+                position=position,
+                field=_name(row[0], "inputField", issues),
+                field_type=_java_type(row[1], "inputFieldType", issues),
+                jdbc_type=_jdbc_type(row[2], issues),
+            )
+            for position, row in enumerate(inputs, start=1)
+        ],
+        outputs=[
+            JdbcField(
+                position=position,
+                field=_name(row[0], "outputField", issues),
+                field_type=_java_type(row[1], "outputFieldType", issues),
+                jdbc_type=_jdbc_type(row[2], issues),
+                result_field=_name(row[3], "resultField", issues),
+                result_type=_java_type(row[4], "resultFieldType", issues),
+            )
+            for position, row in enumerate(outputs, start=1)
+        ],
+        max_rows=_number_text(properties.get("maxRow"), "maxRow", issues),
+        query_timeout=_number_text(properties.get("queryTimeOut"), "queryTimeOut", issues),
+        result_row_field=_name(properties.get("resultRowField"), "resultRowField", issues),
+        result_row_field_type=_java_type(
+            properties.get("resultRowFieldType"), "resultRowFieldType", issues
+        ),
+        uninterpreted=sorted(
+            {key for key in readable if key not in _INTERPRETED}, key=str.casefold
+        ),
+        issues=_unique(issues),
+        sql_analysis=analyze_sql(sql) if sql is not None else None,
+    )
+
+
+def _unique(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def _readable_key(key: str) -> bool:
+    return key not in _CREDENTIAL_KEYS and not is_secret_name(key)
+
+
+def _parallel(
+    properties: BinaryDocument, keys: tuple[str, ...], issues: list[str]
+) -> list[tuple[Value | None, ...]]:
+    """Rows of parallel arrays, position by position; None where an array is shorter."""
+    columns: list[tuple[Value, ...]] = []
+    for key in keys:
+        value = properties.get(key)
+        if value is None:
+            columns.append(())
+        elif isinstance(value, BinaryArray):
+            columns.append(value.items[:MAX_FIELDS])
+        else:
+            issues.append(f"`{key}` is not an array")
+            columns.append(())
+    present = set(properties.keys())
+    lengths = {
+        len(column) for column, key in zip(columns, keys, strict=True) if key in present
+    }
+    if len(lengths) > 1:
+        issues.append(
+            "the arrays " + ", ".join(f"`{key}`" for key in keys) + " have different lengths"
+        )
+    rows = max((len(column) for column in columns), default=0)
+    return [
+        tuple(column[row] if row < len(column) else None for column in columns)
+        for row in range(rows)
+    ]
+
+
+def _integer(value: Value | None) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def _plain(value: Value | None, key: str, issues: list[str]) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        issues.append(f"a value of `{key}` is not text")
+        return None
+    if len(value) > MAX_NAME_CHARS or not value.isprintable():
+        issues.append(f"a value of `{key}` is not a plain name")
+        return None
+    return value
+
+
+def _name(value: Value | None, key: str, issues: list[str]) -> str | None:
+    return _plain(value, key, issues)
+
+
+def _java_type(value: Value | None, key: str, issues: list[str]) -> str | None:
+    text = _plain(value, key, issues)
+    if text is None or text == "":
+        return text
+    if not _JAVA_TYPE_RE.match(text):
+        issues.append(f"a value of `{key}` is not a Java type name")
+        return None
+    return text
+
+
+def _jdbc_type(value: Value | None, issues: list[str]) -> str | None:
+    text = _plain(value, "JDBC type", issues)
+    if text is None or text == "":
+        return text
+    if not _JDBC_TYPE_RE.match(text):
+        issues.append("a JDBC type is not a type name")
+        return None
+    return text
+
+
+def _number_text(value: Value | None, key: str, issues: list[str]) -> str | None:
+    text = _plain(value, key, issues)
+    if text is None or text == "" or _NUMBER_TEXT_RE.match(text):
+        return text
+    issues.append(f"`{key}` is not a number")
+    return None
+
+
+# Wording per SQL statement type, for decoded DynamicSQL and CustomSQL services.
+SQL_ACTIONS: dict[str, tuple[str, str]] = {
+    # statement: (on a table it reads, on a table it writes)
+    "SELECT": ("reads", "reads"),
+    "INSERT": ("reads", "inserts rows into"),
+    "UPDATE": ("reads", "updates rows in"),
+    "DELETE": ("reads", "deletes rows from"),
+    "MERGE": ("reads", "merges rows into"),
+    "CALL": ("reads", "changes"),
+}
+
+
+def sql_action(statement: str | None, access: str) -> str:
+    """`reads` / `inserts rows into` ... for one table of an analysed SQL template."""
+    read, write = SQL_ACTIONS.get(statement or "", ("reads", "changes"))
+    if access == "read-write":
+        return f"{read} and {write}" if read != write else read
+    return write if access == "write" else read
 
 
 def decode_connection(blob: str) -> AdapterDetails:
@@ -191,9 +515,40 @@ def is_jdbc(details: AdapterDetails) -> bool:
 
 
 def operation_phrase(details: AdapterDetails) -> str:
-    """`selects rows from` / `runs custom SQL (not interpreted)` for a service's template."""
+    """`selects rows from` / `runs custom SQL (not interpreted)` for a service's template.
+
+    A decoded DynamicSQL or CustomSQL service whose SQL was read names its statement type
+    instead: `runs custom SQL (SELECT)`.
+    """
+    jdbc = details.jdbc
+    analysis = jdbc.sql_analysis if jdbc is not None and jdbc.supported else None
+    if analysis is not None and analysis.status != "not_analysed" and analysis.statement:
+        kind = "dynamic SQL" if details.operation == "DynamicSQL" else "custom SQL"
+        return f"runs {kind} ({analysis.statement})"
     with_table, without = OPERATIONS.get(details.operation or "", ("uses", "runs an operation"))
     return with_table if details.tables else without
+
+
+def sql_objects_phrase(details: AdapterDetails) -> str:
+    """`reading table `A` and writing table `B`` from an analysed SQL template, or ""."""
+    jdbc = details.jdbc
+    analysis = jdbc.sql_analysis if jdbc is not None and jdbc.supported else None
+    if analysis is None:
+        return ""
+    groups: dict[str, list[str]] = {"read": [], "write": [], "read-write": []}
+    for item in analysis.objects:
+        name = f"{item.schema_name}.{item.name}" if item.schema_name else item.name
+        groups[item.access].append(f"`{name}`")
+    parts = []
+    verbs = (("read", "reading"), ("write", "writing"), ("read-write", "reading and writing"))
+    for access, verb in verbs:
+        names = groups[access]
+        if names:
+            noun = "table" if len(names) == 1 else "tables"
+            parts.append(f"{verb} {noun} {', '.join(names)}")
+    if analysis.procedure:
+        parts.append(f"calling procedure `{analysis.procedure}`")
+    return " and ".join(parts)
 
 
 def _simple_name(class_name: str | None) -> str | None:
@@ -203,7 +558,13 @@ def _simple_name(class_name: str | None) -> str | None:
 def _read(
     blob: str, keys: dict[str, Validator], *, with_tables: bool
 ) -> tuple[dict[str, str], list[str]]:
-    raw = _decode(blob)
+    return _read_raw(_decode(blob), keys, with_tables=with_tables)
+
+
+def _read_raw(
+    raw: bytes, keys: dict[str, Validator], *, with_tables: bool
+) -> tuple[dict[str, str], list[str]]:
+    """The M12 reader: allow-listed keys found by scanning for string tokens."""
     tokens = _tokens(raw)
     values: dict[str, str] = {}
     table_parts: dict[str, list[str]] = {}

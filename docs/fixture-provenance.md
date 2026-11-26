@@ -20,8 +20,9 @@ service, document, field and literal name in it is invented.
 
 M5-lite fixture note:
 
-- The current fixture set does not contain a real JDBC Adapter Service, trigger, scheduler, UM/JMS,
-  native process-model, or other opaque service artifact with an unsupported `svc_type`.
+- Until M15 the fixture set did not contain a real JDBC Adapter Service; it still has no real
+  trigger, scheduler, UM/JMS, native process-model, or other opaque service artifact with an
+  unsupported `svc_type`.
 - Opaque service support is limited to common `node.ndf` metadata and exact dependency resolution.
   Synthetic tests validate that generic behavior, but they do not prove any adapter-specific
   serialization format.
@@ -94,6 +95,24 @@ Unavailable in the local fixture:
 This is recorded here only; the scanner no longer emits a fixture-specific finding for a package
 named `PGP`, because production code must not special-case test fixtures. PGP remains a
 compatibility corpus only; it is not proof of full webMethods 10.15 compatibility.
+
+## jdbcadapter
+
+`samples/jdbcadapter/` holds two JDBC adapter services the repository owner created on a real
+webMethods Integration Server 10.15 and exported (M15): `dynamicSQL/` and `customSQL/`, each
+with its original `node.ndf` and the document IS decoded from its `IRTNODE_PROPERTY`
+(`pub.string:base64Decode` -> `pub.document:bytesToDocument` ->
+`pub.json:documentToJSONString`), plus the namespace folder's `node.idf`. The JSON files are the
+reference for the decoder's golden tests (`tests/unit/test_idata_binary.py`); they are never
+read during normal runs. The files are read-only and listed in `checksums.sha256`.
+
+Content review: the SQL reads a test table (`TEST`, columns `id`, `name`, `quantity`, `desc`)
+with test field names (`test1`, `test2`, `output_Test`, `out_test`); no credential values are
+present (the `userid` and `password` settings hold the pipeline paths
+`overrideCredentials.$dbUser` / `$dbPassword`, not secrets). Names that may be
+organization- or person-specific: the connection `inea.configuration.jdbc:UtilsConnection`, the
+namespace `kkaczk.jdbcadapter` and the designer locale `pl_PL`. Confirm or replace them before
+publishing the repository (the tests read the folder names, not these values).
 
 ## Sensitive Fixture Categories
 

@@ -11,9 +11,9 @@ time and are not written back into the canonical snapshot.
 
 from __future__ import annotations
 
-from wm_doc.adapters import operation_phrase
+from wm_doc.adapters import operation_phrase, sql_objects_phrase
 from wm_doc.builtins import FAMILY_RANK, BuiltinFamily, builtin_effect, is_builtin_name
-from wm_doc.effects import ADAPTER_KNOWN_FROM, ServiceFacts
+from wm_doc.effects import ADAPTER_KNOWN_FROM_ALL, ServiceFacts
 from wm_doc.ir import FlowNode, FlowNodeType, FlowService, ServiceType, SignatureField
 
 # Families that describe how a service copes with failure or traces itself, not what it does.
@@ -213,6 +213,9 @@ def adapter_sentence(service: FlowService) -> str | None:
         return None
     tables = ", ".join(f"`{table}`" for table in details.tables)
     target = f" table{'s' if len(details.tables) > 1 else ''} {tables}" if tables else ""
+    objects = sql_objects_phrase(details)
+    if objects and not tables:
+        target = f" {objects}"
     through = f" through connection `{details.connection}`" if details.connection else ""
     template = f" (template `{details.operation}`)" if details.operation else ""
     return f"JDBC adapter service{template}: {operation_phrase(details)}{target}{through}."
@@ -224,7 +227,7 @@ def _adapter_call_sentence(facts: ServiceFacts | None) -> str | None:
         return None
     parts: list[str] = []
     for effect in facts.effects:
-        if effect.known_from == ADAPTER_KNOWN_FROM and len(effect.via) == 1:
+        if effect.known_from in ADAPTER_KNOWN_FROM_ALL and len(effect.via) == 1:
             text = f"{effect.action} {effect.object}"
             if text not in parts:
                 parts.append(text)

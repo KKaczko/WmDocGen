@@ -90,12 +90,25 @@ The app reads only these files, never `analysis.json`:
   Dynamic and unsupported calls get one target node per calling service, so they never
   look like a hub.
 - Excluded: literal values, designer comments, Notes, the facts block, headings people added
-  to a description, SQL, connection properties, absolute paths, EXIT failure messages. A data
+  to a description, connection properties, absolute paths, EXIT failure messages, and SQL
+  other than the template of a decoded JDBC adapter service (below). A data
   effect known from a literal (for example the URL of an HTTP call) shows `(literal, not
   exported)` in place of the value; mapped pipeline paths are kept. In the conditional flow a
   field set by a MAPSET reads "set to a literal (literal, not exported)" and a scenario ruled
   out by a literal never names it. Branch condition values are the one exception to the
   literal rule (owner decision): shown unless `--condition-values exclude`.
+- JDBC adapter services (owner decision, M15 extension): `adapter.decoding` and
+  `adapter.jdbc` (`JdbcInfo`) of a decoded DynamicSQL or CustomSQL service carry the SQL
+  template (`sql`, with `sqlState` included, withheld, excluded or absent), the statement,
+  tables with read or write access, bind parameters with the column each meets, `${name}`
+  substitutions, result fields, maximum rows and query timeout, and the findings, each marked
+  fact, inferred, potential risk or unknown at run time (`jdbc_facts`, including what direct
+  callers pass). The SQL is exported only when the analysis kept it under the free-text
+  policy (the secret guard first) and it passes the disclosure scan (`TextGuard.sql`, line
+  breaks kept, at most 100,000 characters); otherwise it is withheld and counted.
+  `wm-doc explorer build --sql exclude` leaves every SQL text out (`Disclosure.sql`) and keeps
+  the tables, parameters and findings. The app shows the SQL as plain text in a `<pre>`; other
+  templates show "decoded, not interpreted". `hypotheses` names unconfirmed binary readings.
 - The conditional flow (`src/wm_doc/explorer/flow.py`) is computed in Python like the
   Decisions section of a service page (`flow_logic`, `flow_lineage`, `flow_scenarios`) and
   uses its wording (`render/flow_markdown.py`); the app only shows it. Limits: 1,500 outline

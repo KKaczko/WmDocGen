@@ -30,6 +30,7 @@ from wm_doc.config import AppConfig
 from wm_doc.describer import current_facts_hashes, render_facts_block
 from wm_doc.effects import compute_service_facts
 from wm_doc.flow_writes import compute_pipeline_writes
+from wm_doc.idata_binary import BinaryArray, BinaryDocument, encode_idata
 from wm_doc.ir import AnalysisResult
 from wm_doc.overviews import (
     OverviewNarrative,
@@ -304,6 +305,8 @@ def _set(field: str, value: str) -> str:
 
 # --- JDBC adapter nodes (see wm_doc.adapters for the encoding) ------------------------------
 
+_MEM = "com.wm.data.ISMemDataImpl"
+
 
 def _token(text: str) -> bytes:
     return bytes([0x04, len(text)]) + text.encode("utf-16-be")
@@ -325,15 +328,90 @@ def _blob(pairs: list[tuple[str, str]], tables: list[str] | None = None) -> str:
 def _adapter_service(
     writer: _Writer, package: str, full_name: str, template: str, tables: list[str]
 ) -> None:
-    blob = _blob(
-        [
-            ("serviceTemplateName", f"com.wm.adapter.wmjdbc.services.{template}"),
-            ("connectionName", "orders.db:conn"),
-            ("adapterType", "JDBCAdapter"),
+    """An adapter service in the binary IData layout IS 10.15 writes (`wm_doc.idata_binary`).
+
+    The templates used here (Insert, Select, Delete) are decoded but not interpreted, so the
+    SQL text (with a fake secret in it) must never appear in any output.
+    """
+
+    def strings(*items: str) -> BinaryArray:
+        return BinaryArray("java.lang.String", items)
+
+    properties = BinaryDocument(
+        _MEM,
+        (
             ("sql", f"SELECT * FROM {tables[0]} WHERE NOTE = '{FAKE_SECRETS[0]}'"),
-        ],
-        tables=tables,
+            ("tables.catalogName", strings(*["<current catalog>"] * len(tables))),
+            ("tables.schemaName", strings(*["<current schema>"] * len(tables))),
+            ("tables.tableName", strings(*tables)),
+            ("password", FAKE_SECRETS[0]),
+        ),
     )
+    document = BinaryDocument(
+        _MEM,
+        (
+            ("serviceTemplateName", f"com.wm.adapter.wmjdbc.services.{template}"),
+            ("metadataVersion", 0),
+            ("connectionName", "orders.db:conn"),
+            ("templateProperties", properties),
+            ("adapterServiceNodeVersion", 2),
+            ("adapterType", "JDBCAdapter"),
+        ),
+    )
+    blob = base64.b64encode(encode_idata(document)).decode("ascii")
+    writer.opaque(
+        package,
+        full_name,
+        "AdapterService",
+        f'  <value name="IRTNODE_PROPERTY">{blob}</value>\n',
+    )
+
+
+def _dynamic_sql_service(writer: _Writer, package: str, full_name: str) -> None:
+    """A DynamicSQL adapter service (decoded and interpreted: its SQL reaches the explorer)."""
+
+    def strings(*items: str) -> BinaryArray:
+        return BinaryArray("java.lang.String", items)
+
+    properties = BinaryDocument(
+        _MEM,
+        (
+            (
+                "sql",
+                "SELECT o.ID, o.STATUS, o.TOTAL FROM ORDERS o "
+                "WHERE o.ID = ? AND o.STATUS IN (${STATUSES}) ORDER BY o.ID",
+            ),
+            ("sqlFieldType", "java.lang.String"),
+            ("sqlOutputField", "SQLStatement"),
+            ("sqlVariables", strings("STATUSES")),
+            ("sqlInputFields", strings("STATUSES")),
+            ("sqlInputFieldTypes", strings("java.lang.String")),
+            ("inputJDBCType", strings("VARCHAR")),
+            ("inputFieldType", strings("java.lang.String")),
+            ("inputField", strings("orderId")),
+            ("outputJDBCType", strings("VARCHAR", "VARCHAR", "DECIMAL")),
+            ("outputFieldType", strings(*["java.lang.String"] * 3)),
+            ("outputField", strings("id", "status", "total")),
+            ("resultField", strings("results[].id", "results[].status", "results[].total")),
+            ("maxRow", "0"),
+            ("queryTimeOut", "-1"),
+            ("password", FAKE_SECRETS[0]),
+        ),
+    )
+    document = BinaryDocument(
+        _MEM,
+        (
+            ("serviceTemplateName", "com.wm.adapter.wmjdbc.services.DynamicSQL"),
+            ("metadataVersion", 0),
+            ("connectionName", "orders.db:conn"),
+            ("templateProperties", properties),
+            ("adapterServiceNodeVersion", 2),
+            ("adapterType", "JDBCAdapter"),
+            ("inputRecordName", "selectOrderInput"),
+            ("outputRecordName", "selectOrderOutput"),
+        ),
+    )
+    blob = base64.b64encode(encode_idata(document)).decode("ascii")
     writer.opaque(
         package,
         full_name,
@@ -527,7 +605,7 @@ def _orders_db(writer: _Writer) -> None:
         + "</value>\n</Values>\n",
     )
     _adapter_service(writer, package, "orders.db:insertOrder", "Insert", ["ORDERS", "ORDER_LINES"])
-    _adapter_service(writer, package, "orders.db:selectOrder", "Select", ["ORDERS"])
+    _dynamic_sql_service(writer, package, "orders.db:selectOrder")
     _adapter_service(writer, package, "orders.db:deleteOrder", "Delete", ["ORDERS"])
 
 

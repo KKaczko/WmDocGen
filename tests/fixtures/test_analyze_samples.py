@@ -149,7 +149,7 @@ def test_pgp_flow_services_are_processed_by_same_parser() -> None:
 def test_static_dependencies_are_split_into_occurrences_and_unique_dependencies() -> None:
     analysis = _analysis()
 
-    assert analysis.schema_version == "analysis.v12"
+    assert analysis.schema_version == "analysis.v13"
     assert analysis.metrics.call_occurrence_count == 85
     assert analysis.metrics.flow_call_occurrence_count == 85
     assert analysis.metrics.java_static_call_occurrence_count == 0
@@ -231,7 +231,7 @@ processes:
     analysis = analyze_path(_samples(), DEFAULT_CONFIG, processes_file)
     processes = {process.process_id: process for process in analysis.processes}
 
-    assert analysis.schema_version == "analysis.v12"
+    assert analysis.schema_version == "analysis.v13"
     assert set(processes) == {"order-batch-validation", "pgp-key-lookup"}
     assert analysis.metrics.process_definition_count == 2
     assert analysis.metrics.declared_entrypoint_count == 3
@@ -775,7 +775,7 @@ def test_canonical_outputs_have_relative_paths_and_no_source_xml() -> None:
     assert "D:\\Dev" not in combined
     assert "<FLOW" not in combined
     assert "<Values" not in combined
-    assert "analysis.v12" in payload
+    assert "analysis.v13" in payload
     assert "## Disclosure Policies" in document_markdown
     assert "- Free text mode: include" in document_markdown
     assert "- Literal mode: include" in document_markdown

@@ -232,14 +232,14 @@ Everything below is read from package files. Each "data and systems" row says ho
 | Error handling | TRY/CATCH, try/catch sequences, REPEAT on failure, EXIT with failure, `pub.flow:getLastError` (FLOW only; Java and opaque services say "not analysed") |
 | Platform service calls | the platform catalog (shipped, plus `--platform-services`): a one-line description and an effect family |
 | Published documents, HTTP/REST/SOAP endpoints, LDAP entries, JMS destinations, files, FTP/SFTP, email, storage | the documented input field of the platform service, when the FLOW sets it as a literal or maps it from the pipeline |
-| JDBC adapter services | operation template, tables and connection, decoded from the service's configuration; the connection's database product, database name and transaction type. Server, port, user, password, URL and SQL are never read |
+| JDBC adapter services | operation template, tables and connection, decoded from the service's binary configuration; the connection's database product, database name and transaction type. For DynamicSQL and CustomSQL also the SQL template (free-text policy), bind parameters, text substitutions, result fields, settings, the tables the SQL reads and writes, and findings (see "JDBC adapter services" below). Server, port, user, password, URL and the credential override settings are never read |
 | Other opaque services | name, signature, and connections their `node.ndf` names |
 | Entry points | triggers (JMS or webMethods messaging, with their queues, topics, JMS alias and subscribed documents, and the JDBC adapter notification that publishes a subscribed document), REST/SOAP descriptors and other artifacts whose `node.ndf` contains a service's exact name; legacy REST v1 handlers (`_get`, `_post`, ... at `/rest/<namespace as path>`); `processes.yml`; callers that nothing calls |
 | External systems | `external-systems.yml` namespace patterns |
 | Developer comments | `<COMMENT>` text in `flow.xml` (used in prompts, subject to the free-text policy) |
 
-Not interpreted: SQL text, trigger filters and message selectors, other adapter types'
-configuration, REST v2 resource paths, scheduler entries, and Java control flow.
+Not interpreted: the SQL of JDBC templates other than DynamicSQL and CustomSQL, trigger
+filters and message selectors, other adapter types' configuration, REST v2 resource paths, scheduler entries, and Java control flow.
 `wm-doc probe-shapes` prints the key layout of such artifacts (key names and counts, no values)
 so these can be added later from real shapes.
 
@@ -294,7 +294,49 @@ says so on every page. Details: `docs/explorer.md`.
 - A server token is read from an environment variable (`--api-key-env`), never from a flag, and
   is only sent over https or to a loopback address.
 
+## JDBC adapter services
+
+wm-doc decodes the binary configuration of JDBC adapter services (`IRTNODE_PROPERTY` in
+`node.ndf`) itself, offline: no Integration Server, database, Java or webMethods library is
+needed, and no SQL is ever run. The format and its limits are in
+`docs/idata-binary-format.md`. For **DynamicSQL** and **CustomSQL** services (the templates
+checked on real IS 10.15 samples) the service page shows, under Adapter Configuration:
+
+- the SQL template exactly as configured (subject to the free-text policy; secret-looking SQL
+  is withheld), the statement type and the tables and views it reads or writes;
+- each bind parameter (`?`) with its input field, Java and JDBC type and the column it is
+  compared with; each DynamicSQL substitution (`${name}`) with its input and where it stands;
+- result fields, the technical `SQLStatement` output, maximum rows and query timeout;
+- findings marked **fact**, **inferred**, **potential risk** or **unknown at run time**: text
+  substitutions (a potential SQL injection exposure, never a confirmed one), bind-count
+  mismatches, signature inputs the SQL does not use, pagination without ORDER BY, unbounded
+  SELECTs, runtime connection and credential overrides, calls inside a LOOP (possible N+1), and
+  what each direct caller's input map passes into substitutions and `$connectionName`.
+
+Callers list the adapter's tables under "Data and systems touched" with the call chain, and
+the direct adapter calls under "JDBC adapter calls". `artifacts.md` lists every JDBC adapter
+service with its tables and decoding status, and the tables written by more than one adapter
+service. Other templates (Select, Insert, ...) keep the operation, connection and configured
+tables. Lengths, counts and indexes of 128 or more (for example an SQL template longer than 127
+characters) are read by hypothesis, accepted only when the readings of the bytes agree, and
+marked `ADAPTER_LONG_ENCODING_UNCONFIRMED` with an "Unconfirmed reading" note so you can check
+them against IS (`scripts/decode_adapter.py`, `docs/idata-binary-format.md`). A value the
+decoder still cannot read keeps the identity fields and gets the finding
+`ADAPTER_CONFIGURATION_PARTIALLY_DECODED`. `describe` gives the model the SQL, fitted to
+`--num-ctx`, so it can explain the business rules it implements (the tool writes the steps);
+the prompts of direct callers show the statement, which of their fields feeds each bind
+parameter and substitution, and the SQL; package overviews list one statement line per
+adapter. The Explorer shows the SQL as plain text with its parameters and findings
+(`explorer build --sql exclude` leaves the SQL text out).
+
 ## Output reference
+
+**`analysis.v13`.** JDBC adapter services carry `adapter.decoding` (`decoded` or `partial`) and,
+for decoded services, `adapter.jdbc`: the normalized configuration and the SQL reading. What
+changes once after the upgrade: the analysis cache is rebuilt; the facts hash of decoded
+DynamicSQL/CustomSQL services and of the FLOW services that call them (their data effects now
+name the SQL tables) changes, so their approved descriptions show "approved, facts changed"
+and their drafts are written again on the next `describe`. Other services are not affected.
 
 **`analysis.v12`.** BRANCH case labels keep their kind (`$null`, blank, a `/pattern/`, other
 text) and label expressions the fields they test, even when the free-text policy withholds the
@@ -313,7 +355,7 @@ the services concerned changes ("approved, facts changed"). An `analysis.json` o
 cache written by an earlier version may still hold such values: run `analyze` again and
 delete old copies.
 
-`wm-doc analyze` writes `analysis.json` (schema `analysis.v12`; each fact is stored once, on
+`wm-doc analyze` writes `analysis.json` (schema `analysis.v13`; each fact is stored once, on
 the service, package or document it belongs to), `index.md`, `LIMITATIONS.md`,
 `entrypoints.md`, `artifacts.md`, `platform-services.md` (platform services the code calls,
 with their descriptions and callers), `packages/*.md`, `services/*.md`, `documents/*.md`,

@@ -16,6 +16,7 @@ from wm_doc.disclosure import unsafe_disclosure_label
 from wm_doc.explorer.contract import CodeSegment, SectionKey, Segment, TextSegment
 
 MAX_TEXT_CHARS = 4_000
+MAX_SQL_CHARS = 100_000
 MAX_NAME_CHARS = 512
 MAX_SECTION_BLOCKS = 200
 # C0/C1 controls, zero-width and bidirectional formatting characters, line/paragraph separators.
@@ -80,6 +81,15 @@ class TextGuard:
             self.withheld += 1
             return f"[withheld: {label}]"
         return cap(flat, limit)
+
+    def sql(self, text: str, limit: int = MAX_SQL_CHARS) -> str:
+        """An SQL template: line breaks kept, disclosure-scanned, capped; shown as plain text."""
+        cleaned = _INVISIBLE_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+        label = unsafe_disclosure_label(cleaned)
+        if label is not None:
+            self.withheld += 1
+            return f"[withheld: {label}]"
+        return cap(cleaned, limit)
 
     def segments(
         self,

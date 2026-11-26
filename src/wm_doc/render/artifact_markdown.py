@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from wm_doc.adapters import sql_objects_phrase
 from wm_doc.effects import rest_v1_endpoint
 from wm_doc.ir import AdapterRole, AnalysisResult, FlowService, NamespaceArtifact, ServiceType
+from wm_doc.jdbc_facts import shared_writes
 from wm_doc.render.service_markdown import service_markdown_filename
 from wm_doc.triggers import trigger_summary
 
@@ -170,16 +172,36 @@ def _adapter_service_section(opaque: list[FlowService]) -> list[str]:
         "",
         "## JDBC adapter services",
         "",
-        "| Service | Operation | Tables | Connection |",
-        "| --- | --- | --- | --- |",
+        "Tables come from the configured table list, or for decoded DynamicSQL and CustomSQL "
+        "services from their SQL template (never executed).",
+        "",
+        "| Service | Operation | Tables | Connection | Decoding |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for service in adapters:
         details = service.adapter
         assert details is not None
+        tables = _names(details.tables) if details.tables else (sql_objects_phrase(details) or "-")
+        decoding = details.decoding.value if details.decoding is not None else "-"
+        if details.decode_hypotheses:
+            decoding += " (unconfirmed: " + ", ".join(details.decode_hypotheses) + ")"
         lines.append(
             f"| {_link(service.identity.full_name)} | `{details.operation or '?'}` | "
-            f"{_names(details.tables)} | `{details.connection or 'not determined'}` |"
+            f"{tables} | `{details.connection or 'not determined'}` | {decoding} |"
         )
+    shared = shared_writes({service.identity.full_name: service for service in adapters})
+    if shared:
+        lines += [
+            "",
+            "### Tables written by more than one adapter service",
+            "",
+            "| Table | Adapter services |",
+            "| --- | --- |",
+        ]
+        lines += [
+            f"| `{table}` | {', '.join(_link(name) for name in names)} |"
+            for table, names in shared.items()
+        ]
     return lines
 
 

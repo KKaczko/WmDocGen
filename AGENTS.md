@@ -11,6 +11,9 @@ business-enrichment path (`build-business-context`, `enrich-business`, `ollama-t
 `business-context.v*`, `business-result.v*`) was removed in M12; do not reintroduce it.
 M13 (owner approval): the interactive explorer PoC; see "Explorer" below.
 M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditional FLOW logic".
+M15 (owner approval, 2026-11-25): JDBC DynamicSQL and CustomSQL adapter services decoded from
+the real IS 10.15 samples; see "JDBC adapter services (M15)". M15 extension (owner decision,
+2026-11-25): unconfirmed long-encoding readings, SQL in the Explorer and in callers' prompts.
 
 ## Pipeline and modules
 
@@ -25,7 +28,8 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   `Service.doInvoke` calls become dependencies), opaque services (explicit unsupported `svc_type`:
   identity, signature and description; JDBC adapter services also their decoded
   configuration), document types, and specification signatures through `svc_spec`.
-- Readers (`adapters.py`, `triggers.py`): the approved JDBC adapter decoder and trigger reader
+- Readers (`idata_binary.py`, `adapters.py`, `triggers.py`): the binary IData decoder (generic,
+  no adapter logic), the approved JDBC adapter interpreter and trigger reader
   (see "Approved readers"); their results sit on `FlowService.adapter` and
   `NamespaceArtifact.adapter` / `.trigger`.
 - Platform catalog (`builtins.py`, `data/platform_services.yml`): one-line description, effect
@@ -39,6 +43,9 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   connections their node.ndf names; calls leaving the analysed packages, named by
   `external-systems.yml`). Effects of local callees are included with the call chain. Entry
   points also include trigger details and legacy REST v1 handlers.
+- JDBC adapter facts (`sql_analysis.py`, `jdbc_facts.py`, `render/jdbc_markdown.py`): the
+  structural reading of an SQL template, findings and caller uses, and their Markdown; see
+  "JDBC adapter services (M15)".
 - Prompts (`pseudocode.py`, `callgraph.py`, `summarizer.py`): a per-service pseudo-code view,
   callee-first ordering (Tarjan SCC), context fitting and the name-grounding check.
 - Descriptions (`service_docs.py`, `describer.py`, `disclosure.py`): description files, the
@@ -64,7 +71,7 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
 
 ## Contracts
 
-- `analysis.json` is schema `analysis.v12`: each fact is stored once, on the service, package or
+- `analysis.json` is schema `analysis.v13`: each fact is stored once, on the service, package or
   document it belongs to. Server-wide lists (`AnalysisResult.call_occurrences`,
   `unique_dependencies`, `mapping_operations`, Java lists, `document_types`, ...) are derived
   properties, not serialized. Each package's `service_index` lists only its own services.
@@ -109,10 +116,82 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   for connections the datasource class (database product), database name and transaction type;
   for notifications the notification type, connection, table and published document. Server,
   host, port, user, password, URL and any other connection property are never read or kept.
+  M15 widens the allow-list for DynamicSQL and CustomSQL services (see below); connections and
+  notifications are still read by the M12 token reader.
 - Trigger reader: `trigger_type` (JMS or webMethods messaging), JMS connection alias,
   destinations (name and queue/topic), subscribed document types and handler services.
 - Legacy REST handlers: services named `_get`, `_post`, `_put`, `_patch`, `_delete` or
   `_default` are IS REST v1 endpoints at `/rest/<namespace as path>`.
+
+## JDBC adapter services (M15, owner approval 2026-11-25)
+
+- Owner decision: for `com.wm.adapter.wmjdbc.services.DynamicSQL` and `CustomSQL` services the
+  tool keeps the SQL template (exactly as configured, under the free-text policy with the
+  secret guard first: `JdbcServiceConfig.sql` is a `TextValue`), the DynamicSQL variables
+  (`sqlVariables`, `sqlInputFields`, `sqlInputFieldTypes`), the parallel input and output arrays
+  (`inputField`/`inputFieldType`/`inputJDBCType`, `outputField`/`outputFieldType`/
+  `outputJDBCType`/`resultField`/`resultFieldType`) by position, `sqlFieldType`,
+  `sqlOutputField`, `maxRow`, `queryTimeOut`, `resultRowField(Type)`, the metadata and node
+  versions, the record names, and the names (never values) of other template properties. The
+  user/password override settings (`userid`, `password`, their `*Type` and `input*Sign`) and
+  any secret-like key are never read or named. Connection credentials and properties stay
+  out of scope.
+- Decoding (`idata_binary.py`, documented in `docs/idata-binary-format.md`): only the layout
+  confirmed on `samples/jdbcadapter/` is read (one-byte lengths, counts and indexes below 128,
+  tags 0x00/0x02/0x04/0x05/0x0a/0x0b); anything else is an `IDataBinaryError` with a code and a
+  byte offset, never a guess. On such an error the service keeps the M12 identity fields,
+  `decoding: partial` and the INFO finding `ADAPTER_CONFIGURATION_PARTIALLY_DECODED`. The decoder
+  never loads classes, executes or looks anything up. Golden tests compare every sample folder
+  with the document IS exported (`tests/unit/test_idata_binary.py`; a new
+  `samples/jdbcadapter/<name>/` with a node.ndf and the JSON is picked up without code changes;
+  `scripts/add_sample_checksums.py` adds it to the checksum manifest).
+- M15 extension, owner decision 2026-11-25 (a hypothesis the owner checks against IS output):
+  where the confirmed rules stop (a length, count or index of 128 or more, or a reference past
+  a nested document's end), `decode_idata_hypotheses` tries every combination of
+  `LENGTH_SCHEMES` (leb128, vlq, one unsigned byte, u15) and `END_NUMBERINGS`, rejects
+  non-minimal encodings, and accepts the value only when at least one reading parses it to
+  the end and all that do give the same document; otherwise it stays `partial`. The readings
+  used are kept in `AdapterDetails.decode_hypotheses`, the service gets the INFO finding
+  `ADAPTER_LONG_ENCODING_UNCONFIRMED` and its page an "Unconfirmed reading" note.
+  `scripts/decode_adapter.py` prints a node's document in the `documentToJSONString` shape or
+  compares it with an exported JSON. Hypotheses are tested only by synthetic round trips through
+  `encode_idata`; the golden tests of the two confirmed samples need no hypothesis.
+- Other templates (Select, Insert, ... ) are decoded but not interpreted (`supported: false`):
+  identity, configured tables and property names only, until real samples are checked.
+- SQL reading (`sql_analysis.py`, no new dependency): tokens first (literals, quoted
+  identifiers, comments, `?` and `${name}` are tokens), then statement type, tables with read or
+  write access, joins, WHERE/ORDER BY/pagination (Oracle OFFSET/FETCH, ROWNUM), binds with the
+  column they meet, substitutions with where they stand. Never executed; literal values never
+  leave the module; anything not understood is a note and makes the status `partial`. It runs
+  on the raw SQL at analysis time, so a withheld SQL text still yields its identifiers.
+- Facts (`jdbc_facts.py`, derived on demand, never stored): every finding is `fact`,
+  `inferred`, `risk` or `unknown`. A DynamicSQL substitution is a potential SQL injection
+  exposure, never a confirmed vulnerability. Callers are read from each call's own input map
+  (literal, copied from a path, or not set) and the LOOP/REPEAT steps around the call; a call
+  inside a LOOP is a potential N+1 risk. `$connectionName` and `overrideCredentials` in the
+  signature are runtime overrides (facts); a caller that sets `$connectionName` is a fact.
+- Effects: decoded services name each SQL table (`known from` `adapter SQL template`), so
+  callers inherit them with the call chain; `ServiceFacts.database_calls` lists the direct
+  calls of decoded adapters (loops, substitutions, connection override). Both are part of the
+  facts text, so a changed adapter changes its callers' facts hash.
+- Prompts: decoded services use `JDBC_PROMPT_TEMPLATE` (the model explains the business rules
+  in the SQL; the tool writes Main steps and Error handling). M15 extension: the SQL is fitted
+  to `--num-ctx` by the detail ladder (`PseudocodeDetail.sql_chars`: whole, 8,000, 2,000
+  characters, then the fallback line cut), never by a fixed cut. Under each call of a decoded
+  adapter, a FLOW caller's prompt shows the statement, the tables, each bind parameter and
+  substitution with the column it meets and the caller field that feeds it (`callee_adapters`,
+  `pseudocode.adapter_call_lines`), and the adapter's SQL (`callee_sql_chars`: whole, 2,000,
+  then left out). These lines are facts: they are in the caller's facts hash, so a changed SQL
+  marks its direct callers. Package overview facts list one statement line per adapter
+  (`overviews.adapter_statement`). SQL identifiers are in the facts sent, so the name-grounding
+  check accepts them. Services that call no decoded adapter keep their pseudo-code unchanged
+  (frozen by `tests/unit/test_flow_facts_golden.py`).
+- Explorer (M15 extension, owner decision 2026-11-25): `AdapterInfo.jdbc` (`JdbcInfo`) carries
+  the SQL text, the tables, binds, substitutions, results, settings and the findings with their
+  kind. The SQL is exported only when the analysis kept it (free-text policy, secret guard
+  first) and passes `TextGuard.sql` (the disclosure scan, line breaks kept); otherwise it is
+  withheld and counted. `explorer build --sql exclude` (`Disclosure.sql`) leaves the SQL text
+  out and keeps the rest. The app renders it as plain text in a `<pre>` (no HTML).
 
 ## Explorer (owner approval, M13 PoC)
 
@@ -124,9 +203,10 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
   facts. All text is rendered as text (no HTML or Markdown rendering, no
   `dangerouslySetInnerHTML`); a strict CSP; no external requests. Literal values, designer
   comments, Notes, SQL and connection properties are never exported (a data effect known from
-  a literal shows `(literal, not exported)`; branch condition values are the one exception,
-  see "Conditional FLOW logic"); free text passes the
-  disclosure scan or is withheld and counted.
+  a literal shows `(literal, not exported)`; branch condition values are one exception, see
+  "Conditional FLOW logic", and the SQL template of decoded JDBC adapter services the other,
+  see "JDBC adapter services (M15)"); free text passes the disclosure scan or is withheld and
+  counted.
 - The output folder must not overlap the packages folder. Files are named by hashed IDs.
   `explorer serve` checks hidden paths after URL decoding and, on a loopback address,
   answers only Host headers naming this computer (no DNS rebinding).
@@ -256,7 +336,7 @@ M14 (owner approval): conditional FLOW logic and decision lineage; see "Conditio
 ## Out of scope without explicit owner approval
 
 Semantic parsers for REST/SOAP descriptor details beyond service references, other adapter
-types' configuration, native BPM process models, runtime simulation, Java execution,
+types' configuration (and JDBC templates other than DynamicSQL/CustomSQL beyond their identity), native BPM process models, runtime simulation, Java execution,
 compilation or class loading, broad Java external-effect classification, non-Ollama or cloud model
 providers, RAG or arbitrary external documents, a prompt editing UI (beyond the approved
 `--instructions` file), fine-tuning, snapshot diffing,

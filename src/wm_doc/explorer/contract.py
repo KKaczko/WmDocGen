@@ -29,6 +29,9 @@ DescriptionsShown = Literal["approved", "all", "none"]
 DatasetKind = Literal["synthetic", "private"]
 Severity = Literal["info", "warning", "error"]
 ConditionValues = Literal["included", "excluded"]
+SqlShown = Literal["included", "excluded"]
+JdbcFindingKind = Literal["fact", "inferred", "risk", "unknown"]
+SqlTextState = Literal["included", "withheld", "excluded", "absent"]
 Certainty = Literal["observed", "derived", "possible", "unknown"]
 OriginBasis = Literal[
     "flow-xml", "is-rule", "callee-signature", "service-signature", "caller-pipeline", "limit"
@@ -84,6 +87,8 @@ class Disclosure(ContractModel):
     withheld_strings: int
     # Case labels (branch condition values) in flows/: shown unless the build excludes them.
     condition_values: ConditionValues = "included"
+    # JDBC adapter SQL templates (owner decision, M15 extension): shown unless excluded.
+    sql: SqlShown = "included"
 
 
 class Counts(ContractModel):
@@ -248,6 +253,78 @@ class DocumentUse(ContractModel):
     resolved: bool
 
 
+class JdbcTable(ContractModel):
+    name: str
+    schema_name: str | None = None
+    access: Literal["read", "write", "read-write"]
+    clauses: list[str] = Field(default_factory=list)
+
+
+class JdbcBind(ContractModel):
+    """One `?` of the SQL and the input bound to it, by position."""
+
+    position: int
+    field: str | None = None
+    java_type: str | None = None
+    jdbc_type: str | None = None
+    column: str | None = None  # the column it is compared with or assigned to
+    operator: str | None = None
+    role: str = "value"
+
+
+class JdbcSubstitution(ContractModel):
+    """A DynamicSQL `${name}`: replaced by the text of an input before the statement runs."""
+
+    name: str
+    field: str | None = None
+    java_type: str | None = None
+    contexts: list[str] = Field(default_factory=list)
+    column: str | None = None
+
+
+class JdbcResult(ContractModel):
+    position: int
+    field: str | None = None
+    jdbc_type: str | None = None
+    result_field: str | None = None
+    result_type: str | None = None
+
+
+class JdbcFinding(ContractModel):
+    kind: JdbcFindingKind
+    code: str
+    text: list[Segment]
+    basis: str
+
+
+class JdbcInfo(ContractModel):
+    """A decoded JDBC adapter service's configuration and SQL (owner decision, M15 extension).
+
+    `sql` is the template exactly as configured when the analysis kept it and the build did
+    not exclude it; `sql_state` says which. Everything else is identifiers and structure.
+    """
+
+    template_kind: str
+    supported: bool
+    hypotheses: list[str] = Field(default_factory=list)  # unconfirmed readings needed
+    sql: str | None = None
+    sql_state: SqlTextState = "absent"
+    sql_length: int | None = None
+    statement: str | None = None
+    read_status: str | None = None  # analysed, partial or not_analysed
+    tables: list[JdbcTable] = Field(default_factory=list)
+    procedure: str | None = None
+    shape: list[str] = Field(default_factory=list)  # WHERE, ORDER BY, pagination, ...
+    binds: list[JdbcBind] = Field(default_factory=list)
+    substitutions: list[JdbcSubstitution] = Field(default_factory=list)
+    results: list[JdbcResult] = Field(default_factory=list)
+    statement_output: str | None = None
+    max_rows: str | None = None
+    query_timeout: str | None = None
+    findings: list[JdbcFinding] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class AdapterInfo(ContractModel):
     """Allow-listed JDBC adapter configuration (see wm_doc.adapters); never credentials."""
 
@@ -259,6 +336,8 @@ class AdapterInfo(ContractModel):
     database_product: str | None = None
     database_name: str | None = None
     transaction_type: str | None = None
+    decoding: Literal["decoded", "partial"] | None = None
+    jdbc: JdbcInfo | None = None
 
 
 SectionKey = Literal[

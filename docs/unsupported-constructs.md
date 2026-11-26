@@ -22,9 +22,21 @@ Unsupported or only partially supported in M12:
 - Java helper method/body effect analysis
 - Java execution, compilation, class loading, reflection modeling, or full semantic analysis
 - JDBC adapter fields beyond the approved allow-list (operation template, tables, connection;
-  for connections the datasource class, database name and transaction type; for notifications
-  the type, tables, connection and published document): SQL text, procedure names, columns,
-  server, port, user, password, URL and other connection properties are never read
+  for DynamicSQL and CustomSQL services also the M15 fields: SQL template, variables, bind and
+  result arrays, settings; for connections the datasource class, database name and
+  transaction type; for notifications the type, tables, connection and published document):
+  server, port, user, password, URL, the credential override settings and other connection
+  properties are never read
+- The configuration of JDBC templates other than DynamicSQL and CustomSQL (Select, Insert,
+  Update, Delete, BatchInsert, StoredProcedure, ...): decoded, but only their identity and
+  configured tables are kept until real samples are checked
+- Binary IData structures not seen in real samples: lengths, counts and indexes of 128 or
+  more are read by hypothesis (owner decision, M15 extension) and marked
+  `ADAPTER_LONG_ENCODING_UNCONFIRMED`; null values, other type tags, references to documents
+  and readings that disagree are reported as `ADAPTER_CONFIGURATION_PARTIALLY_DECODED`; see
+  `docs/idata-binary-format.md`
+- Executing SQL, connecting to a database, or resolving which physical database or schema a
+  connection reaches
 - Configuration of adapter types other than JDBC
 - Trigger filters, message selectors, join conditions and tuning values
 - Schedulers
@@ -53,6 +65,8 @@ implementation-specific body is not interpreted. The analyzer does not infer dat
 scheduler, trigger, process, file, network, or other external behavior from an opaque service.
 M12 adds one exception approved by the owner: JDBC adapter services, connections and
 notifications have the allow-listed fields of their `IRTNODE_PROPERTY` decoded (`adapters.py`).
+M15 widens it for DynamicSQL and CustomSQL services: the whole value is decoded
+(`idata_binary.py`) and the SQL template is read structurally (`sql_analysis.py`).
 
 M6 supports only user-maintained `processes.yml` catalog declarations. Declared entrypoints must be
 exact canonical service full names, and traversal follows only resolved local service dependencies.

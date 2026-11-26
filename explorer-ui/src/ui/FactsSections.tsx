@@ -1,4 +1,11 @@
-import type { AdapterInfo, DocumentUse, Effect, EntryPoint } from "../contract";
+import type {
+  AdapterInfo,
+  DocumentUse,
+  Effect,
+  EntryPoint,
+  JdbcFinding,
+  JdbcInfo,
+} from "../contract";
 import { PathChain, RichText } from "./RichText";
 import { SectionHeading } from "./SectionHeading";
 
@@ -173,10 +180,161 @@ export function AdapterSection({ adapter }: { adapter: AdapterInfo | null }) {
             </div>
           ))}
       </dl>
+      {adapter.jdbc !== null ? <JdbcDetails jdbc={adapter.jdbc} /> : null}
       <p className="note">
-        Read from the adapter service&apos;s configuration. Credentials, hosts and SQL text are
-        never read.
+        Read from the adapter service&apos;s configuration. Credentials, hosts and connection
+        properties are never read; the SQL text follows the disclosure policy.
       </p>
     </section>
+  );
+}
+
+const FINDING_KINDS: Record<JdbcFinding["kind"], string> = {
+  fact: "Fact",
+  inferred: "Inferred",
+  risk: "Potential risk",
+  unknown: "Unknown at run time",
+};
+
+const SQL_STATES: Record<JdbcInfo["sqlState"], string> = {
+  included: "",
+  withheld: "The SQL text is withheld by the disclosure policy.",
+  excluded: "The SQL text was left out of this explorer (--sql exclude).",
+  absent: "No SQL template is configured.",
+};
+
+function text(value: string | null): string {
+  return value ?? "-";
+}
+
+/** A decoded JDBC adapter service: SQL as plain text, parameters, tables and findings. */
+export function JdbcDetails({ jdbc }: { jdbc: JdbcInfo }) {
+  if (!jdbc.supported) {
+    return (
+      <p className="muted">
+        This template is decoded, but only DynamicSQL and CustomSQL configurations are interpreted
+        so far.
+      </p>
+    );
+  }
+  return (
+    <div className="jdbc">
+      {jdbc.hypotheses.length > 0 ? (
+        <p className="note warning">
+          Unconfirmed reading: decoded with {jdbc.hypotheses.join(", ")}, which no sample has
+          confirmed yet.
+        </p>
+      ) : null}
+      <h3>SQL template</h3>
+      {jdbc.sql !== null ? (
+        <pre className="sql" aria-label="SQL template">
+          <code>{jdbc.sql}</code>
+        </pre>
+      ) : (
+        <p className="muted">{SQL_STATES[jdbc.sqlState]}</p>
+      )}
+      <h3>Database operations</h3>
+      <p>
+        {jdbc.statement !== null ? <code>{jdbc.statement}</code> : "Not read"}
+        {jdbc.shape.length > 0 ? `: ${jdbc.shape.join("; ")}` : null}
+      </p>
+      {jdbc.tables.length > 0 ? (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Table or view</th>
+                <th scope="col">Schema</th>
+                <th scope="col">Access</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jdbc.tables.map((table) => (
+                <tr key={`${table.schemaName ?? ""}.${table.name}`}>
+                  <td>
+                    <code>{table.name}</code>
+                  </td>
+                  <td>{text(table.schemaName)}</td>
+                  <td>{table.access}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {jdbc.binds.length > 0 ? (
+        <>
+          <h3>Bind parameters</h3>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">#</th>
+                  <th scope="col">Input field</th>
+                  <th scope="col">JDBC type</th>
+                  <th scope="col">In the SQL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jdbc.binds.map((bind) => (
+                  <tr key={bind.position}>
+                    <td className="number">{bind.position}</td>
+                    <td>
+                      <code>{text(bind.field)}</code>
+                    </td>
+                    <td>{text(bind.jdbcType)}</td>
+                    <td>
+                      {bind.column !== null
+                        ? `${bind.operator ?? ""} ${bind.column}`.trim()
+                        : bind.role}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
+      {jdbc.substitutions.length > 0 ? (
+        <>
+          <h3>Text substitutions</h3>
+          <ul className="fields">
+            {jdbc.substitutions.map((item) => (
+              <li key={item.name}>
+                <code>{`\${${item.name}}`}</code> takes the text of <code>{text(item.field)}</code>
+                {`: ${item.contexts.join(", ")}`}
+                {item.column !== null ? ` for ${item.column}` : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {jdbc.results.length > 0 ? (
+        <>
+          <h3>Results</h3>
+          <ul className="fields">
+            {jdbc.results.map((item) => (
+              <li key={item.position}>
+                <code>{text(item.resultField)}</code>
+                <span className="field-type">{text(item.jdbcType)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {jdbc.findings.length > 0 ? (
+        <>
+          <h3>Findings</h3>
+          <ul className="fields jdbc-findings">
+            {jdbc.findings.map((finding, index) => (
+              <li key={`${finding.code}-${String(index)}`}>
+                <strong>{FINDING_KINDS[finding.kind]}:</strong> <RichText segments={finding.text} />{" "}
+                <span className="field-type">({finding.basis})</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
   );
 }
